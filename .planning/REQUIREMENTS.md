@@ -39,10 +39,14 @@ Hackathon MVP scope. Each maps to a roadmap phase. v1 lock: live-first demo with
 
 ### Embedding
 
-- [ ] **EMB-01**: Twelve Labs `marengo3.0` (lowercase) embedding generated for each ingested clip
-- [ ] **EMB-02**: 512-dimension embedding vector stored in SQLite as BLOB on the clip row
-- [ ] **EMB-03**: `USE_MOCK_EMBEDDINGS=true` flag returns deterministic fake vectors for offline dev
-- [ ] **EMB-04**: Embed worker logs latency for every call (visible in debug overlay)
+- [x] **EMB-01
+**: Twelve Labs `marengo3.0` (lowercase) embedding generated for each ingested clip
+- [x] **EMB-02
+**: 512-dimension embedding vector stored in SQLite as BLOB on the clip row
+- [x] **EMB-03
+**: `USE_MOCK_EMBEDDINGS=true` flag returns deterministic fake vectors for offline dev
+- [x] **EMB-04
+**: Embed worker logs latency for every call (visible in debug overlay)
 - [ ] **EMB-05**: Pipeline pre-warms Marengo with throwaway call on backend startup
 
 ### Clustering
