@@ -24,12 +24,16 @@ result: [pending]
 expected: Record two visually unrelated clips (e.g., empty hallway + parking lot), save as backend/seed/demo/adversarial-1.mp4 and adversarial-2.mp4, rerun calibration notebook. Cell 7 assertion must pass: adversarial clips land in DIFFERENT clusters even when uploaded with same GPS + timestamp.
 result: [pending]
 
+### 4. Real-World Event Clustering
+expected: Download 3-4 clips of one real news event from public sources (YouTube/X/TikTok — different uploaders, varied cameras/angles/quality). Save as backend/seed/demo/realworld-{1..4}.mp4. Spoof identical GPS coords + timestamp range so visual cosine is the dominant signal. Run `python -m backend.seed.seed_demo --base-url http://localhost:8000`, then rerun calibration notebook. Pass: >= 3 of the clips land in the same cluster despite wild visual variation. Diagnostic: if fusion fails, inspect score breakdown via GET /debug/clusters to confirm visual cosine is the bottleneck (vs gps/time weights).
+result: [pending]
+
 ## Summary
 
-total: 3
+total: 4
 passed: 0
 issues: 0
-pending: 3
+pending: 4
 skipped: 0
 blocked: 0
 
