@@ -6,11 +6,13 @@ accept an explicit `conn` argument so they can be tested with an
 in-memory connection without touching the real DB.
 
 Public API:
-    init_db()                  — open connection, create schema
-    init_db_on_conn(conn)      — create schema on an existing connection
-    get_db_conn()              — async context manager yielding the shared conn
-    get_clip(clip_id, conn)    — fetch one clip row as dict | None
-    create_clip(clip, conn)    — insert a new clip row
+    init_db()                         — open connection, create schema
+    init_db_on_conn(conn)             — create schema on an existing connection
+    get_db_conn()                     — async context manager yielding the shared conn
+    get_clip(clip_id, conn)           — fetch one clip row as dict | None
+    create_clip(clip, conn)           — insert a new clip row
+    store_embedding(clip_id, vec, latency_ms, conn) — persist 512-d BLOB + mark done
+    get_embedding(clip_id, conn)      — retrieve stored 512-d float32 vector or None
 """
 
 import asyncio
@@ -119,3 +121,40 @@ async def create_clip(clip: dict, conn: aiosqlite.Connection) -> None:
         ),
     )
     await conn.commit()
+
+
+# ── Embedding helpers ─────────────────────────────────────────────────────────
+
+async def store_embedding(
+    clip_id: str,
+    vec: "np.ndarray",
+    latency_ms: int,
+    conn: "aiosqlite.Connection",
+) -> None:
+    """Store a normalized 512-d float32 vector as a BLOB and mark clip done."""
+    import numpy as np
+    blob = vec.astype(np.float32).tobytes()  # 512 * 4 = 2048 bytes
+    await conn.execute(
+        "INSERT OR REPLACE INTO clip_embeddings (clip_id, vector) VALUES (?, ?)",
+        (clip_id, blob),
+    )
+    await conn.execute(
+        "UPDATE clips SET embedding_status = 'done', embed_latency_ms = ? WHERE id = ?",
+        (latency_ms, clip_id),
+    )
+    await conn.commit()
+
+
+async def get_embedding(
+    clip_id: str,
+    conn: "aiosqlite.Connection",
+) -> "np.ndarray | None":
+    """Retrieve the stored 512-d float32 vector for a clip, or None if not yet embedded."""
+    import numpy as np
+    async with conn.execute(
+        "SELECT vector FROM clip_embeddings WHERE clip_id = ?", (clip_id,)
+    ) as cursor:
+        row = await cursor.fetchone()
+    if row is None:
+        return None
+    return np.frombuffer(row[0], dtype=np.float32).copy()
