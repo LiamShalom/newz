@@ -79,8 +79,8 @@ App is **dark-first** to match the camera-app mental model (a camera viewport is
 |------|-------|-------|
 | Dominant (60%) | `#0A0A0A` (near-black) | Page background, camera viewport letterbox, feed background |
 | Secondary (30%) | `#1A1A1A` (elevated surface) | Feed tile background, modal surface, retake-screen overlay scrim |
-| Accent (10%) | `#EF4444` (red-500) | Record FAB fill, recording-ring fill, primary Submit button fill |
-| Destructive | `#EF4444` (red-500) | **Same as accent** — Phase 1 has no destructive actions distinct from primary record/submit; merging keeps the palette to 3 colors |
+| Accent (10%) | `#EF4444` (red-500) | Record FAB fill, recording-ring fill, primary Post-clip button fill |
+| Destructive | `#EF4444` (red-500) | **Same as accent** — Phase 1 has no destructive actions distinct from primary record/post; merging keeps the palette to 3 colors |
 | Foreground primary | `#FAFAFA` (off-white) | Body text, icons on dark background |
 | Foreground muted | `#A3A3A3` (neutral-400) | Relative timestamps, empty-state hint text |
 | Border | `#262626` (neutral-800) | Tile dividers, modal border (1px hairline) |
@@ -89,8 +89,8 @@ App is **dark-first** to match the camera-app mental model (a camera viewport is
 
 1. Record FAB on feed (filled circle)
 2. Recording-progress ring around stop button (fill animates over 30s)
-3. Submit button on retake screen (filled pill)
-4. Continue button on priming modal (filled pill — same red, primes the user that this is the "go" path)
+3. Post-clip button on retake screen (filled pill)
+4. Allow-and-continue button on priming modal (filled pill — same red, primes the user that this is the "go" path)
 5. Error-state heading icon (camera-blocked screen) — drawn as an outlined icon with red stroke, not red fill
 
 **Accent NOT used for:** body links, focus rings (use `#FAFAFA` 2px outline instead), feed tile interactions, X dismiss icon (white), camera-flip icon (white), pull-to-refresh indicator.
@@ -100,7 +100,7 @@ App is **dark-first** to match the camera-app mental model (a camera viewport is
 **60/30/10 audit:**
 - Camera screen: ~95% black (live preview itself fills viewport) + accent FAB ring + white icons. Compliant.
 - Feed screen: ~60% black background, ~30% tile surface (#1A1A1A), ~10% red FAB. Compliant.
-- Retake screen: ~60% video pixels (full-bleed) + ~30% bottom-gradient scrim + ~10% red Submit. Compliant.
+- Retake screen: ~60% video pixels (full-bleed) + ~30% bottom-gradient scrim + ~10% red Post-clip. Compliant.
 
 ---
 
@@ -113,11 +113,11 @@ Voice: **direct, lowercase-friendly, zero marketing fluff, plain English**. No e
 | Primary CTA (record FAB) | (icon-only — no label; the red circle IS the CTA per CONTEXT.md D-01) |
 | Priming modal title | `Allow camera and location` |
 | Priming modal body | `Newz needs your camera to record and your location to group clips by event. Nothing is tied to you — there's no account.` |
-| Priming modal primary button | `Continue` |
-| Priming modal secondary | (none — modal is gating per D-02; only Continue exits it. Browser back / OS back closes it.) |
+| Priming modal primary button | `Allow and continue` |
+| Priming modal secondary | (none — modal is gating per D-02; only Allow-and-continue exits it. Browser back / OS back closes it.) |
 | Recording stop button | (icon-only — square stop glyph inside the progress ring) |
 | Retake screen dismiss (X) | (icon-only — top-left X; tooltip-equivalent aria-label `Retake`) |
-| Retake screen primary | `Submit` |
+| Retake screen primary | `Post clip` |
 | Feed empty state heading | `No clips yet` |
 | Feed empty state body | `Tap the red button to record one.` |
 | Feed tile timestamp | `{n} min ago` / `{n} sec ago` / `just now` (uses `Intl.RelativeTimeFormat`) |
@@ -138,17 +138,26 @@ What the executor builds. Custom-rolled; no shadcn primitives.
 
 | Component | Purpose | States | Notes |
 |-----------|---------|--------|-------|
-| `RecordFAB` | Floating red circle on feed | default, pressed | 72px filled circle, 4px white inset border, fixed `bottom: 16px + safe-area-inset-bottom`, centered |
+| `RecordFAB` | Floating red circle on feed | default, pressed | 72px filled circle, 4px white inset border, fixed `bottom: 16px + safe-area-inset-bottom`, centered. Icon-only — `aria-label="Start recording"` |
 | `PrimingModal` | Camera+GPS permission priming (D-02, CAP-03) | open, closed | Gating, once-per-session (sessionStorage flag); centered card on `#1A1A1A` with 24px padding, 16px border-radius |
 | `CameraView` | Live `getUserMedia` preview, full screen | initializing, ready, recording | `100dvh` viewport; `<video autoplay muted playsinline>`; rear camera default per D-04 |
-| `CameraFlipButton` | Top-right toggle (D-06) | rear-active, front-active | Icon-only, 44x44 tap target, white `RefreshCcw` icon |
-| `RecordButton` | Center-bottom on camera; transforms ring during recording (D-03) | idle, recording (ring fills 0→100% over 30s) | 80px outer, 72px inner; ring stroke 6px, color animates from `#EF4444` (start) to `#EF4444` always — silent urgency, no number |
-| `RetakeScreen` | Post-record preview (D-05, CAP-06) | playing | Full-bleed `<video autoplay loop muted playsinline>`; X top-left, Submit bottom |
-| `SubmitButton` | Primary action on retake | idle, submitting | Pill, full-width minus 24px gutters, 56px tall, `#EF4444` fill, white text, 16px font-weight 600 |
+| `CameraFlipButton` | Top-right toggle (D-06) | rear-active, front-active | Icon-only, 44x44 tap target, white `RefreshCcw` icon. `aria-label="Switch camera"` |
+| `RecordButton` | Center-bottom on camera; transforms ring during recording (D-03) | idle, recording (ring fills 0→100% over 30s) | 80px outer, 72px inner; ring stroke 6px, color animates from `#EF4444` (start) to `#EF4444` always — silent urgency, no number. Icon-only — `aria-label="Stop recording"` when in recording state; `aria-label="Start recording"` when idle |
+| `RetakeScreen` | Post-record preview (D-05, CAP-06) | playing | Full-bleed `<video autoplay loop muted playsinline>`; X top-left, Post-clip bottom |
+| `SubmitButton` | Primary action on retake (technical identifier; user-facing label is `Post clip`) | idle, submitting | Pill, full-width minus 24px gutters, 56px tall, `#EF4444` fill, white text `Post clip`, 16px font-weight 600 |
 | `FeedShell` | Throwaway scrollable list (D-08) | empty, populated | Vertical list of `FeedTile`s; max-width none on mobile; 16px gap |
 | `FeedTile` | Single clip preview | playing | `<video controls playsinline>` + 14px relative timestamp below in muted foreground |
 | `EmptyState` | "No clips yet" hint | static | Centered text on feed background; 24px heading + 16px body, both centered |
 | `PermissionErrorScreen` | Camera or GPS blocked (D-07) | camera-blocked, location-blocked, location-unavailable | Full screen on `#0A0A0A`; heading + body + action button |
+
+**Aria-label summary (icon-only controls):**
+
+| Control | aria-label |
+|---------|------------|
+| Record FAB (idle) | `Start recording` |
+| Stop button (recording) | `Stop recording` |
+| Camera-flip toggle | `Switch camera` |
+| Retake X (top-left) | `Retake` |
 
 ---
 
@@ -157,12 +166,12 @@ What the executor builds. Custom-rolled; no shadcn primitives.
 Phase-1-specific interaction rules executor must follow:
 
 1. **No skeleton loaders.** If a screen has data-loading state >300ms, show nothing (black background) — Phase 1 has no API calls slow enough to need skeletons. Camera initialization shows the live preview as soon as `getUserMedia` resolves; no loading copy.
-2. **No spinners on primary buttons.** Submit button shows `submitting` state by going to 60% opacity for the duration of the POST (which returns 202 in <100ms per ING-02 — effectively imperceptible).
+2. **No spinners on primary buttons.** Post-clip button shows `submitting` state by going to 60% opacity for the duration of the POST (which returns 202 in <100ms per ING-02 — effectively imperceptible).
 3. **No toast library.** The single toast case (CAP-09 queued upload) uses a self-rolled bottom-of-screen 3-second auto-dismiss div. No `react-hot-toast` / `sonner` dependency in Phase 1.
 4. **No animations beyond:** (a) ring-fill on record button (CSS `stroke-dashoffset` transition over 30s linear); (b) modal fade-in/out (200ms opacity transition). No spring physics, no Framer Motion in Phase 1.
-5. **Modal dismiss behavior:** Priming modal is gating per D-02 — there is no backdrop tap-to-dismiss and no Escape key (we're on iOS Safari, no keyboard). Continue is the only exit.
+5. **Modal dismiss behavior:** Priming modal is gating per D-02 — there is no backdrop tap-to-dismiss and no Escape key (we're on iOS Safari, no keyboard). Allow-and-continue is the only exit.
 6. **Pull-to-refresh:** Feed uses native iOS Safari pull-to-refresh (no custom indicator). Manual refetch on navigate-back-from-camera per CONTEXT.md D-08.
-7. **Focus management:** When PrimingModal opens, focus moves to Continue button. When RetakeScreen mounts, no autofocus (the video starts playing; focus stays where the OS puts it).
+7. **Focus management:** When PrimingModal opens, focus moves to Allow-and-continue button. When RetakeScreen mounts, no autofocus (the video starts playing; focus stays where the OS puts it).
 8. **All `<video>` elements must have `playsinline`** — without it, iOS Safari opens the native fullscreen player and breaks the feed UX. This is a load-bearing attribute.
 
 ---
