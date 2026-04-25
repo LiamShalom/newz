@@ -23,7 +23,7 @@ Build-order discipline: every phase ships a demoable artifact. If we stop at any
 
 ## Phases
 
-- [ ] **Phase 1: Foundation, Capture & Ingest** - Skeleton + iOS Safari camera verified + clips upload, persist, and play back from raw feed
+- [x] **Phase 1: Foundation, Capture & Ingest** - Skeleton + iOS Safari camera verified + clips upload, persist, and play back from raw feed (completed 2026-04-25)
 - [ ] **Phase 2: Marengo Embedding** - 512-d multimodal vectors generated per clip, stored in SQLite, visible in debug
 - [ ] **Phase 3: Clustering + Debug Overlay** - Composite-score clustering with calibration notebook proves staged clips fuse correctly; debug overlay shows the math
 - [ ] **Phase 4: Multi-Agent Compile + Real-Time Feed** - Four-subagent Claude Agent SDK pipeline produces segments; SSE streams pipeline events; feed renders compiled segments live
@@ -46,7 +46,7 @@ Build-order discipline: every phase ships a demoable artifact. If we stop at any
 - [x] 01-02-backend-ingest-PLAN.md — POST /clips (202 + asyncio.create_task), SQLite WAL schema, /clips static mount, GET /feed
 - [x] 01-03-frontend-feed-shell-PLAN.md — Feed view + RecordFAB + EmptyState + FeedTile + session UUID + uploadQueue
 - [x] 01-04-camera-mime-gps-PLAN.md — Recorder state machine: priming modal + MediaRecorder + CAP-10 MIME ladder + 30s ring + GPS-blocking submit
-- [ ] 01-05-deploy-iphone-gate-PLAN.md — Vercel + Railway deploy config + real-iPhone hardware verification gate (FND-03)
+- [x] 01-05-deploy-iphone-gate-PLAN.md — Vercel + Railway deploy config + real-iPhone hardware verification gate (FND-03)
 **UI hint**: yes
 
 ### Phase 2: Marengo Embedding
@@ -103,7 +103,7 @@ Build-order discipline: every phase ships a demoable artifact. If we stop at any
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation, Capture & Ingest | 0/5 | Not started | - |
+| 1. Foundation, Capture & Ingest | 5/5 | Complete | 2026-04-25 |
 | 2. Marengo Embedding | 0/0 | Not started | - |
 | 3. Clustering + Debug Overlay | 0/0 | Not started | - |
 | 4. Multi-Agent Compile + Real-Time Feed | 0/0 | Not started | - |

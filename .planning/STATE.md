@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-last_updated: "2026-04-25T06:08:00.000Z"
+status: phase_complete
+last_updated: "2026-04-25T07:05:00.000Z"
 progress:
   total_phases: 5
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 5
-  completed_plans: 4
-  percent: 80
+  completed_plans: 5
+  percent: 100
 ---
 
 # Project State: Newz
@@ -18,7 +18,7 @@ progress:
 
 **Core Value:** Multi-angle event clustering must work — show the same event captured by different people, automatically grouped and compiled into one coherent segment.
 
-**Current Focus:** Phase 1 — Foundation, Capture & Ingest. iOS Safari hardware verification gate must be passed before any backend AI logic is written.
+**Current Focus:** Phase 1 complete (2026-04-25) — iOS Safari hardware gate PASSED, real iPhone clip lives in prod feed. Phase 2 (Marengo Embedding) is unblocked.
 
 **Build Window:** 24-48 hour hackathon (HackTech @ Caltech, April 24-26 2026).
 
@@ -28,13 +28,15 @@ progress:
 |-------|-------|
 | Active Milestone | v1 (hackathon MVP) |
 | Active Phase | Phase 1 — Foundation, Capture & Ingest |
-| Active Plan | 01-05 deploy + iPhone gate (Wave 4 — checkpoint) |
-| Status | EXECUTING — Waves 1-3 complete (01-01, 01-02, 01-03, 01-04) |
-| Phase Progress | 0/5 phases complete; 4/5 plans in Phase 1 done |
+| Active Plan | None (pending Phase 2 plan-phase) |
+| Status | Phase 1 complete; FND-03 hardware gate PASSED on real iPhone |
+| Phase Progress | 1/5 phases complete; 5/5 plans in Phase 1 done |
 
 ```
-[████████  ] 80% — Phase 1 Waves 1-3 complete (4/5 plans)
+[██        ] 20% — Phase 1 complete (1/5 phases)
 ```
+
+**Phase 1 known issue (non-blocking, tracked):** Retake X icon visibility was flaky on iPhone Safari — hotfixed in commit `423db82` (added semi-transparent dark backdrop). Re-verify on next iPhone test pass.
 
 ## Performance Metrics
 
@@ -66,9 +68,10 @@ progress:
 
 ### Open Todos
 
-- [ ] Pass `/gsd-plan-phase 1` to decompose Phase 1 into executable plans
+- [x] Pass `/gsd-plan-phase 1` to decompose Phase 1 into executable plans (done; phase shipped 2026-04-25)
 - [ ] Verify `pip show twelvelabs` and `dir(client.embed)` in 30s REPL on day 1 before writing embed.py
 - [ ] Verify Claude Agent SDK 0.1.68 parallel subagent execution syntax before writing compile.py (Phase 4 prep)
+- [ ] Polish: re-test retake X icon visibility on iPhone with `423db82` bundle; confirm Row 7 cleanly PASSes (currently marked "PASS with known issue")
 
 ### Active Blockers
 
@@ -83,8 +86,8 @@ None.
 
 ## Session Continuity
 
-**Last session ended:** 2026-04-24, after roadmap initialization
-**Next action:** `/gsd-plan-phase 1` to decompose Phase 1 (Foundation + Capture + Ingest) into plans
+**Last session ended:** 2026-04-25, after Phase 1 execution + iPhone gate PASS
+**Next action:** `/gsd-discuss-phase 2` (recommended — gather context for Marengo embedding) or `/gsd-plan-phase 2` (skip discuss; CONTEXT.md not yet present for Phase 2)
 
 **Key files to load on resume:**
 
