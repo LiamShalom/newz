@@ -1,3 +1,16 @@
+---
+gsd_state_version: 1.0
+milestone: v1.0
+milestone_name: milestone
+status: unknown
+last_updated: "2026-04-25T04:37:05.625Z"
+progress:
+  total_phases: 5
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+---
+
 # Project State: Newz
 
 ## Project Reference
@@ -73,6 +86,7 @@ None.
 **Next action:** `/gsd-plan-phase 1` to decompose Phase 1 (Foundation + Capture + Ingest) into plans
 
 **Key files to load on resume:**
+
 - `.planning/PROJECT.md` (vision, constraints, decisions)
 - `.planning/REQUIREMENTS.md` (61 v1 requirements with traceability)
 - `.planning/ROADMAP.md` (5-phase structure)
