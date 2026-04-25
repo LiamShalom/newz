@@ -1,12 +1,20 @@
 import asyncio
 import logging
 
-from .. import db, events
+from .. import config, db, events
 from .embed import embed_worker
 from .cluster import cluster_worker
 from .compile import compile_segment
 
 log = logging.getLogger(__name__)
+
+
+def _scrub(msg: str) -> str:
+    """Redact secrets from error strings broadcast over the public /events SSE."""
+    key = config.TWELVELABS_API_KEY
+    if key and key in msg:
+        msg = msg.replace(key, "***REDACTED***")
+    return msg
 
 
 async def _should_compile(cluster_id: str) -> bool:
@@ -41,4 +49,4 @@ async def run_pipeline(clip_id: str) -> None:
             log.info("compile triggered cluster_id=%s", cluster_id)
     except Exception as exc:
         log.exception("pipeline failed clip_id=%s", clip_id)
-        await events.broadcast({"type": "pipeline_error", "clip_id": clip_id, "error": str(exc)})
+        await events.broadcast({"type": "pipeline_error", "clip_id": clip_id, "error": _scrub(str(exc))})

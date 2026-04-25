@@ -15,7 +15,7 @@
   --color-accent-link: #5AA9FF;
 
   --font-display: "Anton", "Bebas Neue", "Impact", ui-sans-serif, system-ui, sans-serif;
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Geist", "Inter", ui-sans-serif, system-ui, sans-serif;
 }
 
 [data-theme="light"] {
