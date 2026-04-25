@@ -27,6 +27,7 @@ Build-order discipline: every phase ships a demoable artifact. If we stop at any
 - [ ] **Phase 2: Marengo Embedding** - 512-d multimodal vectors generated per clip, stored in SQLite, visible in debug
 - [ ] **Phase 3: Clustering + Debug Overlay** - Composite-score clustering with calibration notebook proves staged clips fuse correctly; debug overlay shows the math
 - [ ] **Phase 4: Multi-Agent Compile + Real-Time Feed** - Four-subagent Claude Agent SDK pipeline produces segments; SSE streams pipeline events; feed renders compiled segments live
+- [ ] **Phase 4.5: Sub-Clip Embedding & Visual Caption Pipeline** - Twelve Labs native segmentation produces parent + child embeddings per upload; children cluster at 3s granularity; Angle Agent stitches best children into one compiled video; frame-based Claude caption replaces metadata-only captions
 - [ ] **Phase 5: Demo Hardening** - OFFLINE_DEMO mode, staged dataset replay button, single `make demo` command, 90s screencast committed
 
 ## Phase Details
@@ -93,6 +94,22 @@ Plans:
 - [ ] 04-01-PLAN.md — DB migration + compile pipeline (4 subagents, 30s cap, fallback) + events.py SSE bus + GET /events + /feed upgrade + run.py trigger + FED-05 seed
 - [ ] 04-02-PLAN.md — Frontend: useEventSource hook + distance formatter + Segment types + FeedTile/Feed/api.ts upgrade
 **UI hint**: yes
+
+### Phase 4.5: Sub-Clip Embedding & Visual Caption Pipeline
+**Goal**: Every uploaded video is segmented into 3s child clips by Twelve Labs natively; children and their parent embed in parallel; children cluster at fine-grained temporal resolution; Angle Agent selects the best children and ffmpeg stitches them into one real compiled video; a frame-extraction + Claude Haiku → Sonnet caption pipeline replaces metadata-only captions, producing grounded AP-wire headlines.
+**Depends on**: Phase 4
+**Requirements**: CMP-08 (caption quality), CMP-05 (compile pipeline), FED-02 (feed rendering)
+**Success Criteria** (what must be TRUE):
+  1. A 15s+ upload produces 3s child clips stored in DB with `parent_id`, `start_offset_sec`, `end_offset_sec`; children embed in parallel via `embedding_scope=["clip","asset"]`
+  2. Children from two different users' clips of the same event cluster together (Marengo cosine + GPS + time composite)
+  3. Compile produces a single stitched .webm video (ffmpeg concat of selected children), not sequential separate clips
+  4. Caption is generated from frames of centroid-closest children: Claude Haiku describes each, Claude Sonnet aggregates into an AP-wire headline ≤200 chars
+  5. Frontend renders the single compiled video with no sequential cycling UI
+**Plans**: 3 plans
+Plans:
+- [ ] 045-01-PLAN.md — DB child schema (parent_id/offsets) + embed.py segmentation + run.py child dispatch
+- [ ] 045-02-PLAN.md — stitch.py + frames.py + caption_pipeline.py + compile.py asyncio.gather wiring
+- [ ] 045-03-PLAN.md — Frontend: LedeTile single-video simplification + api.ts + types.ts deprecation
 
 ### Phase 5: Demo Hardening
 **Goal**: The full demo runs reliably under hostile conditions — venue WiFi dies, judge's iPhone won't grant permissions, Marengo or Anthropic rate-limits — without any scrambling on stage. `make demo` boots everything; OFFLINE_DEMO serves cached responses; the screencast is the Tier-5 fallback baked into the pitch deck.
