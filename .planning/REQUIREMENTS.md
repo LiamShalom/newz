@@ -22,6 +22,7 @@ Hackathon MVP scope. Each maps to a roadmap phase. v1 lock: live-first demo with
 - [ ] **CAP-03**: User sees pre-permission priming modal explaining camera + GPS access before browser prompts
 - [ ] **CAP-04**: User can record video via in-app camera using MediaRecorder API
 - [ ] **CAP-05**: Recording has visible duration counter and hard 30-second cap
+  - *Phase 1 CONTEXT.md D-03 overrides: ring-fill is the visible duration indicator; no numeric counter.*
 - [ ] **CAP-06**: User sees submit-or-retake preview screen after recording stops
 - [ ] **CAP-07**: Browser geolocation captures GPS lat/lng at submit time (5s timeout, never blocks)
 - [ ] **CAP-08**: Submit attaches GPS + timestamp to the clip and uploads via multipart POST

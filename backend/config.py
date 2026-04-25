@@ -1,40 +1,19 @@
-"""
-backend/config.py — environment-driven configuration for the Newz backend.
-All env vars are loaded from .env (via python-dotenv) with safe defaults for local dev.
-"""
 import os
 from pathlib import Path
-
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(Path(__file__).parent / ".env")
 
-# ── Storage ──────────────────────────────────────────────────────────────────
-# On Railway: set DATA_DIR=/data (persistent volume mount).
-# Locally: defaults to ./data relative to backend/.
-DATA_DIR: str = os.getenv("DATA_DIR", str(Path(__file__).parent / "data"))
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")
+DATA_DIR = Path(os.environ.get("DATA_DIR", "./data")).resolve()
+OFFLINE_DEMO = os.environ.get("OFFLINE_DEMO", "false").lower() == "true"
 
-# SQLite database file path.
-DB_PATH: str = os.getenv("DB_PATH", os.path.join(DATA_DIR, "newz.db"))
-
-# Directory where uploaded clips are stored on disk.
-CLIPS_DIR: str = os.getenv("CLIPS_DIR", os.path.join(DATA_DIR, "clips"))
-
-# ── Twelve Labs ───────────────────────────────────────────────────────────────
-TWELVELABS_API_KEY: str = os.getenv("TWELVELABS_API_KEY", "")
-
-# ── Embedding mode ────────────────────────────────────────────────────────────
-# Set to "true" to return deterministic fake 512-d vectors — no API key needed.
-# Used for offline dev, CI, and Phase 5 OFFLINE_DEMO path.
-USE_MOCK_EMBEDDINGS: bool = os.getenv("USE_MOCK_EMBEDDINGS", "false").lower() == "true"
-
-# ── Pre-warm ──────────────────────────────────────────────────────────────────
-# Path to a short clip sent to Marengo on startup to pay the cold-start cost
-# before the first judge submits a clip. Relative to backend/ working directory.
-# Set to "" to disable pre-warm entirely (also disabled when USE_MOCK_EMBEDDINGS=true).
-PRE_WARM_CLIP_PATH: str = os.getenv(
+# Phase 2: Marengo embedding
+TWELVELABS_API_KEY: str = os.environ.get("TWELVELABS_API_KEY", "")
+USE_MOCK_EMBEDDINGS: bool = os.environ.get("USE_MOCK_EMBEDDINGS", "false").lower() == "true"
+PRE_WARM_CLIP_PATH: str = os.environ.get(
     "PRE_WARM_CLIP_PATH", str(Path(__file__).parent / "seed" / "prewarm.mp4")
 )
 
-# ── CORS ─────────────────────────────────────────────────────────────────────
-CORS_ORIGINS: list[str] = os.getenv("CORS_ORIGINS", "*").split(",")
+# Phase 3: Clustering
+CLUSTER_THRESHOLD: float = float(os.environ.get("CLUSTER_THRESHOLD", "0.55"))

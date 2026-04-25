@@ -1,160 +1,165 @@
-"""
-backend/db.py — SQLite data layer for Newz (aiosqlite, WAL mode).
-
-Single shared connection opened at startup via init_db(). All helpers
-accept an explicit `conn` argument so they can be tested with an
-in-memory connection without touching the real DB.
-
-Public API:
-    init_db()                         — open connection, create schema
-    init_db_on_conn(conn)             — create schema on an existing connection
-    get_db_conn()                     — async context manager yielding the shared conn
-    get_clip(clip_id, conn)           — fetch one clip row as dict | None
-    create_clip(clip, conn)           — insert a new clip row
-    store_embedding(clip_id, vec, latency_ms, conn) — persist 512-d BLOB + mark done
-    get_embedding(clip_id, conn)      — retrieve stored 512-d float32 vector or None
-"""
-
-import asyncio
 import logging
-import os
-from contextlib import asynccontextmanager
+import time
+import uuid
 from pathlib import Path
-from typing import AsyncIterator
 
 import aiosqlite
+import numpy as np
+from fastapi import UploadFile
 
-import config
+from . import config
 
 log = logging.getLogger(__name__)
 
-# Module-level shared connection — opened once in init_db(), reused thereafter.
-_conn: aiosqlite.Connection | None = None
-_lock = asyncio.Lock()
+DB_PATH = config.DATA_DIR / "newz.db"
+CLIPS_DIR = config.DATA_DIR / "clips"
+
+SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS clips (
+  id TEXT PRIMARY KEY,
+  path TEXT NOT NULL,
+  lat REAL NOT NULL,
+  lng REAL NOT NULL,
+  ts REAL NOT NULL,
+  duration_sec REAL,
+  embedding_status TEXT NOT NULL DEFAULT 'pending',
+  embed_latency_ms INTEGER,
+  cluster_id TEXT,
+  session_id TEXT,
+  created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_clips_created_at ON clips(created_at);
+
+CREATE TABLE IF NOT EXISTS clip_embeddings (
+  clip_id TEXT PRIMARY KEY,
+  vector BLOB NOT NULL,
+  latency_ms REAL,
+  created_at REAL,
+  FOREIGN KEY(clip_id) REFERENCES clips(id)
+);
+
+CREATE TABLE IF NOT EXISTS clusters (
+  id TEXT PRIMARY KEY,
+  centroid BLOB,
+  centroid_lat REAL,
+  centroid_lng REAL,
+  median_ts REAL,
+  member_count INTEGER NOT NULL DEFAULT 0,
+  created_at REAL NOT NULL,
+  updated_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS segments (
+  id TEXT PRIMARY KEY,
+  cluster_id TEXT NOT NULL,
+  ordered_clip_ids TEXT NOT NULL,
+  caption TEXT,
+  location TEXT,
+  source_count INTEGER NOT NULL,
+  created_at REAL NOT NULL,
+  FOREIGN KEY(cluster_id) REFERENCES clusters(id)
+);
+"""
 
 
-async def init_db_on_conn(conn: aiosqlite.Connection) -> None:
-    """Create schema on *conn*. Safe to call multiple times (IF NOT EXISTS guards)."""
-    await conn.execute("PRAGMA journal_mode=WAL")
-    await conn.execute("PRAGMA busy_timeout=5000")
+async def init() -> None:
+    config.DATA_DIR.mkdir(parents=True, exist_ok=True)
+    CLIPS_DIR.mkdir(parents=True, exist_ok=True)
+    async with aiosqlite.connect(DB_PATH) as conn:
+        await conn.execute("PRAGMA journal_mode=WAL")
+        await conn.execute("PRAGMA synchronous=NORMAL")
+        await conn.executescript(SCHEMA_SQL)
+        await conn.commit()
+    log.info("db.init: schema ready at %s", DB_PATH)
 
-    await conn.execute("""
-        CREATE TABLE IF NOT EXISTS clips (
-            id               TEXT PRIMARY KEY,
-            path             TEXT NOT NULL,
-            lat              REAL,
-            lng              REAL,
-            ts               REAL NOT NULL,
-            duration_sec     REAL,
-            embedding_status TEXT NOT NULL DEFAULT 'pending',
-            embed_latency_ms INTEGER,
-            cluster_id       TEXT,
-            created_at       REAL NOT NULL
+
+_MIME_EXT = {"video/mp4": "mp4", "video/webm": "webm"}
+
+
+def ext_from_mime(mime: str | None) -> str:
+    if not mime:
+        return "webm"
+    base = mime.split(";")[0].strip().lower()
+    return _MIME_EXT.get(base, "webm")
+
+
+async def insert_clip(
+    file: UploadFile,
+    lat: float,
+    lng: float,
+    ts: float,
+    session_id: str | None,
+) -> str:
+    clip_id = uuid.uuid4().hex
+    ext = ext_from_mime(file.content_type)
+    path = CLIPS_DIR / f"{clip_id}.{ext}"
+    contents = await file.read()
+    path.write_bytes(contents)
+    now = time.time()
+    async with aiosqlite.connect(DB_PATH) as conn:
+        await conn.execute(
+            "INSERT INTO clips (id, path, lat, lng, ts, session_id, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (clip_id, str(path), lat, lng, ts, session_id, now),
         )
-    """)
+        await conn.commit()
+    log.info("insert_clip id=%s lat=%.2f lng=%.2f bytes=%d", clip_id, lat, lng, len(contents))
+    return clip_id
 
-    # 512-d float32 vector as 2048-byte BLOB, one row per clip.
-    await conn.execute("""
-        CREATE TABLE IF NOT EXISTS clip_embeddings (
-            clip_id TEXT PRIMARY KEY,
-            vector  BLOB NOT NULL,
-            FOREIGN KEY (clip_id) REFERENCES clips(id)
+
+async def get_clip(clip_id: str) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute("SELECT * FROM clips WHERE id = ?", (clip_id,)) as cur:
+            row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def fetch_recent_clips(limit: int = 50) -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            "SELECT id, path, lat, lng, ts, created_at "
+            "FROM clips ORDER BY created_at DESC LIMIT ?",
+            (limit,),
         )
-    """)
-
-    await conn.commit()
-    log.info("db schema initialized")
-
-
-async def init_db() -> None:
-    """Open the shared SQLite connection and initialize the schema."""
-    global _conn
-    os.makedirs(os.path.dirname(config.DB_PATH), exist_ok=True)
-    _conn = await aiosqlite.connect(config.DB_PATH)
-    _conn.row_factory = aiosqlite.Row
-    await init_db_on_conn(_conn)
-    log.info("db ready path=%s", config.DB_PATH)
-
-
-async def close_db() -> None:
-    global _conn
-    if _conn is not None:
-        await _conn.close()
-        _conn = None
+        rows = await cursor.fetchall()
+    out = []
+    for r in rows:
+        filename = Path(r["path"]).name
+        out.append({
+            "id": r["id"],
+            "url": f"/media/{filename}",
+            "lat": r["lat"],
+            "lng": r["lng"],
+            "ts": r["ts"],
+            "created_at": r["created_at"],
+        })
+    return out
 
 
-@asynccontextmanager
-async def get_db_conn() -> AsyncIterator[aiosqlite.Connection]:
-    """Yield the shared connection. Raises RuntimeError if init_db() was never called."""
-    if _conn is None:
-        raise RuntimeError("DB not initialized — call init_db() at startup")
-    yield _conn
+async def store_embedding(clip_id: str, vec: np.ndarray, latency_ms: int) -> None:
+    blob = vec.astype(np.float32).tobytes()
+    now = time.time()
+    async with aiosqlite.connect(DB_PATH) as conn:
+        await conn.execute(
+            "INSERT OR REPLACE INTO clip_embeddings (clip_id, vector, latency_ms, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (clip_id, blob, latency_ms, now),
+        )
+        await conn.execute(
+            "UPDATE clips SET embedding_status = 'done', embed_latency_ms = ? WHERE id = ?",
+            (latency_ms, clip_id),
+        )
+        await conn.commit()
 
 
-# ── Clip helpers ──────────────────────────────────────────────────────────────
-
-async def get_clip(clip_id: str, conn: aiosqlite.Connection) -> dict | None:
-    """Return one clip row as a plain dict, or None if not found."""
-    async with conn.execute(
-        "SELECT * FROM clips WHERE id = ?", (clip_id,)
-    ) as cursor:
-        row = await cursor.fetchone()
-    if row is None:
-        return None
-    return dict(row)
-
-
-async def create_clip(clip: dict, conn: aiosqlite.Connection) -> None:
-    """Insert a new clip row. `clip` must have all non-nullable columns."""
-    await conn.execute(
-        """INSERT INTO clips
-             (id, path, lat, lng, ts, duration_sec, embedding_status, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)""",
-        (
-            clip["id"],
-            clip["path"],
-            clip.get("lat"),
-            clip.get("lng"),
-            clip["ts"],
-            clip.get("duration_sec"),
-            clip["created_at"],
-        ),
-    )
-    await conn.commit()
-
-
-# ── Embedding helpers ─────────────────────────────────────────────────────────
-
-async def store_embedding(
-    clip_id: str,
-    vec: "np.ndarray",
-    latency_ms: int,
-    conn: "aiosqlite.Connection",
-) -> None:
-    """Store a normalized 512-d float32 vector as a BLOB and mark clip done."""
-    import numpy as np
-    blob = vec.astype(np.float32).tobytes()  # 512 * 4 = 2048 bytes
-    await conn.execute(
-        "INSERT OR REPLACE INTO clip_embeddings (clip_id, vector) VALUES (?, ?)",
-        (clip_id, blob),
-    )
-    await conn.execute(
-        "UPDATE clips SET embedding_status = 'done', embed_latency_ms = ? WHERE id = ?",
-        (latency_ms, clip_id),
-    )
-    await conn.commit()
-
-
-async def get_embedding(
-    clip_id: str,
-    conn: "aiosqlite.Connection",
-) -> "np.ndarray | None":
-    """Retrieve the stored 512-d float32 vector for a clip, or None if not yet embedded."""
-    import numpy as np
-    async with conn.execute(
-        "SELECT vector FROM clip_embeddings WHERE clip_id = ?", (clip_id,)
-    ) as cursor:
-        row = await cursor.fetchone()
+async def get_embedding(clip_id: str) -> np.ndarray | None:
+    async with aiosqlite.connect(DB_PATH) as conn:
+        async with conn.execute(
+            "SELECT vector FROM clip_embeddings WHERE clip_id = ?", (clip_id,)
+        ) as cur:
+            row = await cur.fetchone()
     if row is None:
         return None
     return np.frombuffer(row[0], dtype=np.float32).copy()
