@@ -1,23 +1,22 @@
 <!doctype html>
-<html lang="en" data-theme="light">
+<html lang="en" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <meta name="theme-color" content="#FAFAF7" media="(prefers-color-scheme: light)" />
-    <meta name="theme-color" content="#1C1C1E" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#0A0A0A" />
     <title>Newz</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Inter+Tight:wght@400;500;600&display=swap" />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;500;600;700;900&display=swap" />
     <script>
       // Hydrate theme before React mounts to avoid FOUC.
-      // Default light per product decision; user toggle persists in localStorage.
+      // Default dark per product decision; user toggle persists in localStorage.
       (function () {
         try {
           var t = localStorage.getItem('newz.theme');
-          document.documentElement.dataset.theme = t === 'dark' ? 'dark' : 'light';
+          document.documentElement.dataset.theme = t === 'light' ? 'light' : 'dark';
         } catch (e) {
-          document.documentElement.dataset.theme = 'light';
+          document.documentElement.dataset.theme = 'dark';
         }
       })();
     </script>

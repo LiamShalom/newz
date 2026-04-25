@@ -1,0 +1,22 @@
+{
+  "phase": "4",
+  "phase_name": "Multi-Agent Compile + Real-Time Feed",
+  "timestamp": "2026-04-25T00:00:00Z",
+  "areas_completed": ["Compile pipeline shape"],
+  "areas_remaining": ["Caption location grounding"],
+  "decisions": {
+    "Compile pipeline shape": [
+      {"question": "Parallelism strategy for Angle Selector ‖ Caption Writer", "answer": "External asyncio.gather of two query() calls; Editor then Publisher sequential", "options_presented": ["External asyncio.gather", "Single orchestrator query() with 4 subagents", "Hybrid"]},
+      {"question": "30s wall-clock timeout fallback (CMP-06)", "answer": "Timestamp-asc ordering + template caption 'Multiple angles of an event near {neighborhood} on {date}', inserted via Publisher path with caption_source='fallback'", "options_presented": ["Timestamp-asc + template", "Centroid-distance + template", "Salvage Angle Selector partial"]},
+      {"question": "Re-compile when new clip joins existing cluster (CMP-09)", "answer": "Debounced 30s per cluster; new arrival resets countdown; replace segment row when timer fires", "options_presented": ["Debounce 30s", "Re-compile on size doubling", "Cancel-and-restart"]},
+      {"question": "SSE event granularity for compile pipeline (CMP-07)", "answer": "Stage-level only: compile_started, segment_published, pipeline_error. Per-agent goes to log.info() not SSE.", "options_presented": ["Stage-level only", "Per-agent broadcast", "Per-agent on /events/debug channel"]}
+    ]
+  },
+  "deferred_ideas": [],
+  "canonical_refs": [
+    ".planning/REQUIREMENTS.md",
+    ".planning/research/ARCHITECTURE.md",
+    ".planning/research/PITFALLS.md",
+    "CLAUDE.md"
+  ]
+}

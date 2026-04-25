@@ -2,29 +2,31 @@
 
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
+/* Defaults are the dark palette — matches the sport-channel aesthetic shipped
+   as the home page default. Light theme overrides below for the toggle. */
 @theme {
-  --color-surface: #FAFAF7;
-  --color-surface-elevated: #FFFFFF;
-  --color-ink-primary: #111111;
+  --color-surface: #0A0A0A;
+  --color-surface-elevated: #141414;
+  --color-ink-primary: #FFFFFF;
+  --color-ink-secondary: #B5B5B5;
+  --color-ink-tertiary: #6B6B6B;
+  --color-hairline: #1F1F1F;
+  --color-accent-record: #E11D48;
+  --color-accent-link: #5AA9FF;
+
+  --font-display: "Anton", "Bebas Neue", "Impact", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
+[data-theme="light"] {
+  --color-surface: #FFFFFF;
+  --color-surface-elevated: #F5F5F5;
+  --color-ink-primary: #0A0A0A;
   --color-ink-secondary: #3A3A3C;
   --color-ink-tertiary: #6E6E73;
   --color-hairline: #E5E5EA;
-  --color-accent-record: #D4322C;
+  --color-accent-record: #DC2626;
   --color-accent-link: #1F6FEB;
-
-  --font-display: "Fraunces", ui-serif, Georgia, serif;
-  --font-sans: "Inter Tight", ui-sans-serif, system-ui, sans-serif;
-}
-
-[data-theme="dark"] {
-  --color-surface: #1C1C1E;
-  --color-surface-elevated: #2C2C2E;
-  --color-ink-primary: #F5F5F7;
-  --color-ink-secondary: #C7C7CC;
-  --color-ink-tertiary: #8E8E93;
-  --color-hairline: #2C2C2E;
-  --color-accent-record: #FF453A;
-  --color-accent-link: #5AA9FF;
 }
 
 html, body, #root {

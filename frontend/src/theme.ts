@@ -5,9 +5,9 @@ export type Theme = "light" | "dark";
 const STORAGE_KEY = "newz.theme";
 
 function readInitialTheme(): Theme {
-  if (typeof document === "undefined") return "light";
+  if (typeof document === "undefined") return "dark";
   // index.html hydration script already set this from localStorage; trust it.
-  return document.documentElement.dataset.theme === "dark" ? "dark" : "light";
+  return document.documentElement.dataset.theme === "light" ? "light" : "dark";
 }
 
 export function useTheme(): [Theme, (next: Theme) => void] {
