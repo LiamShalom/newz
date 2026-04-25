@@ -229,3 +229,15 @@ async def debug_clusters() -> dict:
         "time_window_s": cluster_mod.TIME_WINDOW_S,
         "clusters": clusters_out,
     }
+
+
+@app.post("/debug/compile/{cluster_id}")
+async def debug_trigger_compile(cluster_id: str):
+    """Dev-only: manually trigger compile on an existing cluster."""
+    from .pipeline.compile import compile_segment
+    await db.set_compile_in_flight(cluster_id, False)  # reset so CAS allows it
+    acquired = await db.set_compile_in_flight(cluster_id, True)
+    if not acquired:
+        raise HTTPException(status_code=409, detail="compile already in flight")
+    asyncio.create_task(compile_segment(cluster_id))
+    return {"status": "triggered", "cluster_id": cluster_id}

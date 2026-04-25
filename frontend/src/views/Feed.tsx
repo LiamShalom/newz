@@ -82,7 +82,7 @@ export function Feed() {
 
   // RTM-01/RTM-03: subscribe to pipeline events; refetch on new segment
   useEventSource((ev: ServerEvent) => {
-    if (ev.type === "segment_published") {
+    if (ev.type === "segment_published" || ev.type === "cluster_assigned") {
       void refetchFeed();
     }
   });

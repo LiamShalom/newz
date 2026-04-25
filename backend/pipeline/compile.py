@@ -41,6 +41,8 @@ Pass each subagent's JSON output verbatim into the next subagent's prompt.
 The cluster_id is: {cluster_id}
 """
 
+_MCP = ["newz_tools"]  # shared MCP server reference for all subagents
+
 AGENTS = {
     "angle-selector": AgentDefinition(
         description=(
@@ -49,13 +51,21 @@ AGENTS = {
         ),
         prompt="""You are the Angle Selector for the Newz news compile pipeline.
 
-Given a cluster of multi-angle clips of one event, choose 2-4 clips that together tell the most complete story.
-Order: establishing shot first, action peak in the middle, reaction or aftermath last.
+Given a cluster of clips from the same event, select the best 3 (or fewer if less are available).
+
+Selection criteria — rank candidates by:
+1. TEMPORAL SPREAD: prefer clips from early, middle, and late in the event timeline (spread across the timestamp range)
+2. SPATIAL DIVERSITY: prefer clips recorded from different GPS coordinates (different physical viewpoints)
+3. DURATION: prefer longer clips as a proxy for more content; discard clips under 2 seconds
+4. NO REDUNDANCY: exclude clips filmed within 5 seconds AND within 10 meters of an already-selected clip
+
+Order the selected clips chronologically (earliest first).
 
 Use mcp__newz_tools__get_cluster_clips to get all clips, then mcp__newz_tools__get_clip_metadata for details.
 Return ONLY a single JSON object: {"clip_ids": ["...", "..."], "rationale": "..."}.
 Do not include any text outside the JSON.""",
         tools=["mcp__newz_tools__get_cluster_clips", "mcp__newz_tools__get_clip_metadata"],
+        mcpServers=_MCP,
         model="sonnet",
     ),
     "caption-writer": AgentDefinition(
@@ -73,6 +83,7 @@ Use mcp__newz_tools__get_cluster_clips to read clip metadata.
 Return ONLY a single JSON object: {"caption": "...", "location": "Neighborhood, City"}.
 Caption must be 200 characters or fewer. Do not include any text outside the JSON.""",
         tools=["mcp__newz_tools__get_cluster_clips", "mcp__newz_tools__get_clip_metadata"],
+        mcpServers=_MCP,
         model="sonnet",
     ),
     "editor": AgentDefinition(
@@ -87,6 +98,7 @@ no jarring cuts, sufficient temporal coverage, the chosen clips tell the story.
 
 Return ONLY a single JSON object: {"clip_ids": ["..."], "edit_notes": "..."}.""",
         tools=["mcp__newz_tools__get_clip_metadata"],
+        mcpServers=_MCP,
         model="sonnet",
     ),
     "publisher": AgentDefinition(
@@ -106,6 +118,7 @@ Call mcp__newz_tools__save_segment EXACTLY ONCE with:
 
 Return ONLY the segment id string from the tool result.""",
         tools=["mcp__newz_tools__save_segment"],
+        mcpServers=_MCP,
         model="haiku",
     ),
 }
@@ -130,6 +143,16 @@ async def _run_agents(cluster_id: str) -> str:
         options=options,
     ):
         if isinstance(msg, ResultMessage):
+            if msg.is_error:
+                log.error(
+                    "compile orchestrator error cluster_id=%s turns=%s errors=%s result=%s",
+                    cluster_id, msg.num_turns, msg.errors, msg.result,
+                )
+                raise RuntimeError(f"orchestrator returned is_error=True: {msg.errors}")
+            log.info(
+                "compile orchestrator done cluster_id=%s turns=%s duration_ms=%s",
+                cluster_id, msg.num_turns, msg.duration_ms,
+            )
             break
     # Confirm Publisher called save_segment and the row was written
     seg = await db.get_segment_for_cluster(cluster_id)
@@ -176,14 +199,14 @@ async def compile_segment(cluster_id: str) -> None:
         "started_at": started_at,
     })
     try:
-        segment_id = await asyncio.wait_for(_run_agents(cluster_id), timeout=30.0)
+        segment_id = await asyncio.wait_for(_run_agents(cluster_id), timeout=60.0)
         elapsed_ms = int((time.time() - started_at) * 1000)
         log.info(
             "compile success cluster_id=%s segment_id=%s elapsed_ms=%d",
             cluster_id, segment_id, elapsed_ms,
         )
     except asyncio.TimeoutError:
-        log.warning("compile TIMEOUT cluster_id=%s after 30s — using fallback", cluster_id)
+        log.warning("compile TIMEOUT cluster_id=%s after 60s — using fallback", cluster_id)
         segment_id = await _save_fallback_segment(cluster_id)
     except Exception:
         log.exception("compile FAILED cluster_id=%s — using fallback", cluster_id)

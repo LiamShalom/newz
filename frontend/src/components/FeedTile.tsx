@@ -1,20 +1,8 @@
+import { useState, useCallback } from "react";
 import type { Segment } from "../types";
 import { relativeTime } from "../timeFormat";
 import { distanceLabel } from "../distance";
 
-/**
- * Segment card for the compiled-news feed (Phase 4, FED-03).
- *
- * iOS load-bearing attributes: autoPlay, muted, playsInline are all required.
- * - autoPlay: starts playback without user gesture (required for TikTok-style feed)
- * - muted: required for autoPlay to work in iOS Safari without user interaction
- * - playsInline: prevents iOS Safari from fullscreening the player
- * - loop: continuous autoplay
- *
- * Source count badge: "Compiled from N angles" — visible proof of multi-angle pipeline.
- * Distance overlay: human-readable ("2 blocks away") when GPS available; location string fallback.
- * Age overlay: relative time ("4 min ago").
- */
 export function FeedTile({
   segment,
   viewerLat,
@@ -24,6 +12,19 @@ export function FeedTile({
   viewerLat?: number;
   viewerLng?: number;
 }) {
+  const urls = segment.video_urls?.filter(Boolean) as string[] | undefined;
+  const hasMultiple = urls && urls.length > 1;
+  const [angleIdx, setAngleIdx] = useState(0);
+
+  const currentUrl = hasMultiple
+    ? `${urls[angleIdx]}`
+    : segment.url;
+
+  const handleEnded = useCallback(() => {
+    if (!hasMultiple) return;
+    setAngleIdx((i) => (i + 1) % urls.length);
+  }, [hasMultiple, urls]);
+
   const distanceStr =
     viewerLat !== undefined &&
     viewerLng !== undefined &&
@@ -34,15 +35,23 @@ export function FeedTile({
 
   return (
     <div className="bg-[#1A1A1A] border-y border-[#262626]">
-      <video
-        src={segment.url}
-        autoPlay
-        muted
-        playsInline
-        loop
-        preload="metadata"
-        className="w-full max-h-[80vh] bg-black"
-      />
+      <div className="relative">
+        <video
+          key={currentUrl}
+          src={currentUrl}
+          autoPlay
+          muted
+          playsInline
+          preload="metadata"
+          onEnded={handleEnded}
+          className="w-full max-h-[80vh] bg-black"
+        />
+        {hasMultiple && (
+          <span className="absolute top-3 right-3 bg-black/60 text-white text-xs px-2 py-0.5 rounded-full">
+            {angleIdx + 1}/{urls.length}
+          </span>
+        )}
+      </div>
       <div className="px-4 py-3 space-y-2">
         <p className="text-white text-base leading-snug">{segment.caption}</p>
         <div className="flex justify-between items-center text-xs text-[#A3A3A3]">

@@ -277,12 +277,12 @@ async def insert_segment(
 
 
 async def fetch_recent_segments(limit: int = 50) -> list[dict]:
-    """JOIN segments + clusters; return dicts with decoded ordered_clip_ids list."""
+    """JOIN segments + clusters; batch-fetch all ordered clip paths for sequential playback."""
     async with aiosqlite.connect(DB_PATH) as conn:
         conn.row_factory = aiosqlite.Row
         cursor = await conn.execute(
             """SELECT s.id, s.cluster_id, s.ordered_clip_ids, s.caption,
-                      s.location, s.source_count, s.created_at,
+                      s.location, c.member_count AS source_count, s.created_at,
                       c.centroid_lat, c.centroid_lng
                FROM segments s
                JOIN clusters c ON c.id = s.cluster_id
@@ -290,18 +290,41 @@ async def fetch_recent_segments(limit: int = 50) -> list[dict]:
             (limit,),
         )
         rows = await cursor.fetchall()
+        # Batch-fetch paths for all clip IDs across all segments
+        all_ids: list[str] = []
+        parsed_rows = []
+        for r in rows:
+            ids = json.loads(r["ordered_clip_ids"])
+            all_ids.extend(ids)
+            parsed_rows.append((r, ids))
+        clip_path_map: dict[str, str] = {}
+        if all_ids:
+            placeholders = ",".join("?" * len(all_ids))
+            path_cur = await conn.execute(
+                f"SELECT id, path FROM clips WHERE id IN ({placeholders})", all_ids
+            )
+            for p in await path_cur.fetchall():
+                clip_path_map[p["id"]] = p["path"]
     out = []
-    for r in rows:
+    for r, ids in parsed_rows:
+        def _url(clip_id: str) -> str | None:
+            path = clip_path_map.get(clip_id)
+            if not path:
+                return None
+            return f"/media/{path.rsplit('/', 1)[-1]}"
+        video_urls = [_url(cid) for cid in ids]
         out.append({
             "id": r["id"],
             "cluster_id": r["cluster_id"],
-            "ordered_clip_ids": json.loads(r["ordered_clip_ids"]),
+            "ordered_clip_ids": ids,
             "caption": r["caption"],
             "location": r["location"],
             "source_count": r["source_count"],
             "created_at": r["created_at"],
             "centroid_lat": r["centroid_lat"],
             "centroid_lng": r["centroid_lng"],
+            "video_url": video_urls[0] if video_urls else None,
+            "video_urls": video_urls,
         })
     return out
 

@@ -25,10 +25,12 @@ export async function fetchSegments(
   const data = (await res.json()) as { segments: Segment[] };
   return data.segments.map((s) => ({
     ...s,
-    // Construct video URL from first ordered clip ID.
-    // Backend StaticFiles serves /data/clips/{clip_id}.{ext} at /media/{filename}.
-    // Phase 4 uses .mp4; iOS MIME ladder is handled by the browser on error.
-    url: `${API_BASE}/media/${s.ordered_clip_ids[0]}.mp4`,
+    url: s.video_url
+      ? `${API_BASE}${s.video_url}`
+      : `${API_BASE}/media/${s.ordered_clip_ids[0]}.webm`,
+    video_urls: s.video_urls
+      ? s.video_urls.map((v) => (v ? `${API_BASE}${v}` : null))
+      : null,
   }));
 }
 

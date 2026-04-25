@@ -58,6 +58,10 @@ export interface Segment {
   /** Cluster centroid coordinates for distance calculation (FED-03). Null when GPS unavailable. */
   centroid_lat: number | null;
   centroid_lng: number | null;
+  /** Actual video file URL path (e.g. "/media/abc.webm"). Null for legacy/demo segments. */
+  video_url: string | null;
+  /** All ordered clip URL paths for sequential multi-angle playback. */
+  video_urls: (string | null)[] | null;
 }
 
 /**

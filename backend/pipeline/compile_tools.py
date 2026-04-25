@@ -19,7 +19,7 @@ log = logging.getLogger(__name__)
 @tool(
     "get_cluster_clips",
     "Return all clip metadata for a cluster (clip_ids, lat/lng, ts, paths). Use to get available clips.",
-    {"cluster_id": {"type": "string"}},
+    {"cluster_id": str},
 )
 async def get_cluster_clips(args: dict) -> dict:
     rows = await db.fetch_cluster_clips(args["cluster_id"])
@@ -29,7 +29,7 @@ async def get_cluster_clips(args: dict) -> dict:
 @tool(
     "get_clip_metadata",
     "Get GPS coordinates, timestamp, and duration for a single clip.",
-    {"clip_id": {"type": "string"}},
+    {"clip_id": str},
 )
 async def get_clip_metadata(args: dict) -> dict:
     clip = await db.get_clip(args["clip_id"])
@@ -44,11 +44,11 @@ async def get_clip_metadata(args: dict) -> dict:
         "Only the Publisher subagent is allowed to call this tool (CMP-03)."
     ),
     {
-        "cluster_id":       {"type": "string"},
-        "ordered_clip_ids": {"type": "array", "items": {"type": "string"}},
-        "caption":          {"type": "string"},
-        "location":         {"type": "string"},
-        "source_count":     {"type": "integer"},
+        "cluster_id":       str,
+        "ordered_clip_ids": list[str],
+        "caption":          str,
+        "location":         str,
+        "source_count":     int,
     },
 )
 async def save_segment(args: dict) -> dict:
