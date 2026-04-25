@@ -1,0 +1,74 @@
+{
+  "events": [
+    {
+      "slug": "shibuya-crossing",
+      "name": "Shibuya scramble crossing",
+      "location_label": "Tokyo, Japan",
+      "lat": 35.6595,
+      "lng": 139.7004,
+      "minutes_ago": 6,
+      "search_query": "shibuya crossing tokyo 4K walking tour night",
+      "angles": [
+        { "start_sec": 60,  "duration_sec": 12 },
+        { "start_sec": 240, "duration_sec": 12 },
+        { "start_sec": 480, "duration_sec": 12 }
+      ]
+    },
+    {
+      "slug": "times-square",
+      "name": "Times Square pedestrian plaza",
+      "location_label": "New York, NY",
+      "lat": 40.758,
+      "lng": -73.9855,
+      "minutes_ago": 14,
+      "search_query": "times square new york walking 4K",
+      "angles": [
+        { "start_sec": 90,  "duration_sec": 12 },
+        { "start_sec": 300, "duration_sec": 12 },
+        { "start_sec": 540, "duration_sec": 12 }
+      ]
+    },
+    {
+      "slug": "trafalgar-square",
+      "name": "Trafalgar Square",
+      "location_label": "London, UK",
+      "lat": 51.508,
+      "lng": -0.1281,
+      "minutes_ago": 22,
+      "search_query": "trafalgar square london walking tour 4K",
+      "angles": [
+        { "start_sec": 75,  "duration_sec": 12 },
+        { "start_sec": 210, "duration_sec": 12 },
+        { "start_sec": 360, "duration_sec": 12 }
+      ]
+    },
+    {
+      "slug": "pier-39-sea-lions",
+      "name": "Pier 39 sea lions",
+      "location_label": "San Francisco, CA",
+      "lat": 37.8087,
+      "lng": -122.4098,
+      "minutes_ago": 33,
+      "search_query": "pier 39 san francisco sea lions 4K",
+      "angles": [
+        { "start_sec": 30,  "duration_sec": 12 },
+        { "start_sec": 120, "duration_sec": 12 },
+        { "start_sec": 240, "duration_sec": 12 }
+      ]
+    },
+    {
+      "slug": "eiffel-tower",
+      "name": "Eiffel Tower esplanade",
+      "location_label": "Paris, France",
+      "lat": 48.8584,
+      "lng": 2.2945,
+      "minutes_ago": 45,
+      "search_query": "eiffel tower paris walk 4K",
+      "angles": [
+        { "start_sec": 60,  "duration_sec": 12 },
+        { "start_sec": 200, "duration_sec": 12 },
+        { "start_sec": 360, "duration_sec": 12 }
+      ]
+    }
+  ]
+}

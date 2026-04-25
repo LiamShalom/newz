@@ -1,53 +1,86 @@
 """
-backend/pipeline/compile.py — 4-subagent Claude Agent SDK compile pipeline (Phase 4).
+backend/pipeline/compile.py — vision-enabled compile pipeline (Phase 4).
 
 Public API:
     compile_segment(cluster_id: str) -> None
         Fire-and-forget coroutine. Called via asyncio.create_task from run.py.
-        Hard 30s wall-clock cap (CMP-06). Fallback on timeout or error.
+        Hard 60s wall-clock cap (CMP-06). Fallback on timeout or error.
 
-Pipeline: angle-selector ─┐
-                           ├─ editor ─ publisher  (CMP-04)
-          caption-writer ──┘
+Pipeline:
+    1. caption-writer (direct vision query, midpoint keyframe per clip)
+    2. orchestrator chain: angle-selector → editor → publisher (subagents)
 
-Sub-agent models: angle-selector/caption-writer/editor=sonnet, publisher=haiku (CLAUDE.md).
-MCP tools: mcp__newz_tools__get_cluster_clips, get_clip_metadata, save_segment (CMP-03).
+Caption-writer is a top-level query() with image content blocks rather than a
+subagent — claude-agent-sdk 0.1.68 does not propagate image content from MCP
+tool returns into a subagent's vision context, so we pre-extract keyframes in
+Python and inline them into the user message.
+
+MCP tools (subagents only): get_cluster_clips, get_clip_metadata, save_segment.
 """
 import asyncio
+import base64
+import json
 import logging
 import time
 from datetime import datetime, timezone
+from typing import Any
 
 from claude_agent_sdk import (
     query,
     ClaudeAgentOptions,
     AgentDefinition,
     ResultMessage,
+    AssistantMessage,
+    TextBlock,
 )
 
 from .. import db, events
 from .compile_tools import newz_tools_server
+from .keyframes import extract_cluster_keyframes
 
 log = logging.getLogger(__name__)
 
+
+CAPTION_WRITER_SYSTEM = """You are the Caption Writer for the Newz news compile pipeline.
+
+You are given:
+- Cluster metadata: date, neighborhood (inferable from coords), clip count, GPS coordinates, timestamps
+- One keyframe image per clip (midpoint frame), in the same order as the metadata
+
+Write a neutral, AP-wire-style caption grounded in BOTH sources.
+
+Rules:
+- Reference ONLY visually verifiable facts from the keyframes (e.g., "people walking with signs", "vehicles on a roadway", "smoke visible") combined with metadata (date, neighborhood, clip count).
+- DO NOT infer motive, cause, affiliation, or topic. "Tuition protest" is forbidden; "people gathered with signs" is allowed.
+- DO NOT count people unless the count is unambiguous (5 or fewer visible).
+- If keyframes are visually ambiguous, default to metadata-only phrasing.
+
+Return ONLY a single JSON object: {"caption": "...", "location": "Neighborhood, City"}.
+Caption must be 200 characters or fewer. No text outside the JSON.
+"""
+
 ORCHESTRATOR_PROMPT_TEMPLATE = """Compile cluster {cluster_id} into a published news segment.
 
+The caption and location have ALREADY been written by the caption-writer:
+  caption: {caption}
+  location: {location}
+
 Steps — use the named subagents in this order:
-1. Run angle-selector AND caption-writer IN PARALLEL (they are independent of each other).
+1. Run angle-selector to pick the best 2-4 clips and order them.
 2. Run editor on angle-selector's JSON output to validate the clip order.
-3. Run publisher with editor's clip_ids and caption-writer's caption+location.
+3. Run publisher with editor's clip_ids and the caption/location above.
 
 Pass each subagent's JSON output verbatim into the next subagent's prompt.
 The cluster_id is: {cluster_id}
 """
 
-_MCP = ["newz_tools"]  # shared MCP server reference for all subagents
+_MCP = ["newz_tools"]
 
 AGENTS = {
     "angle-selector": AgentDefinition(
         description=(
             "Picks 2-4 best clips from a cluster and orders them: "
-            "establishing → action → reaction. Independent of caption-writer — run FIRST in parallel."
+            "establishing → action → reaction. Run FIRST."
         ),
         prompt="""You are the Angle Selector for the Newz news compile pipeline.
 
@@ -64,24 +97,6 @@ Order the selected clips chronologically (earliest first).
 Use mcp__newz_tools__get_cluster_clips to get all clips, then mcp__newz_tools__get_clip_metadata for details.
 Return ONLY a single JSON object: {"clip_ids": ["...", "..."], "rationale": "..."}.
 Do not include any text outside the JSON.""",
-        tools=["mcp__newz_tools__get_cluster_clips", "mcp__newz_tools__get_clip_metadata"],
-        mcpServers=_MCP,
-        model="sonnet",
-    ),
-    "caption-writer": AgentDefinition(
-        description=(
-            "Writes a 1-2 sentence AP-wire-style caption. "
-            "Independent of angle-selector — run FIRST in parallel."
-        ),
-        prompt="""You are the Caption Writer for the Newz news compile pipeline.
-
-Given a cluster of clips with GPS coordinates and timestamps, write a neutral, AP-wire-style caption.
-Reference ONLY what is verifiable from the metadata: date, neighborhood, and the count of clips.
-Do NOT invent participant counts, motives, or context not present in the metadata.
-
-Use mcp__newz_tools__get_cluster_clips to read clip metadata.
-Return ONLY a single JSON object: {"caption": "...", "location": "Neighborhood, City"}.
-Caption must be 200 characters or fewer. Do not include any text outside the JSON.""",
         tools=["mcp__newz_tools__get_cluster_clips", "mcp__newz_tools__get_clip_metadata"],
         mcpServers=_MCP,
         model="sonnet",
@@ -108,12 +123,13 @@ Return ONLY a single JSON object: {"clip_ids": ["..."], "edit_notes": "..."}."""
         ),
         prompt="""You are the Publisher for the Newz news compile pipeline.
 
-Take the editor's validated clip_ids and the caption-writer's caption + location.
+The caption and location are provided by the orchestrator (already written upstream).
+Take the editor's validated clip_ids and the provided caption + location.
 Call mcp__newz_tools__save_segment EXACTLY ONCE with:
   - cluster_id: provided by the orchestrator
   - ordered_clip_ids: from editor's clip_ids list
-  - caption: from caption-writer's caption field
-  - location: from caption-writer's location field
+  - caption: provided by the orchestrator
+  - location: provided by the orchestrator
   - source_count: length of ordered_clip_ids
 
 Return ONLY the segment id string from the tool result.""",
@@ -124,11 +140,120 @@ Return ONLY the segment id string from the tool result.""",
 }
 
 
-async def _run_agents(cluster_id: str) -> str:
-    """Run the 4-subagent pipeline. Returns segment_id or raises on failure."""
+def _build_caption_user_message(
+    cluster_id: str,
+    metadata: list[dict],
+    frames: list[tuple[str, bytes]],
+) -> dict[str, Any]:
+    """Build a single user message with text + image content blocks.
+
+    Returned dict matches the SDK's stream-json wire format (see
+    claude_agent_sdk/_internal/client.py). The image blocks pass through the
+    bundled CLI to the Anthropic API verbatim.
+    """
+    content: list[dict[str, Any]] = [
+        {
+            "type": "text",
+            "text": (
+                f"Cluster ID: {cluster_id}\n"
+                f"Cluster metadata (one entry per clip, ordered by timestamp):\n"
+                f"{json.dumps(metadata, indent=2)}\n\n"
+                f"Below are {len(frames)} keyframe(s), one per clip, in the same order."
+            ),
+        }
+    ]
+    for clip_id, png in frames:
+        content.append({"type": "text", "text": f"Keyframe for clip {clip_id}:"})
+        content.append({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": "image/png",
+                "data": base64.b64encode(png).decode("ascii"),
+            },
+        })
+    return {
+        "type": "user",
+        "session_id": "",
+        "message": {"role": "user", "content": content},
+        "parent_tool_use_id": None,
+    }
+
+
+def _extract_text_from_assistant(msg: AssistantMessage) -> str:
+    parts: list[str] = []
+    for block in msg.content:
+        if isinstance(block, TextBlock):
+            parts.append(block.text)
+    return "".join(parts)
+
+
+def _parse_caption_json(raw: str) -> dict:
+    """Parse the caption-writer's JSON output. Tolerates ```json fences."""
+    text = raw.strip()
+    if text.startswith("```"):
+        # strip code fence
+        lines = text.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+    return json.loads(text)
+
+
+async def _run_caption_writer_with_vision(cluster_id: str) -> dict:
+    """Direct query() call with image content blocks. Returns {caption, location}.
+
+    Raises if no frames could be extracted or no JSON came back.
+    """
+    frames = await extract_cluster_keyframes(cluster_id)
+    if not frames:
+        raise RuntimeError(f"no keyframes extracted for cluster {cluster_id}")
+
+    clips = await db.fetch_cluster_clips(cluster_id)
+    metadata = [
+        {"id": c["id"], "lat": c["lat"], "lng": c["lng"], "ts": c["ts"]}
+        for c in clips
+    ]
+    user_msg = _build_caption_user_message(cluster_id, metadata, frames)
+
+    async def _prompt_stream():
+        yield user_msg
+
+    options = ClaudeAgentOptions(
+        system_prompt=CAPTION_WRITER_SYSTEM,
+        model="sonnet",
+        max_turns=1,
+    )
+
+    last_text = ""
+    async for msg in query(prompt=_prompt_stream(), options=options):
+        if isinstance(msg, AssistantMessage):
+            text = _extract_text_from_assistant(msg)
+            if text:
+                last_text = text
+        elif isinstance(msg, ResultMessage):
+            if msg.is_error:
+                raise RuntimeError(
+                    f"caption-writer query error cluster_id={cluster_id} "
+                    f"errors={msg.errors}"
+                )
+            break
+
+    if not last_text:
+        raise RuntimeError(f"caption-writer returned no text for cluster {cluster_id}")
+    data = _parse_caption_json(last_text)
+    if "caption" not in data or "location" not in data:
+        raise RuntimeError(f"caption-writer JSON missing required keys: {data}")
+    return data
+
+
+async def _run_orchestrator_chain(cluster_id: str, caption_data: dict) -> str:
+    """Run angle-selector → editor → publisher with caption pre-injected."""
     options = ClaudeAgentOptions(
         allowed_tools=[
-            "Agent",                               # REQUIRED: enables subagent invocation
+            "Agent",
             "mcp__newz_tools__get_cluster_clips",
             "mcp__newz_tools__get_clip_metadata",
             "mcp__newz_tools__save_segment",
@@ -138,10 +263,12 @@ async def _run_agents(cluster_id: str) -> str:
         max_turns=20,
         model="sonnet",
     )
-    async for msg in query(
-        prompt=ORCHESTRATOR_PROMPT_TEMPLATE.format(cluster_id=cluster_id),
-        options=options,
-    ):
+    prompt = ORCHESTRATOR_PROMPT_TEMPLATE.format(
+        cluster_id=cluster_id,
+        caption=caption_data["caption"],
+        location=caption_data["location"],
+    )
+    async for msg in query(prompt=prompt, options=options):
         if isinstance(msg, ResultMessage):
             if msg.is_error:
                 log.error(
@@ -154,7 +281,6 @@ async def _run_agents(cluster_id: str) -> str:
                 cluster_id, msg.num_turns, msg.duration_ms,
             )
             break
-    # Confirm Publisher called save_segment and the row was written
     seg = await db.get_segment_for_cluster(cluster_id)
     if seg is None:
         raise RuntimeError(
@@ -164,12 +290,22 @@ async def _run_agents(cluster_id: str) -> str:
     return seg["id"]
 
 
+async def _run_agents(cluster_id: str) -> str:
+    """Run vision caption-writer, then the 3-subagent chain. Returns segment_id."""
+    caption_data = await _run_caption_writer_with_vision(cluster_id)
+    log.info(
+        "compile caption written cluster_id=%s caption=%r location=%r",
+        cluster_id, caption_data.get("caption"), caption_data.get("location"),
+    )
+    return await _run_orchestrator_chain(cluster_id, caption_data)
+
+
 async def _save_fallback_segment(cluster_id: str) -> str:
     """CMP-06: idempotent fallback. Chronological order, generic AP-wire caption."""
     existing = await db.get_segment_for_cluster(cluster_id)
     if existing:
         return existing["id"]
-    clips = await db.fetch_cluster_clips(cluster_id)  # ORDER BY ts ASC
+    clips = await db.fetch_cluster_clips(cluster_id)
     clip_ids = [c["id"] for c in clips]
     if clips:
         when = datetime.fromtimestamp(clips[0]["ts"], tz=timezone.utc).strftime("%b %-d, %Y")
@@ -188,7 +324,7 @@ async def _save_fallback_segment(cluster_id: str) -> str:
 async def compile_segment(cluster_id: str) -> None:
     """Top-level entry. Fire-and-forget via asyncio.create_task. Idempotent (CMP-09).
 
-    CMP-06: hard 30s wall-clock cap via asyncio.wait_for.
+    Hard 60s wall-clock cap via asyncio.wait_for.
     Always clears compile_in_flight in finally.
     Always broadcasts segment_published (or pipeline_error on unexpected failure).
     """

@@ -242,3 +242,127 @@ async def debug_trigger_compile(cluster_id: str):
         raise HTTPException(status_code=409, detail="compile already in flight")
     asyncio.create_task(compile_segment(cluster_id))
     return {"status": "triggered", "cluster_id": cluster_id}
+
+
+@app.get("/debug/dbstate")
+async def debug_dbstate():
+    """Dev-only: counts and sample IDs straight from sqlite, no in-memory."""
+    import aiosqlite as _aios
+    async with _aios.connect(db.DB_PATH) as conn:
+        conn.row_factory = _aios.Row
+        cur = await conn.execute("SELECT COUNT(*) FROM clips")
+        n_clips = (await cur.fetchone())[0]
+        cur = await conn.execute("SELECT COUNT(*) FROM clips WHERE cluster_id IS NOT NULL")
+        n_clipped = (await cur.fetchone())[0]
+        cur = await conn.execute("SELECT COUNT(*) FROM clusters")
+        n_clusters = (await cur.fetchone())[0]
+        cur = await conn.execute("SELECT id, cluster_id FROM clips ORDER BY created_at DESC LIMIT 5")
+        sample_clips = [dict(r) for r in await cur.fetchall()]
+        cur = await conn.execute("SELECT id, member_count FROM clusters")
+        cluster_rows = [dict(r) for r in await cur.fetchall()]
+    return {
+        "db_path": str(db.DB_PATH),
+        "clips_total": n_clips,
+        "clips_with_cluster_id": n_clipped,
+        "clusters_total": n_clusters,
+        "sample_clips": sample_clips,
+        "clusters": cluster_rows,
+    }
+
+
+@app.get("/debug/clip/{clip_id}")
+async def debug_clip(clip_id: str):
+    """Dev-only: return the raw clip row from the DB."""
+    clip = await db.get_clip(clip_id)
+    if not clip:
+        return {"found": False, "clip_id": clip_id}
+    return {"found": True, "clip": clip}
+
+
+@app.post("/debug/caption_writer/{cluster_id}")
+async def debug_caption_writer(cluster_id: str):
+    """Dev-only: run the vision caption-writer directly. Does NOT write to DB.
+
+    Returns the raw caption/location on success, or the exception type+message
+    on failure. Also reports keyframe extraction count so we can isolate where
+    the pipeline is failing.
+    """
+    from .pipeline.compile import _run_caption_writer_with_vision
+    from .pipeline.keyframes import (
+        extract_cluster_keyframes,
+        _fetch_cluster_clips_with_duration,
+        _extract_one,
+        FFMPEG,
+    )
+    import os as _os
+
+    diagnostics: dict = {"ffmpeg_path": FFMPEG, "ffmpeg_exists": _os.path.exists(FFMPEG)}
+
+    # Stage 1: DB lookup
+    try:
+        kf_clips = await _fetch_cluster_clips_with_duration(cluster_id)
+        diagnostics["keyframes_db_clips"] = [
+            {"id": c["id"], "path": c["path"], "duration_sec": c.get("duration_sec"),
+             "path_exists": _os.path.exists(c["path"])}
+            for c in kf_clips
+        ]
+    except Exception as e:
+        return {"stage": "keyframes_db_lookup", "error": type(e).__name__,
+                "message": str(e), "diagnostics": diagnostics}
+
+    # Cross-check: what does compile's own DB lookup return?
+    try:
+        compile_clips = await db.fetch_cluster_clips(cluster_id)
+        diagnostics["compile_db_clips_count"] = len(compile_clips)
+    except Exception as e:
+        diagnostics["compile_db_clips_error"] = f"{type(e).__name__}: {e}"
+
+    if not kf_clips:
+        return {
+            "stage": "keyframes_db_lookup",
+            "note": "no clips with this cluster_id — DB mismatch",
+            "diagnostics": diagnostics,
+        }
+
+    # Stage 2: per-clip ffmpeg
+    per_clip = []
+    for c in kf_clips:
+        try:
+            png = await _extract_one(c["path"], c.get("duration_sec"))
+            per_clip.append({"id": c["id"], "png_bytes": len(png) if png else 0})
+        except Exception as e:
+            per_clip.append({"id": c["id"], "error": f"{type(e).__name__}: {e}"})
+    diagnostics["per_clip_extract"] = per_clip
+
+    try:
+        frames = await extract_cluster_keyframes(cluster_id)
+        frames_info = [{"clip_id": cid, "png_bytes": len(png)} for cid, png in frames]
+    except Exception as e:
+        return {"stage": "extract_keyframes", "error": type(e).__name__,
+                "message": str(e), "diagnostics": diagnostics}
+
+    if not frames:
+        return {
+            "stage": "extract_keyframes",
+            "frames_extracted": 0,
+            "note": "no frames extracted — caption-writer would raise and trigger fallback",
+            "diagnostics": diagnostics,
+        }
+
+    try:
+        result = await _run_caption_writer_with_vision(cluster_id)
+        return {
+            "stage": "success",
+            "frames_extracted": len(frames),
+            "frames": frames_info,
+            "caption": result.get("caption"),
+            "location": result.get("location"),
+        }
+    except Exception as e:
+        return {
+            "stage": "caption_writer",
+            "frames_extracted": len(frames),
+            "frames": frames_info,
+            "error": type(e).__name__,
+            "message": str(e),
+        }
