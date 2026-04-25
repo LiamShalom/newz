@@ -37,3 +37,44 @@ export interface QueuedUpload {
   attempts: number;
   nextRetryAt: number;
 }
+
+/**
+ * A compiled news segment produced by the 4-subagent pipeline (Phase 4, CMP-05).
+ * Returned by GET /feed.
+ */
+export interface Segment {
+  id: string;
+  cluster_id: string;
+  /** Ordered clip IDs chosen by Angle Selector + Editor subagents. */
+  ordered_clip_ids: string[];
+  /** AP-wire-style caption written by Caption Writer subagent (CMP-08). */
+  caption: string;
+  /** Human-readable location string, e.g. "Pasadena, CA". */
+  location: string;
+  /** Number of source clips compiled into this segment. */
+  source_count: number;
+  /** POSIX seconds; set server-side at insert time. */
+  created_at: number;
+  /** Cluster centroid coordinates for distance calculation (FED-03). Null when GPS unavailable. */
+  centroid_lat: number | null;
+  centroid_lng: number | null;
+}
+
+/**
+ * Discriminated union of all events emitted by GET /events (RTM-01).
+ * Consumed by useEventSource hook in Feed.tsx.
+ */
+export type ServerEvent =
+  | { type: "clip_added"; clip_id: string }
+  | { type: "pipeline_progress"; clip_id: string; stage: "embedded" | "clustered" }
+  | {
+      type: "cluster_assigned";
+      clip_id: string;
+      cluster_id: string;
+      is_new_cluster: boolean;
+      member_count: number;
+      score_breakdown: unknown;
+    }
+  | { type: "compile_started"; cluster_id: string; started_at: number }
+  | { type: "segment_published"; cluster_id: string; segment_id: string }
+  | { type: "pipeline_error"; clip_id: string; error: string };
