@@ -75,8 +75,8 @@ Plans:
   5. Active clusters survive a backend restart — they rebuild from SQLite on startup with no Redis or external broker
 **Plans**: 2 plans
 Plans:
-- [ ] 03-01-PLAN.md — pipeline/cluster.py + db helpers + run.py wiring + lifespan rebuild + cluster_assigned SSE
-- [ ] 03-02-PLAN.md — staged demo clips + seed_demo.py + GET /debug/clusters route + calibration notebook (CLU-07/CLU-08)
+- [x] 03-01-PLAN.md — pipeline/cluster.py + db helpers + run.py wiring + lifespan rebuild + cluster_assigned SSE
+- [x] 03-02-PLAN.md — staged demo clips + seed_demo.py + GET /debug/clusters route + calibration notebook (CLU-07/CLU-08)
 **UI hint**: yes
 
 ### Phase 4: Multi-Agent Compile + Real-Time Feed
