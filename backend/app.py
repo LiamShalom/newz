@@ -242,3 +242,50 @@ async def debug_trigger_compile(cluster_id: str):
         raise HTTPException(status_code=409, detail="compile already in flight")
     asyncio.create_task(compile_segment(cluster_id))
     return {"status": "triggered", "cluster_id": cluster_id}
+
+
+@app.post("/debug/caption_writer/{cluster_id}")
+async def debug_caption_writer(cluster_id: str):
+    """Dev-only: run the vision caption-writer directly. Does NOT write to DB.
+
+    Returns the raw caption/location on success, or the exception type+message
+    on failure. Also reports keyframe extraction count so we can isolate where
+    the pipeline is failing.
+    """
+    from .pipeline.compile import _run_caption_writer_with_vision
+    from .pipeline.keyframes import extract_cluster_keyframes
+
+    try:
+        frames = await extract_cluster_keyframes(cluster_id)
+        frames_info = [{"clip_id": cid, "png_bytes": len(png)} for cid, png in frames]
+    except Exception as e:
+        return {
+            "stage": "extract_keyframes",
+            "error": type(e).__name__,
+            "message": str(e),
+        }
+
+    if not frames:
+        return {
+            "stage": "extract_keyframes",
+            "frames_extracted": 0,
+            "note": "no frames extracted — caption-writer would raise and trigger fallback",
+        }
+
+    try:
+        result = await _run_caption_writer_with_vision(cluster_id)
+        return {
+            "stage": "success",
+            "frames_extracted": len(frames),
+            "frames": frames_info,
+            "caption": result.get("caption"),
+            "location": result.get("location"),
+        }
+    except Exception as e:
+        return {
+            "stage": "caption_writer",
+            "frames_extracted": len(frames),
+            "frames": frames_info,
+            "error": type(e).__name__,
+            "message": str(e),
+        }
