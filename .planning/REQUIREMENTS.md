@@ -147,17 +147,88 @@ Explicitly excluded for the hackathon. Documented to prevent scope creep mid-bui
 
 ## Traceability
 
-Populated during roadmap creation by gsd-roadmapper.
+Every v1 requirement maps to exactly one roadmap phase.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| (filled by roadmapper) | | |
+| FND-01 | Phase 1 | Pending |
+| FND-02 | Phase 1 | Pending |
+| FND-03 | Phase 1 | Pending |
+| FND-04 | Phase 1 | Pending |
+| FND-05 | Phase 1 | Pending |
+| CAP-01 | Phase 1 | Pending |
+| CAP-02 | Phase 1 | Pending |
+| CAP-03 | Phase 1 | Pending |
+| CAP-04 | Phase 1 | Pending |
+| CAP-05 | Phase 1 | Pending |
+| CAP-06 | Phase 1 | Pending |
+| CAP-07 | Phase 1 | Pending |
+| CAP-08 | Phase 1 | Pending |
+| CAP-09 | Phase 1 | Pending |
+| CAP-10 | Phase 1 | Pending |
+| ING-01 | Phase 1 | Pending |
+| ING-02 | Phase 1 | Pending |
+| ING-03 | Phase 1 | Pending |
+| ING-04 | Phase 1 | Pending |
+| ING-05 | Phase 1 | Pending |
+| ING-06 | Phase 1 | Pending |
+| EMB-01 | Phase 2 | Pending |
+| EMB-02 | Phase 2 | Pending |
+| EMB-03 | Phase 2 | Pending |
+| EMB-04 | Phase 2 | Pending |
+| EMB-05 | Phase 2 | Pending |
+| CLU-01 | Phase 3 | Pending |
+| CLU-02 | Phase 3 | Pending |
+| CLU-03 | Phase 3 | Pending |
+| CLU-04 | Phase 3 | Pending |
+| CLU-05 | Phase 3 | Pending |
+| CLU-06 | Phase 3 | Pending |
+| CLU-07 | Phase 3 | Pending |
+| CLU-08 | Phase 3 | Pending |
+| CLU-09 | Phase 3 | Pending |
+| CLU-10 | Phase 3 | Pending |
+| CMP-01 | Phase 4 | Pending |
+| CMP-02 | Phase 4 | Pending |
+| CMP-03 | Phase 4 | Pending |
+| CMP-04 | Phase 4 | Pending |
+| CMP-05 | Phase 4 | Pending |
+| CMP-06 | Phase 4 | Pending |
+| CMP-07 | Phase 4 | Pending |
+| CMP-08 | Phase 4 | Pending |
+| CMP-09 | Phase 4 | Pending |
+| FED-01 | Phase 4 | Pending |
+| FED-02 | Phase 4 | Pending |
+| FED-03 | Phase 4 | Pending |
+| FED-04 | Phase 4 | Pending |
+| FED-05 | Phase 4 | Pending |
+| RTM-01 | Phase 4 | Pending |
+| RTM-02 | Phase 4 | Pending |
+| RTM-03 | Phase 4 | Pending |
+| RTM-04 | Phase 3 | Pending |
+| DEM-01 | Phase 5 | Pending |
+| DEM-02 | Phase 5 | Pending |
+| DEM-03 | Phase 5 | Pending |
+| DEM-04 | Phase 5 | Pending |
+| DEM-05 | Phase 5 | Pending |
+| DEM-06 | Phase 5 | Pending |
+| DEM-07 | Phase 5 | Pending |
 
 **Coverage:**
-- v1 requirements: 50 total
-- Mapped to phases: 0 (pending roadmap)
-- Unmapped: 50 ⚠️ (will be 0 after roadmap)
+- v1 requirements: 61 total
+- Mapped to phases: 61 ✓
+- Unmapped: 0 ✓
+
+**Per-phase breakdown:**
+
+| Phase | Requirement Count | Categories |
+|-------|-------------------|------------|
+| Phase 1: Foundation, Capture & Ingest | 21 | FND (5) + CAP (10) + ING (6) |
+| Phase 2: Marengo Embedding | 5 | EMB (5) |
+| Phase 3: Clustering + Debug Overlay | 11 | CLU (10) + RTM-04 (1) |
+| Phase 4: Multi-Agent Compile + Real-Time Feed | 17 | CMP (9) + FED (5) + RTM (3) |
+| Phase 5: Demo Hardening | 7 | DEM (7) |
+| **Total** | **61** | |
 
 ---
 *Requirements defined: 2026-04-24*
-*Last updated: 2026-04-24 after initial definition*
+*Traceability populated: 2026-04-24 by gsd-roadmapper*
