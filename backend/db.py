@@ -163,3 +163,64 @@ async def get_embedding(clip_id: str) -> np.ndarray | None:
     if row is None:
         return None
     return np.frombuffer(row[0], dtype=np.float32).copy()
+
+
+async def get_all_clusters() -> list[dict]:
+    """Read all clusters with member_ids populated from clips.cluster_id JOIN.
+    Used by lifespan rebuild (CLU-10). One DB connection, two cursors.
+    """
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cur = await conn.execute(
+            "SELECT id, centroid, centroid_lat, centroid_lng, median_ts, "
+            "member_count, created_at FROM clusters"
+        )
+        cluster_rows = [dict(r) for r in await cur.fetchall()]
+        cur = await conn.execute(
+            "SELECT id, cluster_id FROM clips WHERE cluster_id IS NOT NULL"
+        )
+        clip_rows = await cur.fetchall()
+    members: dict[str, list[str]] = {}
+    for r in clip_rows:
+        members.setdefault(r["cluster_id"], []).append(r["id"])
+    for c in cluster_rows:
+        c["member_ids"] = members.get(c["id"], [])
+    return cluster_rows
+
+
+async def upsert_cluster(cluster) -> None:
+    """Insert or update a cluster row. Centroid stored as float32 BLOB.
+
+    cluster has attributes: id (str), centroid (np.ndarray float32),
+    centroid_lat (float|None), centroid_lng (float|None),
+    median_ts (float), member_count (int).
+    """
+    blob = cluster.centroid.astype(np.float32).tobytes()
+    now = time.time()
+    async with aiosqlite.connect(DB_PATH) as conn:
+        await conn.execute(
+            """INSERT INTO clusters
+                 (id, centroid, centroid_lat, centroid_lng, median_ts,
+                  member_count, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET
+                 centroid=excluded.centroid,
+                 centroid_lat=excluded.centroid_lat,
+                 centroid_lng=excluded.centroid_lng,
+                 median_ts=excluded.median_ts,
+                 member_count=excluded.member_count,
+                 updated_at=excluded.updated_at""",
+            (cluster.id, blob, cluster.centroid_lat, cluster.centroid_lng,
+             cluster.median_ts, cluster.member_count, now, now),
+        )
+        await conn.commit()
+
+
+async def assign_clip_to_cluster(clip_id: str, cluster_id: str) -> None:
+    """Set clips.cluster_id for an already-inserted clip."""
+    async with aiosqlite.connect(DB_PATH) as conn:
+        await conn.execute(
+            "UPDATE clips SET cluster_id = ? WHERE id = ?",
+            (cluster_id, clip_id),
+        )
+        await conn.commit()
