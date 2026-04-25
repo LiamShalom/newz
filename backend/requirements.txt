@@ -1,0 +1,8 @@
+fastapi==0.135.1
+uvicorn[standard]
+aiosqlite==0.22.1
+numpy>=2.4.0
+tenacity
+twelvelabs==1.2.3
+python-dotenv
+python-multipart
