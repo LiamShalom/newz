@@ -253,23 +253,65 @@ async def debug_caption_writer(cluster_id: str):
     the pipeline is failing.
     """
     from .pipeline.compile import _run_caption_writer_with_vision
-    from .pipeline.keyframes import extract_cluster_keyframes
+    from .pipeline.keyframes import (
+        extract_cluster_keyframes,
+        _fetch_cluster_clips_with_duration,
+        _extract_one,
+        FFMPEG,
+    )
+    import os as _os
+
+    diagnostics: dict = {"ffmpeg_path": FFMPEG, "ffmpeg_exists": _os.path.exists(FFMPEG)}
+
+    # Stage 1: DB lookup
+    try:
+        kf_clips = await _fetch_cluster_clips_with_duration(cluster_id)
+        diagnostics["keyframes_db_clips"] = [
+            {"id": c["id"], "path": c["path"], "duration_sec": c.get("duration_sec"),
+             "path_exists": _os.path.exists(c["path"])}
+            for c in kf_clips
+        ]
+    except Exception as e:
+        return {"stage": "keyframes_db_lookup", "error": type(e).__name__,
+                "message": str(e), "diagnostics": diagnostics}
+
+    # Cross-check: what does compile's own DB lookup return?
+    try:
+        compile_clips = await db.fetch_cluster_clips(cluster_id)
+        diagnostics["compile_db_clips_count"] = len(compile_clips)
+    except Exception as e:
+        diagnostics["compile_db_clips_error"] = f"{type(e).__name__}: {e}"
+
+    if not kf_clips:
+        return {
+            "stage": "keyframes_db_lookup",
+            "note": "no clips with this cluster_id — DB mismatch",
+            "diagnostics": diagnostics,
+        }
+
+    # Stage 2: per-clip ffmpeg
+    per_clip = []
+    for c in kf_clips:
+        try:
+            png = await _extract_one(c["path"], c.get("duration_sec"))
+            per_clip.append({"id": c["id"], "png_bytes": len(png) if png else 0})
+        except Exception as e:
+            per_clip.append({"id": c["id"], "error": f"{type(e).__name__}: {e}"})
+    diagnostics["per_clip_extract"] = per_clip
 
     try:
         frames = await extract_cluster_keyframes(cluster_id)
         frames_info = [{"clip_id": cid, "png_bytes": len(png)} for cid, png in frames]
     except Exception as e:
-        return {
-            "stage": "extract_keyframes",
-            "error": type(e).__name__,
-            "message": str(e),
-        }
+        return {"stage": "extract_keyframes", "error": type(e).__name__,
+                "message": str(e), "diagnostics": diagnostics}
 
     if not frames:
         return {
             "stage": "extract_keyframes",
             "frames_extracted": 0,
             "note": "no frames extracted — caption-writer would raise and trigger fallback",
+            "diagnostics": diagnostics,
         }
 
     try:
