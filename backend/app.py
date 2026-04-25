@@ -64,18 +64,48 @@ events = _SSEBus()
 
 # ── Pipeline ──────────────────────────────────────────────────────────────────
 
+from pipeline.embed import embed_worker
+
+
+async def _pre_warm_marengo() -> None:
+    """
+    Fire-and-forget Marengo pre-warm on startup.
+    Pays the cold-start cost (20-30s) before the first judge submits a clip.
+    Skipped when USE_MOCK_EMBEDDINGS=true. Failure is non-fatal — logs warning only.
+    """
+    if config.USE_MOCK_EMBEDDINGS:
+        log.info("pre-warm skipped (USE_MOCK_EMBEDDINGS=true)")
+        return
+
+    pre_warm_path = config.PRE_WARM_CLIP_PATH
+    if not pre_warm_path or not Path(pre_warm_path).exists():
+        log.warning(
+            "pre-warm skipped: PRE_WARM_CLIP_PATH=%r not found. "
+            "Set PRE_WARM_CLIP_PATH to a valid clip file.",
+            pre_warm_path,
+        )
+        return
+
+    try:
+        from pipeline.embed import _sync_embed
+        loop = asyncio.get_event_loop()
+        _, latency_ms = await loop.run_in_executor(None, _sync_embed, pre_warm_path, "__prewarm__")
+        log.info("Marengo pre-warm complete latency_ms=%d", latency_ms)
+    except Exception as exc:
+        log.warning("Marengo pre-warm failed (non-fatal): %s", exc)
+
+
 async def run_pipeline(clip_id: str) -> None:
     """
     Background pipeline triggered by POST /clips.
-    Phase 2 wires embed_worker() here.
     Phase 3 wires cluster_worker() after embed.
     Phase 4 wires compile_pipeline() after cluster.
     """
     try:
         async with db_module.get_db_conn() as conn:
-            # Phase 2 adds: embedding = await embed_worker(clip_id, conn)
-            log.info("run_pipeline stub clip_id=%s (embed_worker not yet wired)", clip_id)
-            await events.broadcast({"type": "pipeline_progress", "clip_id": clip_id, "stage": "pending"})
+            embedding = await embed_worker(clip_id, conn)
+            log.info("run_pipeline embed done clip_id=%s dims=%d", clip_id, len(embedding))
+            await events.broadcast({"type": "pipeline_progress", "clip_id": clip_id, "stage": "embedded"})
     except Exception as exc:
         log.exception("run_pipeline failed clip_id=%s", clip_id)
         await events.broadcast({"type": "pipeline_error", "clip_id": clip_id, "error": str(exc)})
@@ -86,7 +116,7 @@ async def run_pipeline(clip_id: str) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await db_module.init_db()
-    # Phase 2 adds: asyncio.create_task(_pre_warm_marengo())
+    asyncio.create_task(_pre_warm_marengo())  # fire-and-forget; never blocks startup
     yield
     await db_module.close_db()
 

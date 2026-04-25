@@ -28,5 +28,13 @@ TWELVELABS_API_KEY: str = os.getenv("TWELVELABS_API_KEY", "")
 # Used for offline dev, CI, and Phase 5 OFFLINE_DEMO path.
 USE_MOCK_EMBEDDINGS: bool = os.getenv("USE_MOCK_EMBEDDINGS", "false").lower() == "true"
 
+# ── Pre-warm ──────────────────────────────────────────────────────────────────
+# Path to a short clip sent to Marengo on startup to pay the cold-start cost
+# before the first judge submits a clip. Relative to backend/ working directory.
+# Set to "" to disable pre-warm entirely (also disabled when USE_MOCK_EMBEDDINGS=true).
+PRE_WARM_CLIP_PATH: str = os.getenv(
+    "PRE_WARM_CLIP_PATH", str(Path(__file__).parent / "seed" / "prewarm.mp4")
+)
+
 # ── CORS ─────────────────────────────────────────────────────────────────────
 CORS_ORIGINS: list[str] = os.getenv("CORS_ORIGINS", "*").split(",")
