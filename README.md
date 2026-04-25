@@ -32,8 +32,8 @@ Frontend on Vercel (HTTPS, FND-05). Backend on Railway with a persistent volume 
 
 ### 1. Vercel (frontend)
 
-1. From repo root: `pnpm dlx vercel link` (or "New Project" -> connect repo on https://vercel.com/new). Project root = repo root; the build command in `vercel.json` does the `cd frontend` for you.
-2. First deploy: `pnpm dlx vercel --prod`. Copy the URL (e.g. `https://newz-xyz.vercel.app`). Skip env var for now — we don't have the Railway URL yet.
+1. From `frontend/`: `pnpm dlx vercel link` (or "New Project" -> connect repo on https://vercel.com/new). **Project root must be set to `frontend/`** — `frontend/vercel.json` defines the SPA rewrite + build. If Vercel auto-detected the repo root, fix it in Project Settings -> General -> Root Directory = `frontend`.
+2. First deploy from `frontend/`: `pnpm dlx vercel --prod`. Copy the URL (e.g. `https://newz-xyz.vercel.app`). Skip env var for now — we don't have the Railway URL yet.
 
 ### 2. Railway (backend)
 
