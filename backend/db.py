@@ -1,3 +1,4 @@
+import json
 import logging
 import time
 import uuid
@@ -69,6 +70,22 @@ async def init() -> None:
         await conn.execute("PRAGMA journal_mode=WAL")
         await conn.execute("PRAGMA synchronous=NORMAL")
         await conn.executescript(SCHEMA_SQL)
+        # Phase 4 migration: add compile tracking columns to clusters (idempotent via PRAGMA check).
+        # SQLite does not support ADD COLUMN IF NOT EXISTS — check via PRAGMA table_info.
+        async with conn.execute("PRAGMA table_info(clusters)") as cur:
+            cols = {row[1] for row in await cur.fetchall()}
+        if "compile_in_flight" not in cols:
+            await conn.execute(
+                "ALTER TABLE clusters ADD COLUMN compile_in_flight INTEGER NOT NULL DEFAULT 0"
+            )
+        if "last_compile_at" not in cols:
+            await conn.execute(
+                "ALTER TABLE clusters ADD COLUMN last_compile_at REAL"
+            )
+        # Ensure segments.cluster_id is unique (one segment per cluster; ON CONFLICT updates on re-compile)
+        await conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_segments_cluster_id ON segments(cluster_id)"
+        )
         await conn.commit()
     log.info("db.init: schema ready at %s", DB_PATH)
 
@@ -224,3 +241,144 @@ async def assign_clip_to_cluster(clip_id: str, cluster_id: str) -> None:
             (cluster_id, clip_id),
         )
         await conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: segment helpers
+# ---------------------------------------------------------------------------
+
+async def insert_segment(
+    cluster_id: str,
+    ordered_clip_ids: list[str],
+    caption: str,
+    location: str,
+    source_count: int,
+) -> str:
+    """Idempotent: one segment per cluster. ON CONFLICT(cluster_id) updates. CMP-09."""
+    seg_id = uuid.uuid4().hex
+    now = time.time()
+    async with aiosqlite.connect(DB_PATH) as conn:
+        cur = await conn.execute(
+            """INSERT INTO segments
+                 (id, cluster_id, ordered_clip_ids, caption, location, source_count, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(cluster_id) DO UPDATE SET
+                 ordered_clip_ids = excluded.ordered_clip_ids,
+                 caption          = excluded.caption,
+                 location         = excluded.location,
+                 source_count     = excluded.source_count
+               RETURNING id""",
+            (seg_id, cluster_id, json.dumps(ordered_clip_ids),
+             caption, location, source_count, now),
+        )
+        row = await cur.fetchone()
+        await conn.commit()
+    return row[0]
+
+
+async def fetch_recent_segments(limit: int = 50) -> list[dict]:
+    """JOIN segments + clusters; return dicts with decoded ordered_clip_ids list."""
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            """SELECT s.id, s.cluster_id, s.ordered_clip_ids, s.caption,
+                      s.location, s.source_count, s.created_at,
+                      c.centroid_lat, c.centroid_lng
+               FROM segments s
+               JOIN clusters c ON c.id = s.cluster_id
+               ORDER BY s.created_at DESC LIMIT ?""",
+            (limit,),
+        )
+        rows = await cursor.fetchall()
+    out = []
+    for r in rows:
+        out.append({
+            "id": r["id"],
+            "cluster_id": r["cluster_id"],
+            "ordered_clip_ids": json.loads(r["ordered_clip_ids"]),
+            "caption": r["caption"],
+            "location": r["location"],
+            "source_count": r["source_count"],
+            "created_at": r["created_at"],
+            "centroid_lat": r["centroid_lat"],
+            "centroid_lng": r["centroid_lng"],
+        })
+    return out
+
+
+async def get_segment_for_cluster(cluster_id: str) -> dict | None:
+    """SELECT from segments WHERE cluster_id=?; returns dict or None."""
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+            "SELECT * FROM segments WHERE cluster_id = ?", (cluster_id,)
+        ) as cur:
+            row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def set_compile_in_flight(cluster_id: str, value: bool, ttl_seconds: float = 30.0) -> bool:
+    """Atomic compare-and-set. Returns True if lock acquired/cleared, False if already held.
+
+    value=True:  single atomic UPDATE WHERE compile_in_flight=0 OR last_compile_at < now-ttl.
+                 cursor.rowcount==1 means we acquired; 0 means someone else holds it.
+    value=False: unconditional clear; always returns True.
+    """
+    now = time.time()
+    async with aiosqlite.connect(DB_PATH) as conn:
+        if value:
+            cursor = await conn.execute(
+                """UPDATE clusters
+                   SET compile_in_flight = 1, last_compile_at = ?
+                   WHERE id = ?
+                     AND (compile_in_flight = 0 OR last_compile_at < ?)""",
+                (now, cluster_id, now - ttl_seconds),
+            )
+            await conn.commit()
+            return cursor.rowcount == 1
+        else:
+            await conn.execute(
+                "UPDATE clusters SET compile_in_flight = 0 WHERE id = ?",
+                (cluster_id,),
+            )
+            await conn.commit()
+            return True
+
+
+async def is_compile_in_flight(cluster_id: str, ttl_seconds: float = 30.0) -> bool:
+    """Returns True only if compile_in_flight=1 AND last_compile_at is within ttl_seconds."""
+    async with aiosqlite.connect(DB_PATH) as conn:
+        async with conn.execute(
+            "SELECT compile_in_flight, last_compile_at FROM clusters WHERE id = ?",
+            (cluster_id,),
+        ) as cur:
+            row = await cur.fetchone()
+    if not row:
+        return False
+    flag, last = row
+    if not flag:
+        return False
+    if last is None or time.time() - last > ttl_seconds:
+        return False
+    return True
+
+
+async def fetch_cluster_clips(cluster_id: str) -> list[dict]:
+    """SELECT clips where cluster_id=? ORDER BY ts ASC; includes id, path, lat, lng, ts."""
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            "SELECT id, path, lat, lng, ts FROM clips WHERE cluster_id = ? ORDER BY ts ASC",
+            (cluster_id,),
+        )
+        rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def get_cluster(cluster_id: str) -> dict | None:
+    """SELECT from clusters WHERE id=?; includes member_count, compile_in_flight, last_compile_at."""
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute("SELECT * FROM clusters WHERE id = ?", (cluster_id,)) as cur:
+            row = await cur.fetchone()
+    return dict(row) if row else None

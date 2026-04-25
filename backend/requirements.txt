@@ -9,3 +9,5 @@ tenacity
 twelvelabs==1.2.3
 pytest>=8.0
 pytest-asyncio>=0.23
+claude-agent-sdk==0.1.68
+sse-starlette==3.3.4
