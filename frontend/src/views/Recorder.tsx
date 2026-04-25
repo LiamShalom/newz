@@ -259,7 +259,7 @@ export function Recorder() {
 
   return (
     <div className="fixed inset-0 bg-[#0A0A0A]" style={{ height: "100dvh" }}>
-      <CameraView stream={streamRef.current} />
+      <CameraView stream={streamRef.current} mirrored={facing === "user"} />
       {!isRecording && phase.kind === "ready" && (
         <CameraFlipButton
           facing={facing}
