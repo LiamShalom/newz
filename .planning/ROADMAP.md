@@ -73,7 +73,10 @@ Plans:
   3. Judge can open the debug overlay and see live score breakdown per cluster: Marengo cosine, GPS distance in meters, timestamp delta in seconds — and these numbers update as each clip embeds and clusters
   4. Threshold (default 0.55) is exposed as an env var and can be hot-swapped without redeploy; GPS weight collapses to 0 when geolocation is unavailable so Marengo carries the cluster
   5. Active clusters survive a backend restart — they rebuild from SQLite on startup with no Redis or external broker
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 03-01-PLAN.md — pipeline/cluster.py + db helpers + run.py wiring + lifespan rebuild + cluster_assigned SSE
+- [ ] 03-02-PLAN.md — staged demo clips + seed_demo.py + GET /debug/clusters route + calibration notebook (CLU-07/CLU-08)
 **UI hint**: yes
 
 ### Phase 4: Multi-Agent Compile + Real-Time Feed
@@ -108,7 +111,7 @@ Plans:
 |-------|----------------|--------|-----------|
 | 1. Foundation, Capture & Ingest | 5/5 | Complete | 2026-04-25 |
 | 2. Marengo Embedding | 2/2 | Complete | 2026-04-25 |
-| 3. Clustering + Debug Overlay | 0/0 | Not started | - |
+| 3. Clustering + Debug Overlay | 0/2 | Planned | - |
 | 4. Multi-Agent Compile + Real-Time Feed | 0/0 | Not started | - |
 | 5. Demo Hardening | 0/0 | Not started | - |
 
