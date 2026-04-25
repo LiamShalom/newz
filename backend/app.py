@@ -1,11 +1,16 @@
 import asyncio
+import json
 import logging
+import math
+import os
+import time as _time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, UploadFile, Form, Header, File, HTTPException
+from fastapi import FastAPI, UploadFile, Form, Header, File, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from sse_starlette.sse import EventSourceResponse
 
 from . import config, db, events
 from .pipeline.run import run_pipeline
@@ -34,6 +39,28 @@ async def _pre_warm_marengo() -> None:
         log.warning("Marengo pre-warm failed (non-fatal): %s", exc)
 
 
+async def _pre_warm_sdk() -> None:
+    """Pre-warm Claude Agent SDK connection. Parallel with Marengo pre-warm.
+    Skipped when OFFLINE_DEMO=true or ANTHROPIC_API_KEY not set (log + degrade gracefully).
+    """
+    if os.environ.get("OFFLINE_DEMO", "").lower() == "true":
+        log.info("sdk pre-warm skipped (OFFLINE_DEMO=true)")
+        return
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        log.warning(
+            "ANTHROPIC_API_KEY not set — compile pipeline will be unavailable. "
+            "Set the key to enable."
+        )
+        return
+    try:
+        from claude_agent_sdk import query, ClaudeAgentOptions
+        async for _ in query(prompt="ok", options=ClaudeAgentOptions(model="sonnet", max_turns=1)):
+            break
+        log.info("Claude SDK pre-warm complete")
+    except Exception as exc:
+        log.warning("Claude SDK pre-warm failed (non-fatal): %s", exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await db.init()
@@ -42,7 +69,12 @@ async def lifespan(app: FastAPI):
     # sees a populated cache.
     from .pipeline import cluster as cluster_mod
     await cluster_mod.rebuild_cache()
-    asyncio.create_task(_pre_warm_marengo())  # fire-and-forget; never blocks startup
+    # FED-05: insert staged demo segment if segments table is empty
+    from .seed.demo_segment import seed_demo_segment
+    await seed_demo_segment()
+    # Fire pre-warms in parallel (Marengo + Claude SDK) — fire-and-forget; never blocks startup
+    asyncio.create_task(_pre_warm_marengo())
+    asyncio.create_task(_pre_warm_sdk())
     yield
 
 
@@ -94,10 +126,51 @@ async def ingest_clip(
     return IngestResponse(clip_id=clip_id, status="processing")
 
 
+def _haversine_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    R = 6_371_000.0
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp = math.radians(lat2 - lat1)
+    dl = math.radians(lng2 - lng1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * R * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
 @app.get("/feed")
-async def feed():
-    rows = await db.fetch_recent_clips(limit=50)
-    return {"clips": rows}
+async def feed(
+    lat: float | None = Query(default=None),
+    lng: float | None = Query(default=None),
+):
+    """FED-01: proximity + recency sort. lat/lng optional — falls back to recency."""
+    rows = await db.fetch_recent_segments(limit=50)
+    if lat is not None and lng is not None:
+        def _score(seg: dict) -> float:
+            clat, clng = seg.get("centroid_lat"), seg.get("centroid_lng")
+            d_m = _haversine_m(lat, lng, clat, clng) if clat is not None else 1e9
+            age_s = max(1.0, _time.time() - seg["created_at"])
+            return -(d_m / 1000.0) - (age_s / 3600.0) * 0.5
+        rows.sort(key=_score, reverse=True)
+    return {"segments": rows}
+
+
+@app.get("/events")
+async def sse_events(request: Request):
+    """RTM-01: SSE endpoint. One EventSource per tab (HTTP/1.1 6-connection limit)."""
+    q = await events.subscribe()
+
+    async def event_stream():
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    event = await asyncio.wait_for(q.get(), timeout=1.0)
+                    yield {"event": event.get("type", "message"), "data": json.dumps(event)}
+                except asyncio.TimeoutError:
+                    continue
+        finally:
+            await events.unsubscribe(q)
+
+    return EventSourceResponse(event_stream(), ping=15)
 
 
 @app.get("/debug/clusters", include_in_schema=False)
