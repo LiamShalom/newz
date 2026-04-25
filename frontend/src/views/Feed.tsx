@@ -1,48 +1,76 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
-import { fetchFeed } from "../api";
+import { fetchSegments } from "../api";
 import { getOrCreateSessionId } from "../session";
 import { flushUploadQueue } from "../uploadQueue";
-import type { Clip } from "../types";
+import { useEventSource } from "../hooks/useEventSource";
+import type { Segment, ServerEvent } from "../types";
 import { EmptyState } from "../components/EmptyState";
 import { FeedShell } from "../components/FeedShell";
 import { RecordFAB } from "../components/RecordFAB";
 
 /**
- * Real Feed view — replaces the Plan 01 stub. Fetches /feed on mount + on
- * every navigate-back-from-camera (location.key change, per CONTEXT D-08).
- * No polling timer (CONTEXT D-08); SSE lands in Phase 4 (RTM-01..03).
+ * Feed view — Phase 4 upgrade.
  *
- * Side effects on mount:
- *   1. ING-06: ensures anonymous session UUID exists in localStorage.
- *   2. CAP-09: flushes any failed uploads queued from a prior session.
- *   3. Refetches /feed.
+ * Replaces Clip[] with Segment[] (compiled segments from the AI pipeline).
+ * Replaces polling with native EventSource (RTM-01..03):
+ *   - useEventSource opens GET /events on mount (one connection per tab)
+ *   - On segment_published event → refetchFeed() (RTM-03: <1s re-render)
  *
- * No skeleton (UI-SPEC interaction contract item 1) — show black background
- * until first fetch resolves.
+ * Still refetches on location.key change (navigate-back-from-camera trigger,
+ * Phase 1 D-08) — this is a navigation refresh, not a polling timer.
+ *
+ * GPS coords fetched once on mount and stored in a ref for proximity sort (FED-01).
+ * FAB remains visible on every feed view (FED-04).
+ *
+ * Out of scope: status banner (WOW-03), snap animation (WOW-01), streaming tokens (WOW-02).
  */
 export function Feed() {
-  const [clips, setClips] = useState<Clip[]>([]);
+  const [segments, setSegments] = useState<(Segment & { url: string })[]>([]);
   const [loaded, setLoaded] = useState(false);
   const location = useLocation();
+  const coordsRef = useRef<{ lat: number; lng: number } | undefined>(undefined);
 
+  // Fetch GPS once on mount — stored in ref so fetchFeed closure sees it without
+  // re-running the effect on coord change.
   useEffect(() => {
-    // ING-06: ensure anonymous session UUID exists on first feed load (no-op
-    // on subsequent visits).
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        coordsRef.current = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+      },
+      () => {
+        /* GPS unavailable — feed falls back to recency sort */
+      },
+      { timeout: 5000, enableHighAccuracy: false },
+    );
+    // getCurrentPosition does not return an ID — no cleanup needed
+  }, []);
+
+  const refetchFeed = useCallback(async () => {
+    const coords = coordsRef.current;
+    try {
+      const next = await fetchSegments(coords?.lat, coords?.lng);
+      setSegments(next);
+    } catch {
+      // network / backend down — keep current state
+    }
+  }, []);
+
+  // Flush upload queue + initial fetch on mount and on navigate-back (D-08)
+  useEffect(() => {
+    // ING-06: ensure anonymous session UUID exists
     getOrCreateSessionId();
 
     let cancelled = false;
     (async () => {
-      // CAP-09: flush any queued failed uploads before refetching. Swallow
-      // errors silently — Phase 1 has no toast UI for the queued case.
-      await flushUploadQueue().catch(() => {
-        /* swallow */
-      });
+      await flushUploadQueue().catch(() => {});
       try {
-        const next = await fetchFeed();
-        if (!cancelled) setClips(next);
+        const coords = coordsRef.current;
+        const next = await fetchSegments(coords?.lat, coords?.lng);
+        if (!cancelled) setSegments(next);
       } catch {
-        // network / backend down — show empty state, no error UI in Phase 1
+        // show empty state, no error UI
       } finally {
         if (!cancelled) setLoaded(true);
       }
@@ -50,9 +78,14 @@ export function Feed() {
     return () => {
       cancelled = true;
     };
-    // location.key changes on every navigation, even back-to-the-same-path —
-    // satisfies D-08 "navigate-back-from-camera triggers a refetch."
   }, [location.key]);
+
+  // RTM-01/RTM-03: subscribe to pipeline events; refetch on new segment
+  useEventSource((ev: ServerEvent) => {
+    if (ev.type === "segment_published") {
+      void refetchFeed();
+    }
+  });
 
   if (!loaded) {
     return <div className="min-h-[100dvh] bg-[#0A0A0A]" />;
@@ -60,7 +93,15 @@ export function Feed() {
 
   return (
     <>
-      {clips.length === 0 ? <EmptyState /> : <FeedShell clips={clips} />}
+      {segments.length === 0 ? (
+        <EmptyState />
+      ) : (
+        <FeedShell
+          segments={segments}
+          viewerLat={coordsRef.current?.lat}
+          viewerLng={coordsRef.current?.lng}
+        />
+      )}
       <RecordFAB />
     </>
   );

@@ -1,22 +1,34 @@
 // Single source of truth for backend URL + headers.
 // VITE_API_BASE is baked at build time on Vercel; falls back to localhost for dev.
 
-import type { Clip, IngestResponse } from "./types";
+import type { IngestResponse, Segment } from "./types";
 import { getOrCreateSessionId } from "./session";
 
-const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
+export const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
 
-export async function fetchFeed(): Promise<Clip[]> {
-  const res = await fetch(`${API_BASE}/feed`);
+/**
+ * Fetch compiled segments from GET /feed.
+ * Passes viewer coordinates for proximity sort when available (FED-01).
+ * Attaches a synthetic `url` field pointing to the first clip's video file
+ * so FeedTile can render without knowing the backend path structure.
+ */
+export async function fetchSegments(
+  lat?: number,
+  lng?: number,
+): Promise<(Segment & { url: string })[]> {
+  let endpoint = `${API_BASE}/feed`;
+  if (lat !== undefined && lng !== undefined) {
+    endpoint += `?lat=${lat}&lng=${lng}`;
+  }
+  const res = await fetch(endpoint);
   if (!res.ok) throw new Error(`feed ${res.status}`);
-  const data = (await res.json()) as { clips: Clip[] };
-  // Translate backend relative URLs (e.g. /media/<filename>) to absolute so
-  // <video src> works when the FE is on Vercel and BE is on Railway. The url
-  // field is server-emitted — treat as opaque (never assume a specific prefix)
-  // and just prepend API_BASE.
-  return data.clips.map((c) => ({
-    ...c,
-    url: c.url.startsWith("http") ? c.url : `${API_BASE}${c.url}`,
+  const data = (await res.json()) as { segments: Segment[] };
+  return data.segments.map((s) => ({
+    ...s,
+    // Construct video URL from first ordered clip ID.
+    // Backend StaticFiles serves /data/clips/{clip_id}.{ext} at /media/{filename}.
+    // Phase 4 uses .mp4; iOS MIME ladder is handled by the browser on error.
+    url: `${API_BASE}/media/${s.ordered_clip_ids[0]}.mp4`,
   }));
 }
 
@@ -40,5 +52,3 @@ export async function postClip(args: {
   if (!res.ok) throw new Error(`clips ${res.status}`);
   return res.json();
 }
-
-export { API_BASE };
