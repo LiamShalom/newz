@@ -31,7 +31,7 @@ export function RetakeScreen({ blob, submitting, onRetake, onSubmit }: Props) {
         type="button"
         onClick={onRetake}
         aria-label="Retake"
-        className="absolute left-2 z-20 w-11 h-11 flex items-center justify-center text-[#FAFAFA]"
+        className="absolute left-4 z-20 w-11 h-11 flex items-center justify-center text-[#FAFAFA] rounded-full bg-black/50 backdrop-blur-sm"
         style={{ top: "calc(16px + env(safe-area-inset-top))" }}
       >
         <X size={24} strokeWidth={2} />
