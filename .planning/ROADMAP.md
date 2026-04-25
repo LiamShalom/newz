@@ -89,7 +89,9 @@ Plans:
   3. Judge can tap the FAB on any feed view to pivot to the camera and submit a new clip; the new clip flows through the pipeline and the feed re-renders the new segment at the top within 1 second of `segment_published`
   4. Captions are grounded — they reference only what is in the clips' metadata (date, neighborhood, source count); no hallucinated participant counts or motives
   5. SSE EventSource auto-reconnects on disconnect; an empty feed shows the pre-seeded staged demo segment so the first impression is never blank
-**Plans**: TBD
+**Plans**: 2 plans
+- [ ] 04-01-PLAN.md — DB migration + compile pipeline (4 subagents, 30s cap, fallback) + events.py SSE bus + GET /events + /feed upgrade + run.py trigger + FED-05 seed
+- [ ] 04-02-PLAN.md — Frontend: useEventSource hook + distance formatter + Segment types + FeedTile/Feed/api.ts upgrade
 **UI hint**: yes
 
 ### Phase 5: Demo Hardening

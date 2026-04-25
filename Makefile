@@ -5,7 +5,10 @@ install:
 	cd frontend && pnpm install
 
 backend:
-	cd backend && .venv/bin/uvicorn backend.app:app --reload --port 8000 --app-dir ..
+	USE_MOCK_EMBEDDINGS=true uvicorn backend.app:app --reload --port 8000
+
+backend-real:
+	uvicorn backend.app:app --reload --port 8000
 
 frontend:
 	cd frontend && pnpm dev
