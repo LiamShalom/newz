@@ -42,7 +42,7 @@ Build-order discipline: every phase ships a demoable artifact. If we stop at any
   4. Every uploaded clip has GPS lat/lng + timestamp + anonymous session UUID persisted (clip on `/data` volume, metadata in SQLite) and the pipeline is kicked off via `asyncio.create_task`
   5. iOS Safari hardware verification gate has been passed on a real iPhone (not emulator, not Chrome devtools) — recording, playback, and HTTPS camera/GPS permissions all confirmed
 **Plans**: 5 plans
-- [ ] 01-01-repo-bootstrap-PLAN.md — FastAPI + Vite/React/TS/Tailwind 4 scaffold + /health + Makefile + .gitignore
+- [x] 01-01-repo-bootstrap-PLAN.md — FastAPI + Vite/React/TS/Tailwind 4 scaffold + /health + Makefile + .gitignore
 - [ ] 01-02-backend-ingest-PLAN.md — POST /clips (202 + asyncio.create_task), SQLite WAL schema, /clips static mount, GET /feed
 - [ ] 01-03-frontend-feed-shell-PLAN.md — Feed view + RecordFAB + EmptyState + FeedTile + session UUID + uploadQueue
 - [ ] 01-04-camera-mime-gps-PLAN.md — Recorder state machine: priming modal + MediaRecorder + CAP-10 MIME ladder + 30s ring + GPS-blocking submit
