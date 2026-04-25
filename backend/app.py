@@ -244,6 +244,15 @@ async def debug_trigger_compile(cluster_id: str):
     return {"status": "triggered", "cluster_id": cluster_id}
 
 
+@app.get("/debug/clip/{clip_id}")
+async def debug_clip(clip_id: str):
+    """Dev-only: return the raw clip row from the DB."""
+    clip = await db.get_clip(clip_id)
+    if not clip:
+        return {"found": False, "clip_id": clip_id}
+    return {"found": True, "clip": clip}
+
+
 @app.post("/debug/caption_writer/{cluster_id}")
 async def debug_caption_writer(cluster_id: str):
     """Dev-only: run the vision caption-writer directly. Does NOT write to DB.
