@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS clips (
   created_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_clips_created_at ON clips(created_at);
+CREATE INDEX IF NOT EXISTS idx_clips_parent_id ON clips(parent_id);
 
 CREATE TABLE IF NOT EXISTS clip_embeddings (
   clip_id TEXT PRIMARY KEY,
@@ -81,6 +82,21 @@ async def init() -> None:
         if "last_compile_at" not in cols:
             await conn.execute(
                 "ALTER TABLE clusters ADD COLUMN last_compile_at REAL"
+            )
+        # Phase 4.5 migration: add child clip columns (idempotent via PRAGMA check).
+        async with conn.execute("PRAGMA table_info(clips)") as cur:
+            clip_cols = {row[1] for row in await cur.fetchall()}
+        if "parent_id" not in clip_cols:
+            await conn.execute(
+                "ALTER TABLE clips ADD COLUMN parent_id TEXT REFERENCES clips(id)"
+            )
+        if "start_offset_sec" not in clip_cols:
+            await conn.execute(
+                "ALTER TABLE clips ADD COLUMN start_offset_sec REAL DEFAULT 0"
+            )
+        if "end_offset_sec" not in clip_cols:
+            await conn.execute(
+                "ALTER TABLE clips ADD COLUMN end_offset_sec REAL DEFAULT NULL"
             )
         # Ensure segments.cluster_id is unique (one segment per cluster; ON CONFLICT updates on re-compile)
         await conn.execute(
@@ -405,3 +421,52 @@ async def get_cluster(cluster_id: str) -> dict | None:
         async with conn.execute("SELECT * FROM clusters WHERE id = ?", (cluster_id,)) as cur:
             row = await cur.fetchone()
     return dict(row) if row else None
+
+
+# ---------------------------------------------------------------------------
+# Phase 4.5: child clip helpers
+# ---------------------------------------------------------------------------
+
+async def insert_child_clip(
+    parent_id: str,
+    start_offset_sec: float,
+    end_offset_sec: float,
+    lat: float,
+    lng: float,
+    ts: float,
+    session_id: str | None,
+) -> str:
+    """Insert a 3s child clip row. Child inherits lat/lng/ts/session_id from parent.
+    Child id is deterministic: f"{parent_id}_child_{int(start_offset_sec)}".
+    Child path is NULL — children reference parent's file + use offsets for ffmpeg.
+    """
+    child_id = f"{parent_id}_child_{int(start_offset_sec)}"
+    now = time.time()
+    async with aiosqlite.connect(DB_PATH) as conn:
+        await conn.execute(
+            """INSERT OR IGNORE INTO clips
+               (id, path, lat, lng, ts, session_id, created_at, parent_id,
+                start_offset_sec, end_offset_sec, embedding_status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')""",
+            (child_id, "", lat, lng, ts, session_id, now,
+             parent_id, start_offset_sec, end_offset_sec),
+        )
+        await conn.commit()
+    log.info(
+        "insert_child_clip child_id=%s parent_id=%s start=%.1f end=%.1f",
+        child_id, parent_id, start_offset_sec, end_offset_sec,
+    )
+    return child_id
+
+
+async def get_children_by_parent(parent_id: str) -> list[dict]:
+    """Return all child clip rows for a given parent_id, ordered by start_offset_sec ASC."""
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            "SELECT id, parent_id, start_offset_sec, end_offset_sec, lat, lng, ts, session_id "
+            "FROM clips WHERE parent_id = ? ORDER BY start_offset_sec ASC",
+            (parent_id,),
+        )
+        rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
