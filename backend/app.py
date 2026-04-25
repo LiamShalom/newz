@@ -244,6 +244,32 @@ async def debug_trigger_compile(cluster_id: str):
     return {"status": "triggered", "cluster_id": cluster_id}
 
 
+@app.get("/debug/dbstate")
+async def debug_dbstate():
+    """Dev-only: counts and sample IDs straight from sqlite, no in-memory."""
+    import aiosqlite as _aios
+    async with _aios.connect(db.DB_PATH) as conn:
+        conn.row_factory = _aios.Row
+        cur = await conn.execute("SELECT COUNT(*) FROM clips")
+        n_clips = (await cur.fetchone())[0]
+        cur = await conn.execute("SELECT COUNT(*) FROM clips WHERE cluster_id IS NOT NULL")
+        n_clipped = (await cur.fetchone())[0]
+        cur = await conn.execute("SELECT COUNT(*) FROM clusters")
+        n_clusters = (await cur.fetchone())[0]
+        cur = await conn.execute("SELECT id, cluster_id FROM clips ORDER BY created_at DESC LIMIT 5")
+        sample_clips = [dict(r) for r in await cur.fetchall()]
+        cur = await conn.execute("SELECT id, member_count FROM clusters")
+        cluster_rows = [dict(r) for r in await cur.fetchall()]
+    return {
+        "db_path": str(db.DB_PATH),
+        "clips_total": n_clips,
+        "clips_with_cluster_id": n_clipped,
+        "clusters_total": n_clusters,
+        "sample_clips": sample_clips,
+        "clusters": cluster_rows,
+    }
+
+
 @app.get("/debug/clip/{clip_id}")
 async def debug_clip(clip_id: str):
     """Dev-only: return the raw clip row from the DB."""
