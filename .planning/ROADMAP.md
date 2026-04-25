@@ -53,7 +53,10 @@ Build-order discipline: every phase ships a demoable artifact. If we stop at any
   2. Setting `USE_MOCK_EMBEDDINGS=true` returns deterministic fake vectors so the rest of the pipeline can be developed and demoed without any Twelve Labs API call
   3. Embed worker logs end-to-end latency for every call; the value surfaces in the debug overlay so judges see real numbers
   4. Backend startup pre-warms Marengo with a throwaway call so the first real demo embed is never paying cold-start cost
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 02-01-PLAN.md — DB schema + pipeline/embed.py (SDK v2 two-step, mock mode, run_in_executor, tenacity retry)
+- [ ] 02-02-PLAN.md — config.py PRE_WARM_CLIP_PATH + lifespan pre-warm + wire embed_worker into run_pipeline
 
 ### Phase 3: Clustering + Debug Overlay
 **Goal**: Staged demo clips fuse into a single cluster with visible Marengo / GPS / timestamp score breakdown, calibrated empirically against the actual demo dataset. This is the pitch — even if Phases 4-5 fail, this phase alone is demoable and proves the thesis.
@@ -99,7 +102,7 @@ Build-order discipline: every phase ships a demoable artifact. If we stop at any
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Foundation, Capture & Ingest | 0/0 | Not started | - |
-| 2. Marengo Embedding | 0/0 | Not started | - |
+| 2. Marengo Embedding | 0/2 | Planned | - |
 | 3. Clustering + Debug Overlay | 0/0 | Not started | - |
 | 4. Multi-Agent Compile + Real-Time Feed | 0/0 | Not started | - |
 | 5. Demo Hardening | 0/0 | Not started | - |
@@ -144,4 +147,4 @@ Documented in PROJECT.md / REQUIREMENTS.md, repeated here so they don't sneak in
 - **After milestone completion** (`/gsd-complete-milestone`): full review of phases vs. core value; audit out-of-scope reasons; archive.
 
 ---
-*Last updated: 2026-04-24 after roadmap creation*
+*Last updated: 2026-04-24 after Phase 2 planning*
