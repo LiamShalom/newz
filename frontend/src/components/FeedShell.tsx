@@ -1,16 +1,31 @@
 import type { Clip } from "../types";
-import { FeedTile } from "./FeedTile";
+import { LedeTile } from "./LedeTile";
+import { StoryTile } from "./StoryTile";
 
-/**
- * Vertical scrollable list of FeedTiles (D-08 throwaway). Full-width tiles on
- * mobile. pb-32 (128px) keeps the FAB from overlapping the last tile.
- */
+// Hero pick: largest cluster wins; ties broken by backend ordering (newest
+// first). Pre-Phase-4 source_count is undefined on every clip, so the sort
+// collapses to stable order = newest first.
+function pickHero(clips: Clip[]): { hero: Clip; rest: Clip[] } {
+  const sorted = [...clips].sort(
+    (a, b) => (b.source_count ?? 1) - (a.source_count ?? 1),
+  );
+  const hero = sorted[0];
+  const rest = clips.filter((c) => c.id !== hero.id);
+  return { hero, rest };
+}
+
 export function FeedShell({ clips }: { clips: Clip[] }) {
+  const { hero, rest } = pickHero(clips);
   return (
-    <div className="min-h-[100dvh] bg-[#0A0A0A] pb-32">
-      {clips.map((c) => (
-        <FeedTile key={c.id} clip={c} />
-      ))}
-    </div>
+    <main className="mx-auto max-w-[640px] px-5 pb-32">
+      <LedeTile clip={hero} />
+      {rest.length > 0 && (
+        <ol className="mt-6 border-t border-hairline">
+          {rest.map((c, i) => (
+            <StoryTile key={c.id} clip={c} isLast={i === rest.length - 1} />
+          ))}
+        </ol>
+      )}
+    </main>
   );
 }

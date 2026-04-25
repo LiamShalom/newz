@@ -1,8 +1,46 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+@theme {
+  --color-surface: #FAFAF7;
+  --color-surface-elevated: #FFFFFF;
+  --color-ink-primary: #111111;
+  --color-ink-secondary: #3A3A3C;
+  --color-ink-tertiary: #6E6E73;
+  --color-hairline: #E5E5EA;
+  --color-accent-record: #D4322C;
+  --color-accent-link: #1F6FEB;
+
+  --font-display: "Fraunces", ui-serif, Georgia, serif;
+  --font-sans: "Inter Tight", ui-sans-serif, system-ui, sans-serif;
+}
+
+[data-theme="dark"] {
+  --color-surface: #1C1C1E;
+  --color-surface-elevated: #2C2C2E;
+  --color-ink-primary: #F5F5F7;
+  --color-ink-secondary: #C7C7CC;
+  --color-ink-tertiary: #8E8E93;
+  --color-hairline: #2C2C2E;
+  --color-accent-record: #FF453A;
+  --color-accent-link: #5AA9FF;
+}
+
 html, body, #root {
-  background: #0A0A0A;
-  color: #FAFAFA;
   margin: 0;
   min-height: 100dvh;
+  background: var(--color-surface);
+  color: var(--color-ink-primary);
+  font-family: var(--font-sans);
+}
+
+html {
+  transition: background-color 200ms ease, color 200ms ease;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent-link);
+  outline-offset: 2px;
+  border-radius: 2px;
 }
