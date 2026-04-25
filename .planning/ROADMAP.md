@@ -45,7 +45,7 @@ Build-order discipline: every phase ships a demoable artifact. If we stop at any
 - [x] 01-01-repo-bootstrap-PLAN.md — FastAPI + Vite/React/TS/Tailwind 4 scaffold + /health + Makefile + .gitignore
 - [x] 01-02-backend-ingest-PLAN.md — POST /clips (202 + asyncio.create_task), SQLite WAL schema, /clips static mount, GET /feed
 - [x] 01-03-frontend-feed-shell-PLAN.md — Feed view + RecordFAB + EmptyState + FeedTile + session UUID + uploadQueue
-- [ ] 01-04-camera-mime-gps-PLAN.md — Recorder state machine: priming modal + MediaRecorder + CAP-10 MIME ladder + 30s ring + GPS-blocking submit
+- [x] 01-04-camera-mime-gps-PLAN.md — Recorder state machine: priming modal + MediaRecorder + CAP-10 MIME ladder + 30s ring + GPS-blocking submit
 - [ ] 01-05-deploy-iphone-gate-PLAN.md — Vercel + Railway deploy config + real-iPhone hardware verification gate (FND-03)
 **UI hint**: yes
 

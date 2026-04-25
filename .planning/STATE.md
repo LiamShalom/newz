@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-04-25T05:55:00.000Z"
+last_updated: "2026-04-25T06:08:00.000Z"
 progress:
   total_phases: 5
   completed_phases: 0
   total_plans: 5
-  completed_plans: 3
-  percent: 60
+  completed_plans: 4
+  percent: 80
 ---
 
 # Project State: Newz
@@ -28,12 +28,12 @@ progress:
 |-------|-------|
 | Active Milestone | v1 (hackathon MVP) |
 | Active Phase | Phase 1 — Foundation, Capture & Ingest |
-| Active Plan | 01-04 camera/MIME/GPS (Wave 3 next) |
-| Status | EXECUTING — Waves 1-2 complete (01-01, 01-02, 01-03) |
-| Phase Progress | 0/5 phases complete; 3/5 plans in Phase 1 done |
+| Active Plan | 01-05 deploy + iPhone gate (Wave 4 — checkpoint) |
+| Status | EXECUTING — Waves 1-3 complete (01-01, 01-02, 01-03, 01-04) |
+| Phase Progress | 0/5 phases complete; 4/5 plans in Phase 1 done |
 
 ```
-[██████    ] 60% — Phase 1 Waves 1-2 complete (3/5 plans)
+[████████  ] 80% — Phase 1 Waves 1-3 complete (4/5 plans)
 ```
 
 ## Performance Metrics
