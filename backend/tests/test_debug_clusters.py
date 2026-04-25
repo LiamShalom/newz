@@ -101,7 +101,13 @@ async def test_debug_clusters_empty_returns_envelope(tmp_db):
 
 @pytest.mark.asyncio
 async def test_debug_clusters_returns_member_breakdown(tmp_db):
-    """Populated cluster: GET /debug/clusters returns per-member score breakdown with correct values."""
+    """Populated cluster: GET /debug/clusters returns per-member score breakdown with correct values.
+
+    We patch rebuild_cache to a no-op so the lifespan does not clear CLUSTERS,
+    then inject a ClusterCache directly into cluster_mod.CLUSTERS before the request.
+    """
+    from unittest.mock import AsyncMock, patch
+
     lat, lng, ts = 34.1377, -118.1253, 1_000_000.0
     clip_id = await _insert_fake_clip(tmp_db, lat=lat, lng=lng, ts=ts)
 
@@ -119,11 +125,13 @@ async def test_debug_clusters_returns_member_breakdown(tmp_db):
         member_count=1,
         member_ids=[clip_id],
     )
-    cluster_mod.CLUSTERS[cluster.id] = cluster
 
     from backend.app import app
-    with TestClient(app) as client:
-        r = client.get("/debug/clusters")
+    # Patch rebuild_cache so the lifespan does not wipe CLUSTERS on startup
+    with patch("backend.pipeline.cluster.rebuild_cache", new_callable=AsyncMock):
+        cluster_mod.CLUSTERS[cluster.id] = cluster
+        with TestClient(app) as client:
+            r = client.get("/debug/clusters")
 
     assert r.status_code == 200, f"expected 200, got {r.status_code}: {r.text}"
     body = r.json()
@@ -153,7 +161,12 @@ async def test_debug_clusters_returns_member_breakdown(tmp_db):
 
 @pytest.mark.asyncio
 async def test_debug_clusters_skips_member_with_missing_embedding(tmp_db):
-    """If a member clip's embedding is not in DB, it is silently skipped — no 500."""
+    """If a member clip's embedding is not in DB, it is silently skipped — no 500.
+
+    Patches rebuild_cache so lifespan does not clear CLUSTERS before the request.
+    """
+    from unittest.mock import AsyncMock, patch
+
     clip_id = await _insert_fake_clip(tmp_db)
     # Intentionally do NOT call db.store_embedding — the embedding is missing
 
@@ -166,11 +179,12 @@ async def test_debug_clusters_skips_member_with_missing_embedding(tmp_db):
         member_count=1,
         member_ids=[clip_id],
     )
-    cluster_mod.CLUSTERS[cluster.id] = cluster
 
     from backend.app import app
-    with TestClient(app) as client:
-        r = client.get("/debug/clusters")
+    with patch("backend.pipeline.cluster.rebuild_cache", new_callable=AsyncMock):
+        cluster_mod.CLUSTERS[cluster.id] = cluster
+        with TestClient(app) as client:
+            r = client.get("/debug/clusters")
 
     assert r.status_code == 200, f"expected 200, got {r.status_code}: {r.text}"
     body = r.json()

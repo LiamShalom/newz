@@ -98,3 +98,61 @@ async def ingest_clip(
 async def feed():
     rows = await db.fetch_recent_clips(limit=50)
     return {"clips": rows}
+
+
+@app.get("/debug/clusters", include_in_schema=False)
+async def debug_clusters() -> dict:
+    """CLU-09: per-cluster member breakdown with composite score against centroid.
+
+    Internal calibration endpoint. Reads in-memory CLUSTERS dict + DB embeddings.
+    Do NOT expose to authenticated public traffic in production.
+    """
+    from .pipeline import cluster as cluster_mod
+
+    clusters_out = []
+    for c in cluster_mod.CLUSTERS.values():
+        members = []
+        for clip_id in c.member_ids:
+            clip = await db.get_clip(clip_id)
+            vec = await db.get_embedding(clip_id)
+            if clip is None or vec is None:
+                continue   # race: clip in cluster but embedding not yet stored
+            sb = cluster_mod.score_against(c, vec, clip["lat"], clip["lng"], clip["ts"])
+            gps_distance_m = (
+                None if not sb.gps_available
+                else round(cluster_mod.haversine_m(
+                    clip["lat"], clip["lng"], c.centroid_lat, c.centroid_lng), 1)
+            )
+            members.append({
+                "clip_id": clip_id,
+                "lat": clip["lat"],
+                "lng": clip["lng"],
+                "ts": clip["ts"],
+                "visual": round(sb.visual, 4),
+                "gps": round(sb.gps, 4),
+                "time": round(sb.time, 4),
+                "composite": round(sb.composite, 4),
+                "gps_available": sb.gps_available,
+                "gps_distance_m": gps_distance_m,
+                "time_delta_s": round(abs(clip["ts"] - c.median_ts), 1),
+            })
+        clusters_out.append({
+            "cluster_id": c.id,
+            "member_count": c.member_count,
+            "centroid_lat": c.centroid_lat,
+            "centroid_lng": c.centroid_lng,
+            "median_ts": c.median_ts,
+            "members": members,
+        })
+
+    return {
+        "threshold": config.CLUSTER_THRESHOLD,
+        "weights": {
+            "visual": cluster_mod.W_VISUAL,
+            "gps": cluster_mod.W_GPS,
+            "time": cluster_mod.W_TIME,
+        },
+        "gps_radius_m": cluster_mod.GPS_RADIUS_M,
+        "time_window_s": cluster_mod.TIME_WINDOW_S,
+        "clusters": clusters_out,
+    }
