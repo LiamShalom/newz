@@ -932,7 +932,7 @@ adversarial = [
 
 **Items needing user / planner confirmation:** A1 (calibration cell empirically validates), A4 (Phase 5 DEM-05 reinforces), A7 (rename or document — recommend documenting since schema is locked).
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **What's in the staged clips?**
    - What we know: 3-4 short MP4s of "one event from different angles" per CONTEXT D-01.
