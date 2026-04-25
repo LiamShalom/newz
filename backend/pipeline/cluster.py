@@ -16,6 +16,11 @@ Module state:
 Math (locked by CLAUDE.md + CONTEXT D-04/D-05/D-06):
     composite = 0.55*cos + 0.30*gps + 0.15*time   (gps=0.0 when lat/lng unavailable)
     threshold = config.CLUSTER_THRESHOLD          (env-tunable, default 0.55)
+    visual_floor = config.VISUAL_FLOOR            (env-tunable, default 0.80)
+        Joining a cluster requires BOTH composite >= threshold AND visual >= visual_floor.
+        Without the floor, GPS+time alone contribute 0.45 to composite (when both ideal),
+        so any visual cosine > 0.18 would clear threshold — that fused adversarial clips
+        and broke CLU-08. The floor makes "AI sees same scene" the dominant gate.
     centroid update: Welford running mean (float64 intermediate), re-normalized to unit length, stored as float32
 """
 
@@ -129,10 +134,14 @@ async def cluster_worker(clip_id: str, vec: np.ndarray) -> str:
     cluster_id: str
 
     async with _LOCK:
-        # 1. Score against every active cluster
+        # 1. Score against every active cluster. Pre-filter by visual floor so a
+        # near-tie cluster with high GPS+time agreement but low visual cosine doesn't
+        # win the "best" slot and then fail the gate (CLU-08 fix).
         best: tuple[ClusterCache, ScoreBreakdown] | None = None
         for c in CLUSTERS.values():
             sb = score_against(c, vec, lat, lng, ts)
+            if sb.visual < config.VISUAL_FLOOR:
+                continue  # ineligible: cluster fails visual floor for this clip
             if best is None or sb.composite > best[1].composite:
                 best = (c, sb)
 

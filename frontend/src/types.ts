@@ -15,6 +15,12 @@ export interface Clip {
   ts: number;
   /** POSIX seconds; set server-side at insert time. */
   created_at: number;
+  /** Phase 4: AP-wire headline written by Caption Writer subagent. */
+  caption?: string;
+  /** Phase 4: number of clips merged by the cluster ("4 angles"). */
+  source_count?: number;
+  /** Phase 4: reverse-geocoded neighborhood for the eyebrow. */
+  neighborhood?: string;
 }
 
 export interface IngestResponse {

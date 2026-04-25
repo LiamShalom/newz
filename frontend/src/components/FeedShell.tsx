@@ -1,11 +1,22 @@
 import type { Segment } from "../types";
-import { FeedTile } from "./FeedTile";
+import { LedeTile } from "./LedeTile";
+import { StoryTile } from "./StoryTile";
 
-/**
- * Vertical scrollable list of compiled segment FeedTiles (Phase 4, FED-02).
- * pb-32 (128px) keeps the FAB from overlapping the last tile.
- * viewerLat/viewerLng passed down for distance overlay in each tile.
- */
+// Hero pick: largest cluster wins; ties broken by backend ordering (newest
+// first). Pre-Phase-4 source_count is undefined on every segment, so the sort
+// collapses to stable order = newest first.
+function pickHero(segments: (Segment & { url: string })[]): {
+  hero: Segment & { url: string };
+  rest: (Segment & { url: string })[];
+} {
+  const sorted = [...segments].sort(
+    (a, b) => (b.source_count ?? 1) - (a.source_count ?? 1),
+  );
+  const hero = sorted[0];
+  const rest = segments.filter((s) => s.id !== hero.id);
+  return { hero, rest };
+}
+
 export function FeedShell({
   segments,
   viewerLat,
@@ -15,11 +26,17 @@ export function FeedShell({
   viewerLat?: number;
   viewerLng?: number;
 }) {
+  const { hero, rest } = pickHero(segments);
   return (
-    <div className="min-h-[100dvh] bg-[#0A0A0A] pb-32">
-      {segments.map((s) => (
-        <FeedTile key={s.id} segment={s} viewerLat={viewerLat} viewerLng={viewerLng} />
-      ))}
-    </div>
+    <main className="mx-auto max-w-[640px] px-5 pb-32">
+      <LedeTile segment={hero} viewerLat={viewerLat} viewerLng={viewerLng} />
+      {rest.length > 0 && (
+        <ol className="mt-6 border-t border-hairline">
+          {rest.map((s, i) => (
+            <StoryTile key={s.id} segment={s} isLast={i === rest.length - 1} />
+          ))}
+        </ol>
+      )}
+    </main>
   );
 }

@@ -45,6 +45,7 @@ type Phase =
   | { kind: "error"; error: ErrorKind };
 
 const RECORD_CAP_SEC = 30; // CAP-05 hard cap
+const MIN_RECORD_SEC = 5; // Marengo requires >=4s; 5 leaves a buffer for trim/encoding
 
 export function Recorder() {
   const navigate = useNavigate();
@@ -137,6 +138,9 @@ export function Recorder() {
   };
 
   const stopRecording = () => {
+    if (phase.kind !== "recording") return;
+    const elapsed = (performance.now() - phase.startedAt) / 1000;
+    if (elapsed < MIN_RECORD_SEC) return;
     const r = recorderRef.current;
     if (r && r.state === "recording") r.stop();
   };
@@ -255,7 +259,7 @@ export function Recorder() {
 
   return (
     <div className="fixed inset-0 bg-[#0A0A0A]" style={{ height: "100dvh" }}>
-      <CameraView stream={streamRef.current} />
+      <CameraView stream={streamRef.current} mirrored={facing === "user"} />
       {!isRecording && phase.kind === "ready" && (
         <CameraFlipButton
           facing={facing}
@@ -267,6 +271,7 @@ export function Recorder() {
       <RecordButton
         recording={isRecording}
         progress={progress}
+        canStop={!isRecording || progress >= MIN_RECORD_SEC / RECORD_CAP_SEC}
         onTap={isRecording ? stopRecording : startRecording}
       />
     </div>

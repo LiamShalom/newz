@@ -1,8 +1,48 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/* Defaults are the dark palette — matches the sport-channel aesthetic shipped
+   as the home page default. Light theme overrides below for the toggle. */
+@theme {
+  --color-surface: #0A0A0A;
+  --color-surface-elevated: #141414;
+  --color-ink-primary: #FFFFFF;
+  --color-ink-secondary: #B5B5B5;
+  --color-ink-tertiary: #6B6B6B;
+  --color-hairline: #1F1F1F;
+  --color-accent-record: #E11D48;
+  --color-accent-link: #5AA9FF;
+
+  --font-display: "Anton", "Bebas Neue", "Impact", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
+[data-theme="light"] {
+  --color-surface: #FFFFFF;
+  --color-surface-elevated: #F5F5F5;
+  --color-ink-primary: #0A0A0A;
+  --color-ink-secondary: #3A3A3C;
+  --color-ink-tertiary: #6E6E73;
+  --color-hairline: #E5E5EA;
+  --color-accent-record: #DC2626;
+  --color-accent-link: #1F6FEB;
+}
+
 html, body, #root {
-  background: #0A0A0A;
-  color: #FAFAFA;
   margin: 0;
   min-height: 100dvh;
+  background: var(--color-surface);
+  color: var(--color-ink-primary);
+  font-family: var(--font-sans);
+}
+
+html {
+  transition: background-color 200ms ease, color 200ms ease;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent-link);
+  outline-offset: 2px;
+  border-radius: 2px;
 }

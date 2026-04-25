@@ -1,16 +1,20 @@
-/**
- * Feed empty state — verbatim UI-SPEC copy. Centered on the dark feed background.
- * UI-SPEC token discipline: every color is from the seven approved tokens.
- */
+import { Link } from "react-router-dom";
+
 export function EmptyState() {
   return (
-    <div className="min-h-[100dvh] bg-[#0A0A0A] flex flex-col items-center justify-center px-6 text-center">
-      <h1 className="text-2xl font-semibold leading-[1.2] text-[#FAFAFA]">
-        No clips yet
+    <main className="mx-auto max-w-[640px] px-5 pt-10">
+      <h1 className="font-display uppercase text-[40px] leading-[0.95] tracking-[-0.005em] text-ink-primary">
+        The feed is quiet
       </h1>
-      <p className="mt-4 text-base leading-[1.5] text-[#A3A3A3]">
-        Tap the red button to record one.
+      <p className="mt-4 text-[15px] leading-[1.5] text-ink-secondary">
+        Anonymous footage near you will appear here. Tap record to start one.
       </p>
-    </div>
+      <Link
+        to="/record"
+        className="inline-flex items-center mt-6 bg-accent-record text-white text-[13px] font-bold uppercase tracking-[0.08em] px-4 py-2.5 rounded-md"
+      >
+        Record a clip
+      </Link>
+    </main>
   );
 }

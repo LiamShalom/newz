@@ -2,6 +2,8 @@ interface Props {
   recording: boolean;
   /** 0..1, ring fill amount over the 30s cap. */
   progress: number;
+  /** false dims the button and blocks taps — used to enforce min recording length. */
+  canStop?: boolean;
   onTap: () => void;
 }
 
@@ -12,14 +14,25 @@ const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
  * D-03 ring-fill record button. 80px outer, r=37, 6px stroke. Stop-glyph swap when recording.
  * Verbatim from PATTERNS.md lines 530-560.
  */
-export function RecordButton({ recording, progress, onTap }: Props) {
+export function RecordButton({ recording, progress, canStop = true, onTap }: Props) {
+  const blocked = recording && !canStop;
   return (
     <button
       type="button"
       onClick={onTap}
-      aria-label={recording ? "Stop recording" : "Start recording"}
+      disabled={blocked}
+      aria-label={
+        recording
+          ? canStop
+            ? "Stop recording"
+            : "Recording — wait for minimum duration"
+          : "Start recording"
+      }
       className="absolute left-1/2 -translate-x-1/2 z-20"
-      style={{ bottom: "calc(16px + env(safe-area-inset-bottom))" }}
+      style={{
+        bottom: "calc(16px + env(safe-area-inset-bottom))",
+        opacity: blocked ? 0.5 : 1,
+      }}
     >
       <svg width="80" height="80" viewBox="0 0 80 80">
         <circle

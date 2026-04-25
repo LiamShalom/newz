@@ -220,6 +220,7 @@ async def debug_clusters() -> dict:
 
     return {
         "threshold": config.CLUSTER_THRESHOLD,
+        "visual_floor": config.VISUAL_FLOOR,
         "weights": {
             "visual": cluster_mod.W_VISUAL,
             "gps": cluster_mod.W_GPS,
