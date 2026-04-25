@@ -41,7 +41,12 @@ Build-order discipline: every phase ships a demoable artifact. If we stop at any
   3. Submit returns 202 in under 100ms with a clip ID; the UI never blocks on the pipeline; failed uploads queue in localStorage and retry on reconnect
   4. Every uploaded clip has GPS lat/lng + timestamp + anonymous session UUID persisted (clip on `/data` volume, metadata in SQLite) and the pipeline is kicked off via `asyncio.create_task`
   5. iOS Safari hardware verification gate has been passed on a real iPhone (not emulator, not Chrome devtools) — recording, playback, and HTTPS camera/GPS permissions all confirmed
-**Plans**: TBD
+**Plans**: 5 plans
+- [ ] 01-01-repo-bootstrap-PLAN.md — FastAPI + Vite/React/TS/Tailwind 4 scaffold + /health + Makefile + .gitignore
+- [ ] 01-02-backend-ingest-PLAN.md — POST /clips (202 + asyncio.create_task), SQLite WAL schema, /clips static mount, GET /feed
+- [ ] 01-03-frontend-feed-shell-PLAN.md — Feed view + RecordFAB + EmptyState + FeedTile + session UUID + uploadQueue
+- [ ] 01-04-camera-mime-gps-PLAN.md — Recorder state machine: priming modal + MediaRecorder + CAP-10 MIME ladder + 30s ring + GPS-blocking submit
+- [ ] 01-05-deploy-iphone-gate-PLAN.md — Vercel + Railway deploy config + real-iPhone hardware verification gate (FND-03)
 **UI hint**: yes
 
 ### Phase 2: Marengo Embedding
@@ -98,7 +103,7 @@ Build-order discipline: every phase ships a demoable artifact. If we stop at any
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation, Capture & Ingest | 0/0 | Not started | - |
+| 1. Foundation, Capture & Ingest | 0/5 | Not started | - |
 | 2. Marengo Embedding | 0/0 | Not started | - |
 | 3. Clustering + Debug Overlay | 0/0 | Not started | - |
 | 4. Multi-Agent Compile + Real-Time Feed | 0/0 | Not started | - |
