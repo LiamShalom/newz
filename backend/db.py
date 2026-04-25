@@ -30,7 +30,6 @@ CREATE TABLE IF NOT EXISTS clips (
   created_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_clips_created_at ON clips(created_at);
-CREATE INDEX IF NOT EXISTS idx_clips_parent_id ON clips(parent_id);
 
 CREATE TABLE IF NOT EXISTS clip_embeddings (
   clip_id TEXT PRIMARY KEY,
@@ -89,6 +88,9 @@ async def init() -> None:
         if "parent_id" not in clip_cols:
             await conn.execute(
                 "ALTER TABLE clips ADD COLUMN parent_id TEXT REFERENCES clips(id)"
+            )
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_clips_parent_id ON clips(parent_id)"
             )
         if "start_offset_sec" not in clip_cols:
             await conn.execute(
