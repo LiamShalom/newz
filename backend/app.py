@@ -37,6 +37,11 @@ async def _pre_warm_marengo() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await db.init()
+    # Phase 3: rebuild in-memory cluster cache from sqlite (CLU-10).
+    # Must complete before pre-warm task is scheduled so the first clip ingest
+    # sees a populated cache.
+    from .pipeline import cluster as cluster_mod
+    await cluster_mod.rebuild_cache()
     asyncio.create_task(_pre_warm_marengo())  # fire-and-forget; never blocks startup
     yield
 
