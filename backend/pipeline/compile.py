@@ -66,14 +66,14 @@ Caption must be 200 characters or fewer. No text outside the JSON.
 
 ORCHESTRATOR_PROMPT_TEMPLATE = """Compile cluster {cluster_id} into a published news segment.
 
-The caption and location have ALREADY been written by the caption-writer:
-  caption: {caption}
-  location: {location}
+The title and caption will be filled in later by another worker. Pass empty
+strings ("") for both when calling save_segment. The orchestrator will
+overwrite them.
 
 Steps — use the named subagents in this order:
-1. Run angle-selector to pick the best 2-4 clips and order them.
-2. Run editor on angle-selector's JSON output to validate the clip order.
-3. Run publisher with editor's clip_ids and the caption/location above.
+1. Run angle-selector to pick the best 2-4 RUNS and order them.
+2. Run editor on angle-selector's JSON output to validate the run order.
+3. Run publisher with editor's run_ids. Pass title="" and caption="".
 
 Pass each subagent's JSON output verbatim into the next subagent's prompt.
 The cluster_id is: {cluster_id}
@@ -267,12 +267,14 @@ async def _run_caption_writer_with_vision(cluster_id: str) -> dict:
     return data
 
 
-async def _run_orchestrator_chain(cluster_id: str, caption_data: dict) -> str:
-    """Run angle-selector → editor → publisher with caption pre-injected."""
+async def _run_orchestrator_chain(cluster_id: str) -> str:
+    """Run angle-selector → editor → publisher. Caption/title are filled later
+    by Branch B's overwrite — publisher saves placeholder empty strings.
+    """
     options = ClaudeAgentOptions(
         allowed_tools=[
             "Agent",
-            "mcp__newz_tools__get_cluster_clips",
+            "mcp__newz_tools__get_cluster_runs",
             "mcp__newz_tools__get_clip_metadata",
             "mcp__newz_tools__save_segment",
         ],
@@ -281,11 +283,7 @@ async def _run_orchestrator_chain(cluster_id: str, caption_data: dict) -> str:
         max_turns=20,
         model="sonnet",
     )
-    prompt = ORCHESTRATOR_PROMPT_TEMPLATE.format(
-        cluster_id=cluster_id,
-        caption=caption_data["caption"],
-        location=caption_data["location"],
-    )
+    prompt = ORCHESTRATOR_PROMPT_TEMPLATE.format(cluster_id=cluster_id)
     async for msg in query(prompt=prompt, options=options):
         if isinstance(msg, ResultMessage):
             if msg.is_error:
@@ -308,14 +306,30 @@ async def _run_orchestrator_chain(cluster_id: str, caption_data: dict) -> str:
     return seg["id"]
 
 
-async def _run_agents(cluster_id: str) -> str:
-    """Run vision caption-writer, then the 3-subagent chain. Returns segment_id."""
-    caption_data = await _run_caption_writer_with_vision(cluster_id)
-    log.info(
-        "compile caption written cluster_id=%s caption=%r location=%r",
-        cluster_id, caption_data.get("caption"), caption_data.get("location"),
-    )
-    return await _run_orchestrator_chain(cluster_id, caption_data)
+async def _branch_angles_then_stitch(cluster_id: str) -> tuple[str, str | None]:
+    """Sequential: orchestrator chain (writes segment with run_ids) → stitch.
+
+    Returns (segment_id, video_url_or_None).
+    """
+    import json as _json
+    segment_id = await _run_orchestrator_chain(cluster_id)
+    seg = await db.get_segment_for_cluster(cluster_id)
+    raw = seg.get("ordered_clip_ids") if seg else None
+    run_ids = _json.loads(raw) if isinstance(raw, str) else (raw or [])
+
+    if not run_ids:
+        log.warning("Branch A: no run_ids saved for cluster_id=%s", cluster_id)
+        return segment_id, None
+
+    refs = await _resolve_run_ids_to_stitch_refs(cluster_id, run_ids)
+    if not refs:
+        return segment_id, None
+
+    output_path = str(config.DATA_DIR / "clips" / f"{cluster_id}_compiled.mp4")
+    stitched = await stitch_clips(refs, output_path)
+    if stitched and Path(stitched).exists() and stitched == output_path:
+        return segment_id, f"/media/{Path(stitched).name}"
+    return segment_id, None
 
 
 async def _get_children_with_vecs(cluster_id: str) -> list[dict]:
