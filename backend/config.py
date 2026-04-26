@@ -31,3 +31,7 @@ RUN_THRESHOLD: float = float(os.environ.get("RUN_THRESHOLD", "0.70"))
 # Cap on children per run. With 3s child windows this caps run length at 6s.
 # Without this, a clean 30s parent collapses into one giant run.
 MAX_RUN_MEMBERS: int = int(os.environ.get("MAX_RUN_MEMBERS", "2"))
+
+# Admin: shared secret guarding /admin/* destructive endpoints.
+# Empty value disables the endpoint (returns 503).
+ADMIN_TOKEN: str = os.environ.get("ADMIN_TOKEN", "").strip()

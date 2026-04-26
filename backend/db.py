@@ -564,6 +564,139 @@ async def insert_child_clip(
     return child_id
 
 
+# ---------------------------------------------------------------------------
+# Admin: destructive reset helpers
+# ---------------------------------------------------------------------------
+
+async def reset_all() -> dict:
+    """Wipe clips, embeddings, clusters, segments. Returns row counts deleted.
+    File cleanup (CLIPS_DIR) and CLUSTERS cache rebuild are caller's responsibility.
+    """
+    counts = {}
+    async with aiosqlite.connect(DB_PATH) as conn:
+        for tbl in ("clips", "clip_embeddings", "clusters", "segments"):
+            async with conn.execute(f"SELECT COUNT(*) FROM {tbl}") as cur:
+                counts[tbl] = (await cur.fetchone())[0]
+        # Order respects FK self-ref on clips(parent_id): wipe children → parents
+        # via single DELETE since we're truncating.
+        await conn.execute("DELETE FROM segments")
+        await conn.execute("DELETE FROM clip_embeddings")
+        await conn.execute("DELETE FROM clips")
+        await conn.execute("DELETE FROM clusters")
+        await conn.commit()
+    return counts
+
+
+async def delete_recent_clips(
+    limit: int | None = None,
+    since_seconds: float | None = None,
+) -> dict:
+    """Delete most-recent parent clips and cascade their children, embeddings,
+    plus any now-empty clusters and their segments.
+
+    Pass exactly one of `limit` or `since_seconds`.
+
+    Returns {"counts": {...}, "paths_to_delete": [str, ...]} — caller deletes
+    files from disk and rebuilds CLUSTERS cache.
+    """
+    if (limit is None) == (since_seconds is None):
+        raise ValueError("pass exactly one of limit or since_seconds")
+
+    counts = {"clips": 0, "embeddings": 0, "segments": 0, "clusters": 0}
+    paths_to_delete: list[str] = []
+
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        if limit is not None:
+            cur = await conn.execute(
+                "SELECT id, path, cluster_id FROM clips "
+                "WHERE parent_id IS NULL "
+                "ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            )
+        else:
+            assert since_seconds is not None
+            cutoff = time.time() - float(since_seconds)
+            cur = await conn.execute(
+                "SELECT id, path, cluster_id FROM clips "
+                "WHERE parent_id IS NULL AND created_at >= ?",
+                (cutoff,),
+            )
+        parents = [dict(r) for r in await cur.fetchall()]
+        if not parents:
+            return {"counts": counts, "paths_to_delete": paths_to_delete}
+
+        parent_ids = [p["id"] for p in parents]
+        affected_clusters = sorted({p["cluster_id"] for p in parents if p["cluster_id"]})
+        paths_to_delete.extend(p["path"] for p in parents if p["path"])
+
+        ph_p = ",".join("?" * len(parent_ids))
+        cur = await conn.execute(
+            f"SELECT id FROM clips WHERE parent_id IN ({ph_p})", parent_ids
+        )
+        child_ids = [r["id"] for r in await cur.fetchall()]
+        all_clip_ids = parent_ids + child_ids
+
+        # Capture run-output files (data/clips/{run_id}.mp4) referenced by
+        # affected segments before we delete those segments.
+        if affected_clusters:
+            ph_c = ",".join("?" * len(affected_clusters))
+            cur = await conn.execute(
+                f"SELECT ordered_clip_ids FROM segments WHERE cluster_id IN ({ph_c})",
+                affected_clusters,
+            )
+            for row in await cur.fetchall():
+                for cid in json.loads(row["ordered_clip_ids"]):
+                    if "_run_" in cid:
+                        paths_to_delete.append(str(CLIPS_DIR / f"{cid}.mp4"))
+
+        ph_all = ",".join("?" * len(all_clip_ids))
+        cur = await conn.execute(
+            f"DELETE FROM clip_embeddings WHERE clip_id IN ({ph_all})", all_clip_ids
+        )
+        counts["embeddings"] = cur.rowcount
+
+        if child_ids:
+            ph_ch = ",".join("?" * len(child_ids))
+            await conn.execute(f"DELETE FROM clips WHERE id IN ({ph_ch})", child_ids)
+        await conn.execute(f"DELETE FROM clips WHERE id IN ({ph_p})", parent_ids)
+        counts["clips"] = len(parent_ids) + len(child_ids)
+
+        if affected_clusters:
+            ph_c = ",".join("?" * len(affected_clusters))
+            cur = await conn.execute(
+                f"""SELECT cluster_id, COUNT(*) AS c
+                    FROM clips
+                    WHERE cluster_id IN ({ph_c}) AND parent_id IS NULL
+                    GROUP BY cluster_id""",
+                affected_clusters,
+            )
+            still_populated = {r["cluster_id"]: r["c"] for r in await cur.fetchall()}
+            empty = [cid for cid in affected_clusters if cid not in still_populated]
+
+            now = time.time()
+            for cid, cnt in still_populated.items():
+                await conn.execute(
+                    "UPDATE clusters SET member_count = ?, updated_at = ? WHERE id = ?",
+                    (cnt, now, cid),
+                )
+
+            if empty:
+                ph_e = ",".join("?" * len(empty))
+                cur = await conn.execute(
+                    f"DELETE FROM segments WHERE cluster_id IN ({ph_e})", empty
+                )
+                counts["segments"] = cur.rowcount
+                cur = await conn.execute(
+                    f"DELETE FROM clusters WHERE id IN ({ph_e})", empty
+                )
+                counts["clusters"] = cur.rowcount
+
+        await conn.commit()
+
+    return {"counts": counts, "paths_to_delete": paths_to_delete}
+
+
 async def get_children_by_parent(parent_id: str) -> list[dict]:
     """Return all child clip rows for a given parent_id, ordered by start_offset_sec ASC."""
     async with aiosqlite.connect(DB_PATH) as conn:

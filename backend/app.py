@@ -340,3 +340,80 @@ async def debug_clip(clip_id: str):
     return {"found": True, "clip": clip}
 
 
+def _delete_files(paths: list[str]) -> int:
+    n = 0
+    for path_str in paths:
+        try:
+            p = Path(path_str)
+            if p.is_file():
+                p.unlink()
+                n += 1
+        except Exception as e:
+            log.warning("admin_reset: could not delete %s: %s", path_str, e)
+    return n
+
+
+@app.post("/admin/reset", include_in_schema=False)
+async def admin_reset(
+    mode: str = Query("all", pattern="^(all|last|since)$"),
+    count: int | None = Query(None, ge=1, le=10000),
+    seconds: float | None = Query(None, gt=0),
+    x_admin_token: str | None = Header(None, alias="X-Admin-Token"),
+):
+    """Destructive: wipe clips/embeddings/clusters/segments + their files.
+
+    Auth: requires X-Admin-Token header matching env ADMIN_TOKEN. If
+    ADMIN_TOKEN is unset on the server, returns 503 (closed by default).
+
+    Modes:
+      mode=all                — wipe everything (default)
+      mode=last&count=N       — delete N most recent parent clips (cascades children/clusters/segments)
+      mode=since&seconds=S    — delete parents uploaded within last S seconds
+    """
+    expected = config.ADMIN_TOKEN
+    if not expected:
+        raise HTTPException(status_code=503, detail="ADMIN_TOKEN not configured")
+    if not x_admin_token or x_admin_token != expected:
+        raise HTTPException(status_code=401, detail="invalid admin token")
+
+    if mode == "all":
+        counts = await db.reset_all()
+        deleted_files = 0
+        for p in (config.DATA_DIR / "clips").glob("*"):
+            try:
+                if p.is_file():
+                    p.unlink()
+                    deleted_files += 1
+            except Exception as e:
+                log.warning("admin_reset: could not delete %s: %s", p, e)
+        result = {"mode": "all", "deleted": counts, "deleted_files": deleted_files}
+    elif mode == "last":
+        if count is None:
+            raise HTTPException(status_code=400, detail="mode=last requires ?count=N")
+        out = await db.delete_recent_clips(limit=count)
+        deleted_files = _delete_files(out["paths_to_delete"])
+        result = {
+            "mode": "last",
+            "count_requested": count,
+            "deleted": out["counts"],
+            "deleted_files": deleted_files,
+        }
+    else:  # since
+        if seconds is None:
+            raise HTTPException(status_code=400, detail="mode=since requires ?seconds=S")
+        out = await db.delete_recent_clips(since_seconds=seconds)
+        deleted_files = _delete_files(out["paths_to_delete"])
+        result = {
+            "mode": "since",
+            "seconds": seconds,
+            "deleted": out["counts"],
+            "deleted_files": deleted_files,
+        }
+
+    from .pipeline import cluster as cluster_mod
+    await cluster_mod.rebuild_cache()
+
+    log.info("admin_reset %s", result)
+    return result
+
+
