@@ -44,7 +44,7 @@ export function PrimingModal({ onContinue }: Props) {
           autoFocus
           type="button"
           onClick={proceed}
-          className="mt-6 w-full h-14 rounded-full bg-[#EF4444] text-white font-semibold text-base"
+          className="mt-6 w-full h-14 rounded-full bg-gradient-to-r from-coral-light to-coral text-white font-semibold text-base"
         >
           Allow and continue
         </button>

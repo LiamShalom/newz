@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ImagePlus } from "lucide-react";
+import { ArrowUp } from "lucide-react";
 import { postClip } from "../api";
 import { enqueue } from "../uploadQueue";
 import { getPositionWithTimeout } from "../lib/getPositionWithTimeout";
@@ -58,19 +58,25 @@ export function CameraUploadButton() {
         aria-label="Upload from camera roll"
         disabled={busy}
         onClick={() => inputRef.current?.click()}
-        className="absolute z-40 w-12 h-12 flex items-center justify-center
-                   rounded-full bg-black/45 backdrop-blur-md text-white
-                   active:scale-95 transition-transform disabled:opacity-50"
+        className="group absolute z-40 h-16 w-16 hover:w-48 flex items-center overflow-hidden
+                   rounded-full bg-gradient-to-r from-coral-light to-coral text-white shadow-lg
+                   active:scale-95 disabled:opacity-50
+                   transition-[width,transform] duration-300 ease-out"
         style={{
           left: "20px",
           bottom: "calc(88px + env(safe-area-inset-bottom))",
         }}
       >
-        {busy ? (
-          <span className="block w-4 h-4 rounded-full border-2 border-white border-t-transparent animate-spin" />
-        ) : (
-          <ImagePlus size={22} strokeWidth={2} />
-        )}
+        <span className="absolute inset-0 flex items-center justify-center opacity-100 group-hover:opacity-0 transition-opacity duration-200">
+          {busy ? (
+            <span className="block w-4 h-4 rounded-full border-2 border-white border-t-transparent animate-spin" />
+          ) : (
+            <ArrowUp size={28} strokeWidth={2.25} />
+          )}
+        </span>
+        <span className="absolute inset-0 flex items-center justify-center text-xl font-bold whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity duration-200 group-hover:delay-150">
+          Upload
+        </span>
       </button>
     </>
   );

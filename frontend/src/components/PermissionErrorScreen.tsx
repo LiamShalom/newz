@@ -47,7 +47,7 @@ export function PermissionErrorScreen({ kind, onRetry }: Props) {
       {c.actionHref ? (
         <a
           href={c.actionHref}
-          className="mt-6 inline-block px-6 h-14 leading-[3.5rem] rounded-full bg-[#EF4444] text-white font-semibold text-base"
+          className="mt-6 inline-block px-6 h-14 leading-[3.5rem] rounded-full bg-gradient-to-r from-coral-light to-coral text-white font-semibold text-base"
         >
           {c.action}
         </a>
@@ -55,7 +55,7 @@ export function PermissionErrorScreen({ kind, onRetry }: Props) {
         <button
           type="button"
           onClick={onRetry}
-          className="mt-6 inline-block px-6 h-14 rounded-full bg-[#EF4444] text-white font-semibold text-base"
+          className="mt-6 inline-block px-6 h-14 rounded-full bg-gradient-to-r from-coral-light to-coral text-white font-semibold text-base"
         >
           {c.action}
         </button>

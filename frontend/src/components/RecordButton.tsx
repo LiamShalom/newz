@@ -1,3 +1,5 @@
+import { useEffect, useRef, useState } from "react";
+
 interface Props {
   recording: boolean;
   /** 0..1, ring fill amount over the 30s cap. */
@@ -12,10 +14,19 @@ const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 
 /**
  * D-03 ring-fill record button. 80px outer, r=37, 6px stroke. Stop-glyph swap when recording.
- * Verbatim from PATTERNS.md lines 530-560.
  */
 export function RecordButton({ recording, progress, canStop = true, onTap }: Props) {
   const blocked = recording && !canStop;
+  const prevCanStop = useRef(canStop);
+  const [pulseKey, setPulseKey] = useState(0);
+
+  useEffect(() => {
+    if (recording && canStop && !prevCanStop.current) {
+      setPulseKey((k) => k + 1);
+    }
+    prevCanStop.current = canStop;
+  }, [recording, canStop]);
+
   return (
     <button
       type="button"
@@ -34,36 +45,45 @@ export function RecordButton({ recording, progress, canStop = true, onTap }: Pro
         opacity: blocked ? 0.5 : 1,
       }}
     >
-      <svg width="80" height="80" viewBox="0 0 80 80">
-        <circle
-          cx="40"
-          cy="40"
-          r={RADIUS}
-          fill="none"
-          stroke="#262626"
-          strokeWidth="6"
-        />
-        {recording && (
+      <span
+        key={pulseKey}
+        className={`block ${pulseKey > 0 ? "animate-record-pulse" : ""}`}
+      >
+        <svg width="80" height="80" viewBox="0 0 80 80">
+          <defs>
+            <linearGradient id="coralGrad" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0%" stopColor="#F88B7A" />
+              <stop offset="100%" stopColor="#EE6F5C" />
+            </linearGradient>
+          </defs>
           <circle
             cx="40"
             cy="40"
             r={RADIUS}
             fill="none"
-            stroke="#EF4444"
+            stroke="#FFFFFF"
             strokeWidth="6"
-            strokeLinecap="round"
-            strokeDasharray={CIRCUMFERENCE}
-            strokeDashoffset={CIRCUMFERENCE * (1 - Math.max(0, Math.min(1, progress)))}
-            transform="rotate(-90 40 40)"
-            style={{ transition: "stroke-dashoffset 100ms linear" }}
           />
-        )}
-        {recording ? (
-          <rect x="32" y="32" width="16" height="16" rx="2" fill="#EF4444" />
-        ) : (
-          <circle cx="40" cy="40" r="28" fill="#EF4444" />
-        )}
-      </svg>
+          {recording && (
+            <circle
+              cx="40"
+              cy="40"
+              r={RADIUS}
+              fill="none"
+              stroke="url(#coralGrad)"
+              strokeWidth="6"
+              strokeLinecap="round"
+              strokeDasharray={CIRCUMFERENCE}
+              strokeDashoffset={CIRCUMFERENCE * (1 - Math.max(0, Math.min(1, progress)))}
+              transform="rotate(-90 40 40)"
+              style={{ transition: "stroke-dashoffset 100ms linear" }}
+            />
+          )}
+          {recording && (
+            <rect x="32" y="32" width="16" height="16" rx="2" fill="url(#coralGrad)" />
+          )}
+        </svg>
+      </span>
     </button>
   );
 }

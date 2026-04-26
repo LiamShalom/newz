@@ -4,8 +4,6 @@ import { relativeTime } from "../timeFormat";
 import { distanceLabel } from "../distance";
 import { LivePill } from "./LivePill";
 
-const FRESH_WINDOW_SEC = 600;
-
 function deriveSummary(s: Segment, locationStr: string | null): string {
   const angles = s.source_count > 1 ? `Captured from ${s.source_count} angles` : "Single-angle footage";
   const where = locationStr ? ` near ${locationStr}` : "";
@@ -41,12 +39,11 @@ export function SegmentCard({
       ? distanceLabel(viewerLat, viewerLng, segment.centroid_lat, segment.centroid_lng)
       : segment.location;
 
-  const isFresh = Date.now() / 1000 - segment.created_at < FRESH_WINDOW_SEC;
   const summary = deriveSummary(segment, locationStr ?? null);
 
   return (
-    <article>
-      <div className="relative overflow-hidden rounded-2xl bg-black aspect-[4/5]">
+    <article className="relative">
+      <div className="relative overflow-hidden rounded-2xl bg-surface aspect-[4/5]">
         <video
           key={currentUrl}
           src={currentUrl}
@@ -60,35 +57,70 @@ export function SegmentCard({
 
         <div
           aria-hidden
-          className="absolute inset-x-0 bottom-0 h-2/3 pointer-events-none"
+          className="absolute inset-x-0 top-0 h-1/3 pointer-events-none"
           style={{
             background:
-              "linear-gradient(to top, rgba(0,0,0,0.92) 0%, rgba(0,0,0,0.55) 45%, rgba(0,0,0,0) 100%)",
+              "linear-gradient(to bottom, rgba(0,0,0,0.65) 0%, rgba(0,0,0,0) 100%)",
           }}
         />
 
-        {isFresh && (
-          <div className="absolute bottom-4 left-4 z-10">
-            <LivePill />
-          </div>
-        )}
+        <div
+          aria-hidden
+          className="absolute inset-x-0 bottom-0 h-1/2 pointer-events-none"
+          style={{ background: "var(--gradient-fade-bottom)" }}
+        />
 
         {hasMultiple && (
-          <span className="absolute top-3 right-3 z-10 bg-black/60 text-white text-[11px] font-semibold tabular-nums tracking-wide px-2 py-0.5 rounded-full">
-            {angleIdx + 1}/{urls.length}
-          </span>
+          <>
+            <button
+              type="button"
+              onClick={() =>
+                setAngleIdx((i) => (i - 1 + urls.length) % urls.length)
+              }
+              aria-label="Previous angle"
+              className="absolute top-0 bottom-0 left-0 w-1/2 z-[5]"
+            />
+            <button
+              type="button"
+              onClick={() => setAngleIdx((i) => (i + 1) % urls.length)}
+              aria-label="Next angle"
+              className="absolute top-0 bottom-0 right-0 w-1/2 z-[5]"
+            />
+
+            <div className="absolute top-3 left-3 right-3 z-10 flex gap-1.5 pointer-events-none">
+              {urls.map((_, i) => (
+                <span
+                  key={i}
+                  className={`flex-1 h-[3px] rounded-full transition-colors ${
+                    i === angleIdx ? "bg-white/75" : "bg-white/30"
+                  }`}
+                />
+              ))}
+            </div>
+          </>
         )}
 
-        <h2
-          className={`absolute bottom-4 right-4 left-4 z-10 font-display uppercase text-[28px] sm:text-[32px] leading-[0.95] tracking-[-0.01em] text-white ${
-            isFresh ? "pl-[68px]" : ""
-          }`}
-        >
-          {segment.caption}
-        </h2>
+        <div className="absolute bottom-3 dark:bottom-14 left-4 z-10">
+          <LivePill />
+        </div>
       </div>
 
-      <p className="mt-3 text-[15px] leading-[1.45] text-ink-secondary">{summary}</p>
+      <h2
+        className="relative z-20 mt-3 dark:-mt-8 dark:sm:-mt-10 px-4 font-display uppercase text-[40px] sm:text-[48px] leading-[0.92] tracking-[-0.005em] text-ink-primary"
+      >
+        {segment.caption}
+      </h2>
+
+      <p className="mt-3 text-[13px] font-semibold leading-[1.35] px-4 bg-gradient-to-r from-coral-light to-coral bg-clip-text text-transparent">
+        {summary}
+      </p>
+
+      <p className="mt-3 px-4 text-[13px] leading-[1.5] text-ink-primary">
+        Two contributors uploaded footage from adjacent vantage points within a 90-second window.
+        Visual and audio analysis confirms a shared scene; angles complement rather than duplicate.
+        No vehicles or additional bystanders detected. Compiled into a single segment with
+        temporal alignment across sources.
+      </p>
     </article>
   );
 }

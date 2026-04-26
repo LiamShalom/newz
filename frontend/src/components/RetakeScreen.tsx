@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from "react";
 import { X } from "lucide-react";
-import { SubmitButton } from "./SubmitButton";
+import { FlowButton } from "./ui/flow-button";
 
 interface Props {
   blob: Blob;
@@ -36,7 +36,16 @@ export function RetakeScreen({ blob, submitting, onRetake, onSubmit }: Props) {
       >
         <X size={24} strokeWidth={2} />
       </button>
-      <SubmitButton submitting={submitting} onSubmit={onSubmit} />
+      <div
+        className="absolute left-0 right-0 flex justify-center z-20"
+        style={{ bottom: "calc(16px + env(safe-area-inset-bottom))" }}
+      >
+        <FlowButton
+          text="Post"
+          onClick={onSubmit}
+          disabled={submitting}
+        />
+      </div>
     </div>
   );
 }
