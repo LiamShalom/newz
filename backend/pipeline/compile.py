@@ -233,16 +233,20 @@ async def _save_fallback_segment(cluster_id: str, video_url: str | None = None) 
     )
 
 
-async def _stitch_segment_runs(cluster_id: str) -> str | None:
-    """Resolve run_ids saved by the publisher and produce {cluster_id}_compiled.mp4.
+async def _stitch_segment_runs(cluster_id: str) -> list[str]:
+    """Stitch EACH chosen run into its own .mp4. Returns ordered list of /media URLs.
 
-    Returns the /media/* video_url on success, None on failure or no run_ids.
-    Runs OUTSIDE the LLM wall-clock budget — stitch is fast (<1s typical) and
-    must not be cancelled by the orchestrator-chain timeout.
+    Per-run stitching (not cluster-wide concatenation) so the frontend can
+    navigate between angles while still applying ffmpeg normalization within
+    a run (start_offset → end_offset window from one parent file).
+
+    Output: data/clips/{run_id}.mp4 per run, in the same order as run_ids.
+    Runs OUTSIDE the LLM wall-clock budget — must not be cancelled by the
+    orchestrator-chain timeout.
     """
     seg = await db.get_segment_for_cluster(cluster_id)
     if seg is None:
-        return None
+        return []
     raw = seg.get("ordered_clip_ids")
     run_ids = (
         json.loads(raw) if isinstance(raw, str)
@@ -250,15 +254,21 @@ async def _stitch_segment_runs(cluster_id: str) -> str | None:
     )
     if not run_ids:
         log.warning("stitch: no run_ids saved for cluster_id=%s", cluster_id)
-        return None
+        return []
     refs = await _resolve_run_ids_to_stitch_refs(cluster_id, run_ids)
     if not refs:
-        return None
-    output_path = str(config.DATA_DIR / "clips" / f"{cluster_id}_compiled.mp4")
-    stitched = await stitch_clips(refs, output_path)
-    if stitched and Path(stitched).exists() and stitched == output_path:
-        return f"/media/{Path(stitched).name}"
-    return None
+        return []
+
+    urls: list[str] = []
+    # refs is in the same order as run_ids (resolver preserves input order).
+    for run_id, ref in zip(run_ids, refs):
+        output_path = str(config.DATA_DIR / "clips" / f"{run_id}.mp4")
+        result = await stitch_clips([ref], output_path)
+        if result and Path(result).exists() and result == output_path:
+            urls.append(f"/media/{run_id}.mp4")
+        else:
+            log.warning("stitch failed for run_id=%s cluster_id=%s", run_id, cluster_id)
+    return urls
 
 
 async def compile_segment(cluster_id: str) -> None:
@@ -308,20 +318,23 @@ async def compile_segment(cluster_id: str) -> None:
         elif isinstance(b_result, Exception):
             log.warning("caption pipeline failed: %s — using fallback caption", b_result)
 
-        # Phase 2: stitch sequentially (only if orchestrator succeeded). Separate
-        # 30s budget so a slow ffmpeg encode doesn't bleed into LLM phase failures.
+        # Phase 2: stitch each chosen run separately (only if orchestrator succeeded).
+        # Separate 30s budget so a slow ffmpeg encode doesn't bleed into LLM
+        # phase failures. Returns ordered list of /media URLs (one per run).
+        run_video_urls: list[str] = []
         if not isinstance(a_result, Exception):
             try:
-                video_url = await asyncio.wait_for(
+                run_video_urls = await asyncio.wait_for(
                     _stitch_segment_runs(cluster_id),
                     timeout=30.0,
                 )
             except asyncio.TimeoutError:
                 log.warning("stitch TIMEOUT cluster_id=%s after 30s", cluster_id)
-                video_url = None
             except Exception as exc:
                 log.warning("stitch failed cluster_id=%s: %s", cluster_id, exc)
-                video_url = None
+        # First run's video doubles as the segment's headline video_url for
+        # frontends that don't iterate video_urls.
+        video_url = run_video_urls[0] if run_video_urls else None
 
         # Phase 3: re-insert with all updates landed.
         seg = await db.get_segment_for_cluster(cluster_id)

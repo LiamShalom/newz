@@ -343,6 +343,10 @@ async def fetch_recent_segments(limit: int = 50) -> list[dict]:
     out = []
     for r, ids in parsed_rows:
         def _url(clip_id: str) -> str | None:
+            # Phase 4.6: ordered_clip_ids may be run IDs (`{parent}_run_{n}`),
+            # which compile_segment writes as data/clips/{run_id}.mp4.
+            if "_run_" in clip_id:
+                return f"/media/{clip_id}.mp4"
             path = clip_path_map.get(clip_id)
             if not path:
                 return None

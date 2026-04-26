@@ -91,8 +91,9 @@ async def test_compile_segment_happy_path(tmp_path):
         await compile_segment(cluster_id)
 
     assert captured.get("caption", "").startswith("Two contributors")
+    # Per-run stitching: video_url is the first run's .mp4 (one file per run).
     video_url = captured.get("video_url", "")
-    assert isinstance(video_url, str) and video_url.endswith("_compiled.mp4")
+    assert isinstance(video_url, str) and video_url.endswith("p1_run_0.mp4")
     # ordered_clip_ids should round-trip the run_ids unchanged.
     assert captured.get("ordered_clip_ids") == ["p1_run_0"]
 
