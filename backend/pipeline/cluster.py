@@ -41,7 +41,7 @@ log = logging.getLogger(__name__)
 W_VISUAL = 0.55
 W_GPS    = 0.30
 W_TIME   = 0.15
-GPS_RADIUS_M  = 200.0
+GPS_RADIUS_M  = 50.0
 TIME_WINDOW_S = 600.0
 
 

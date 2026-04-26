@@ -20,8 +20,8 @@ GEMINI_API_KEY: str = os.environ.get("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL: str = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
 # Phase 3: Clustering
-CLUSTER_THRESHOLD: float = float(os.environ.get("CLUSTER_THRESHOLD", "0.55"))
-VISUAL_FLOOR: float = float(os.environ.get("VISUAL_FLOOR", "0.80"))
+CLUSTER_THRESHOLD: float = float(os.environ.get("CLUSTER_THRESHOLD", "0.70"))
+VISUAL_FLOOR: float = float(os.environ.get("VISUAL_FLOOR", "0.85"))
 
 # Phase 4.6: Run detection (compile-time grouping of contiguous similar children)
 # Threshold lowered 0.85 → 0.70 to catch gentle scene shifts (lighting, pan,
