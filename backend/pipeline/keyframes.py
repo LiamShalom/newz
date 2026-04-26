@@ -36,8 +36,16 @@ async def _fetch_cluster_clips_with_duration(cluster_id: str) -> list[dict]:
     async with aiosqlite.connect(db.DB_PATH) as conn:
         conn.row_factory = aiosqlite.Row
         cursor = await conn.execute(
-            "SELECT id, path, duration_sec FROM clips "
-            "WHERE cluster_id = ? ORDER BY ts ASC",
+            """
+            SELECT c.id,
+                   COALESCE(NULLIF(c.path, ''), p.path) AS path,
+                   c.duration_sec,
+                   c.start_offset_sec,
+                   c.end_offset_sec
+            FROM clips c
+            LEFT JOIN clips p ON c.parent_id = p.id
+            WHERE c.cluster_id = ? ORDER BY c.ts ASC
+            """,
             (cluster_id,),
         )
         rows = await cursor.fetchall()

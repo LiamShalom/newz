@@ -20,7 +20,12 @@ def _sync_extract_one_frame(path: str, seek_t: float) -> bytes:
     out, _ = (
         ffmpeg
         .input(path, ss=seek_t)
-        .output("pipe:", vframes=1, format="image2", vcodec="mjpeg")
+        .output(
+            "pipe:",
+            vframes=1,
+            format="singlejpeg",  # purpose-built for single-frame pipe; image2 is file-pattern only
+            vf="scale='min(1568,iw)':-2",  # stay under Anthropic's 1568px max-edge recommendation
+        )
         .run(capture_stdout=True, quiet=True)
     )
     return out
