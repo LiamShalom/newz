@@ -28,6 +28,7 @@ Build-order discipline: every phase ships a demoable artifact. If we stop at any
 - [ ] **Phase 3: Clustering + Debug Overlay** - Composite-score clustering with calibration notebook proves staged clips fuse correctly; debug overlay shows the math
 - [ ] **Phase 4: Multi-Agent Compile + Real-Time Feed** - Four-subagent Claude Agent SDK pipeline produces segments; SSE streams pipeline events; feed renders compiled segments live
 - [ ] **Phase 4.5: Sub-Clip Embedding & Visual Caption Pipeline** - Twelve Labs native segmentation produces parent + child embeddings per upload; children cluster at 3s granularity; Angle Agent stitches best children into one compiled video; frame-based Claude caption replaces metadata-only captions
+- [ ] **Phase 4.6: Cluster on Parents + 2-Parent Publish Gate** - Reverse 4.5 clustering unit: parent-level clustering only (children remain as compile-time slicing metadata, no cluster_id); compile fires only when cluster has ≥2 parent members; restores tuned-threshold context from Phase 3 calibration
 - [ ] **Phase 5: Demo Hardening** - OFFLINE_DEMO mode, staged dataset replay button, single `make demo` command, 90s screencast committed
 
 ## Phase Details
@@ -110,6 +111,19 @@ Plans:
 - [ ] 045-01-PLAN.md — DB child schema (parent_id/offsets) + embed.py segmentation + run.py child dispatch
 - [ ] 045-02-PLAN.md — stitch.py + frames.py + caption_pipeline.py + compile.py asyncio.gather wiring
 - [ ] 045-03-PLAN.md — Frontend: LedeTile single-video simplification + api.ts + types.ts deprecation
+
+### Phase 4.6: Cluster on Parents + 2-Parent Publish Gate
+**Goal**: Reverse the Phase 4.5 clustering decision. Parent uploads (asset-scope embeddings) are the unit of clustering; children remain in the DB only as compile-time slicing metadata (parent_id + start/end offsets + per-child embeddings for angle-selector). Compile fires only when a cluster reaches ≥2 distinct parent members — single-uploader clusters never produce a segment. Restores the tuned-threshold context from Phase 3 calibration (which was tuned against parent embeddings before children existed).
+**Depends on**: Phase 4.5
+**Requirements**: CLU-01, CLU-02, CLU-03 (re-anchored to parent unit), CMP-05
+**Success Criteria** (what must be TRUE):
+  1. `embed_worker` returns the parent's asset-scope vector to the cluster dispatcher; child rows are still inserted with embeddings but do NOT enter clustering
+  2. Children carry no `cluster_id` (column null for children); cluster membership is determined exclusively by parent rows
+  3. `compile_segment` is dispatched only when a cluster's parent-member-count is ≥2 — verified by a unit test that asserts no compile fires on a 1-parent cluster
+  4. `fetch_cluster_clips_with_children` correctly resolves children for compile by walking parent_id → cluster_id (not via children's own cluster_id)
+  5. Calibration notebook re-runs cleanly: CLU-07 PASS (4 staged parents fuse, ≥3 members) and CLU-08 PASS (adversarial pair stays separate) with thresholds unchanged
+  6. Debug overlay (`/debug/clusters`) member rows correspond to parent uploads, making the on-stage score-breakdown story crisp ("parent A: composite 0.73" not per-child)
+**Plans**: TBD
 
 ### Phase 5: Demo Hardening
 **Goal**: The full demo runs reliably under hostile conditions — venue WiFi dies, judge's iPhone won't grant permissions, Marengo or Anthropic rate-limits — without any scrambling on stage. `make demo` boots everything; OFFLINE_DEMO serves cached responses; the screencast is the Tier-5 fallback baked into the pitch deck.
