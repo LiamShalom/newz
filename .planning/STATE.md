@@ -67,6 +67,8 @@ progress:
 - SDK v1.2.3: VideoInputRequest and MediaSource import from `twelvelabs.types`, not `twelvelabs.models.embed`
 - embed_worker uses `loop.run_in_executor(None, _sync_embed, ...)` — sync SDK never blocks FastAPI event loop
 - _mock_embedding uses `int.from_bytes` seed for PYTHONHASHSEED-stable deterministic vectors
+- Clustering unit is the parent (asset-scope) Marengo embedding — children stay in DB as compile-time slicing metadata only; child rows never carry a `cluster_id` (locked 2026-04-26 via /gsd-quick 260425-pyj)
+- compile_segment dispatches only when a cluster has ≥2 distinct parent uploads — solo-parent clusters never compile, regardless of child count (locked 2026-04-26 via /gsd-quick 260425-pyj)
 
 ### Open Todos
 
@@ -84,6 +86,7 @@ None.
 |---|-------------|------|--------|-----------|
 | 260425-pw1 | Add anthropic dependency to backend requirements | 2026-04-26 | e2236fe | [260425-pw1-add-anthropic-dependency-to-backend-requ](./quick/260425-pw1-add-anthropic-dependency-to-backend-requ/) |
 | 260425-q06 | Gate seed_demo_segment on OFFLINE_DEMO so prod doesn't ship a broken demo card | 2026-04-26 | 74a4861 | [260425-q06-gate-seed-demo-segment-on-offline-demo-s](./quick/260425-q06-gate-seed-demo-segment-on-offline-demo-s/) |
+| 260425-pyj | Clustering: parent-scope clusters + 2-parent compile gate | 2026-04-26 | 3be41dc | [260425-pyj-clustering-parent-scope-clusters-2-paren](./quick/260425-pyj-clustering-parent-scope-clusters-2-paren/) |
 
 ### Risks Being Tracked
 
@@ -95,7 +98,7 @@ None.
 ## Session Continuity
 
 **Last session ended:** 2026-04-25, after completing Phase 3 (clustering engine + debug overlay + calibration notebook)
-**Last activity:** 2026-04-26 - Completed quick task 260425-q06: Gate seed_demo_segment on OFFLINE_DEMO so prod doesn't ship a broken demo card
+**Last activity:** 2026-04-26 - Completed quick task 260425-pyj: Clustering parent-scope clusters + 2-parent compile gate (architectural pivot)
 **Next action:** Push to Railway (redeploy) to restore vision-grounded captions in prod; then resume `/gsd-execute-phase 4` — Wave 1 (backend compile pipeline + SSE bus) then Wave 2 (frontend Segment feed)
 
 **Key files to load on resume:**
