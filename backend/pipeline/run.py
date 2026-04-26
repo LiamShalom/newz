@@ -46,10 +46,13 @@ async def run_pipeline(clip_id: str) -> None:
             "stage": "embedded",
         })
 
-        compile_candidates: set[str] = set()
+        # Vote across this upload's children: the cluster that got the most of
+        # them is the parent's "home". A clip spanning two events still fires
+        # compile on the dominant cluster instead of whichever we iterated first.
+        votes: dict[str, int] = {}
         for cid, vec in child_pairs:
             cluster_id = await cluster_worker(cid, vec)
-            compile_candidates.add(cluster_id)
+            votes[cluster_id] = votes.get(cluster_id, 0) + 1
             log.info(
                 "pipeline cluster done child_id=%s cluster_id=%s",
                 cid, cluster_id,
@@ -61,12 +64,15 @@ async def run_pipeline(clip_id: str) -> None:
             "stage": "clustered",
         })
 
-        # Fire compile for any cluster that crossed the threshold — first win takes it
-        for cluster_id in compile_candidates:
-            if await _should_compile(cluster_id):
-                asyncio.create_task(compile_segment(cluster_id))
-                log.info("compile triggered cluster_id=%s", cluster_id)
-                break  # only one compile per upload batch
+        if votes:
+            parent_cluster_id = max(votes, key=lambda k: votes[k])
+            log.info(
+                "pipeline parent home cluster_id=%s votes=%d/%d",
+                parent_cluster_id, votes[parent_cluster_id], sum(votes.values()),
+            )
+            if await _should_compile(parent_cluster_id):
+                asyncio.create_task(compile_segment(parent_cluster_id))
+                log.info("compile triggered cluster_id=%s", parent_cluster_id)
 
     except Exception as exc:
         log.exception("pipeline failed clip_id=%s", clip_id)

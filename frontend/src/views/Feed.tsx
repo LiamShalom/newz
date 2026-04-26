@@ -9,6 +9,7 @@ import { EmptyState } from "../components/EmptyState";
 import { FeedShell } from "../components/FeedShell";
 import { Masthead } from "../components/Masthead";
 import { RecordFAB } from "../components/RecordFAB";
+import { UploadFAB } from "../components/UploadFAB";
 
 export function Feed() {
   const [segments, setSegments] = useState<(Segment & { url: string })[]>([]);
@@ -76,6 +77,10 @@ export function Feed() {
         />
       )}
       <RecordFAB />
+      <UploadFAB
+        fallbackLat={coordsRef.current?.lat}
+        fallbackLng={coordsRef.current?.lng}
+      />
     </>
   );
 }

@@ -2,84 +2,113 @@
 spike: 002
 name: compile-baseline
 type: standard
-validates: "Given a 3-clip cluster, when compile_segment runs N=3, then we see per-stage ms: keyframes, caption-writer, orchestrator-chain"
-verdict: VALIDATED
+validates: "Given a 3-clip cluster, when compile_segment runs (gather of _run_agents ‖ stitch_clips ‖ generate_caption) N times, then we see per-track ms vs. a serial baseline — quantifying what the Phase 4.5 parallelization actually buys"
+verdict: REWIRED — pending re-run
 related: [001]
-tags: [compile, claude-agent-sdk, latency]
+tags: [compile, claude-agent-sdk, latency, parallelization]
 ---
 
 # Spike 002: compile-baseline
 
 ## What This Validates
-Given a 3-clip throwaway cluster (built from `backend/seed/demo/realworld-{1,2,3}.mp4`), when the compile pipeline runs N times, then we see per-stage ms broken into:
-- `keyframe_ms` — `extract_cluster_keyframes` (ffmpeg, parallel per clip)
-- `caption_ms` — `_run_caption_writer_with_vision` (single sonnet+vision call)
-- `orchestrator_ms` — `_run_orchestrator_chain` (angle-selector → editor → publisher; one SDK session)
-- `total_ms` — sum
 
-This is intentionally coarser than per-subagent timing for the orchestrator. Reason: the production orchestrator runs all 3 subagents inside a single sonnet conversation, so splitting it into 3 separate `query()` calls would measure a *different* system. If `orchestrator_ms` dominates, a follow-up spike can break it apart by parsing SDK message streams.
+Given a 3-clip throwaway cluster (built from `backend/seed/demo/realworld-{1,2,3}.mp4`), the bench runs the **new compile_segment shape** — three coroutines inside `asyncio.gather` — and measures per-track wall-clock against a serial baseline.
+
+| Track | What runs | Source |
+|-------|-----------|--------|
+| **A** | `_run_agents` — caption-writer + angle-selector → editor → publisher | `compile.py:297-304` |
+| **B** | `stitch_clips` — ffmpeg concat to `.webm` | `stitch.py:57` |
+| **C** | `generate_caption` — frame-based Haiku/Sonnet visual caption | `caption_pipeline.py:89` |
+
+Two modes per run, on independent fixtures:
+
+- **parallel** — replicates `compile_segment`'s body with per-track timing wrappers and a configurable cap (default 300s; bypasses the prod 60s `wait_for` so we get raw numbers instead of always-`TimeoutError`).
+- **serial** — same three coroutines awaited sequentially. Apples-to-apples baseline for the pre-overhaul shape.
+
+The headline numbers:
+
+```
+parallel_total_ms ≈ max(track_a, track_b, track_c)
+serial_total_ms   ≈ track_a + track_b + track_c
+saved_ms          = serial - parallel
+speedup_x         = serial / parallel
+```
+
+If `track_a` dominates (orchestrator chain ≈ 112s), the gather's wall-clock floor IS `track_a`, and the speedup is just `(track_b + track_c) / track_a` — which is small until track A is shrunk.
+
+## Why this rewire was needed
+
+The earlier version of `bench.py` called `_run_caption_writer_with_vision` and `_run_orchestrator_chain` directly, sequentially, with manual timers — it never invoked `compile_segment`, never entered the `asyncio.gather` block, and never ran `stitch_clips` or `generate_caption`. The numbers it produced were identical in shape to pre-overhaul timing. See `.planning/debug/spike-002-bottleneck.md` for the full diagnosis.
+
+This rewire fixes that by:
+1. Replicating `compile_segment`'s body inline (so the 60s prod cap can be raised for measurement).
+2. Wrapping each branch with a per-track timer.
+3. Running a paired serial baseline on a separate fixture, same RNG-seeded embeddings.
+4. Inserting `clip_embeddings` rows + populating `CLUSTERS[cluster_id]` so `centroid is not None` and Track C runs the real path (not the `asyncio.sleep(0)` short-circuit).
 
 ## How to Run
+
 From repo root, with `ANTHROPIC_API_KEY` set in env (read by claude-agent-sdk via the bundled CLI):
+
 ```bash
-# Real run (costs Anthropic API credit — sonnet x2 + haiku x1 + sonnet+vision per run)
+# Default: 3 parallel + 3 serial runs, 3 clips each. Cap at 300s for raw numbers.
 ./backend/.venv/bin/python .planning/spikes/002-compile-baseline/bench.py -n 3
 
-# Smaller cluster (1 clip — useful sanity)
-./backend/.venv/bin/python .planning/spikes/002-compile-baseline/bench.py -n 2 --clips 1
+# Parallel only (skip serial baseline)
+./backend/.venv/bin/python .planning/spikes/002-compile-baseline/bench.py -n 3 --mode parallel
 
-# Keep fixture for inspection
-./backend/.venv/bin/python .planning/spikes/002-compile-baseline/bench.py -n 1 --keep
+# Reproduce production exactly (60s cap → expect TimeoutError on Track A)
+./backend/.venv/bin/python .planning/spikes/002-compile-baseline/bench.py -n 1 --cap 60
+
+# Smaller cluster, keep fixture for inspection
+./backend/.venv/bin/python .planning/spikes/002-compile-baseline/bench.py -n 1 --clips 1 --keep
 ```
 
-Each run inserts one throwaway cluster + N clips with `bench`-prefixed IDs into the live `newz.db`, runs compile, then deletes the cluster + clips + segment. Embeddings are NOT inserted because compile.py never reads them.
+Each run inserts one cluster + N clips + N `clip_embeddings` (random 512-d unit vectors, seeded by `--seed`) and registers a `ClusterCache` in memory. Cleanup deletes all four (cluster, clips, embeddings, segment) unless `--keep`.
+
+Cost per parallel run: orchestrator (sonnet x2 + haiku) + caption-writer (sonnet+vision) + generate_caption (haiku x ≤3 + sonnet) — Track C adds Haiku calls on top of the old harness.
 
 ## What to Expect
-- Per-run line with the 4 timing slices.
-- Markdown summary table with min/p50/p95/max.
-- "Share of total (median)" — instantly tells us which sub-stage dominates.
-- The 60s `compile_segment` cap (`asyncio.wait_for(..., timeout=60.0)`) is bypassed in this spike — we want raw timings even if they exceed the cap.
+
+- Per-run line per mode with track-A/B/C ms + total ms + `prod_timeout=YES/no` flag (parallel only).
+- Two summary tables (PARALLEL, SERIAL) with min/p50/p95/max for each track + total.
+- Comparison block: `serial_total_ms`, `parallel_total_ms`, `saved`, `speedup`.
+- Failures listed at the bottom (orchestrator publisher silently no-call'ing `save_segment`, generate_caption falling through to fallback caption, etc).
 
 ## Investigation Trail
-- Built fixture-driven harness that calls the same module-level functions used by `compile_segment` (`extract_cluster_keyframes`, `_run_caption_writer_with_vision`, `_run_orchestrator_chain`) with timers between them. No production code modified.
-- Decided against splitting the orchestrator into 3 separate query calls — that would diverge from production's single-session SDK overhead. Coarse first, finer later if warranted.
 
-## Results — VALIDATED ✓ (with critical findings)
+- **Original bench** measured the orchestrator sub-stages directly, never the new gather. See debug session `.planning/debug/spike-002-bottleneck.md`.
+- **Rewire** mirrors `compile_segment`'s body in the harness rather than calling `compile_segment` itself. Reasons: (1) prod's 60s `asyncio.wait_for` would always trip with `track_a ≈ 112s`, (2) per-track timing requires wrapping each branch which can't be done from outside `compile_segment`, (3) we want a clean serial baseline running the *same* coroutines.
+- **Cost of rewire**: bench drifts if `compile_segment`'s body changes shape (e.g. adds a fourth track). Acceptable — this is a spike, not a regression suite.
 
-Real run, 3 attempts, 3-clip clusters from `backend/seed/demo/realworld-{1,2,3}.mp4`:
+## Results
 
-```
-| stage          |       min |       p50 |       p95 |       max |
-|----------------|----------:|----------:|----------:|----------:|
-| keyframes      |        61 |        61 |        61 |        61 |
-| caption        |      7076 |      7076 |      7076 |      7076 |
-| orchestrator   |    112575 |    112575 |    112575 |    112575 |
-| total          |    119712 |    119712 |    119712 |    119712 |
-```
+### Pre-rewire (deprecated — these numbers measure the wrong system)
 
-(Only run 3/3 succeeded end-to-end; runs 1 and 2 failed at the publisher — see below.)
+The earlier run on the same hardware/seed clips: orchestrator 112575 ms, caption 7076 ms, keyframes 61 ms, total 119712 ms. Now understood as Track A ≈ 120s when run serially. Track A alone exceeds the 60s prod cap.
 
-### Findings
+### Post-rewire
 
-1. **Orchestrator chain is the entire pipeline cost.**
-   - keyframes: 61 ms (0.1%)
-   - caption-writer: 7076 ms (5.9%)
-   - orchestrator (angle-selector → editor → publisher): **112575 ms (94.0%)**
-   - The 60s `asyncio.wait_for(_run_agents, timeout=60.0)` cap in `compile_segment` is **smaller than orchestrator p50** on this hardware/this prompt. In production this exact run would have hit the timeout and fallen back to `_save_fallback_segment`.
+Pending re-run. Expectations from the orchestrator-dominant breakdown:
 
-2. **Compile dwarfs embed by ~25–40×.** Spike 001 measured embed at 2.5s p50; compile is 120s. Time spent optimizing embed is a rounding error against compile.
+- `track_a_ms` ≈ 110-120s (unchanged — `_run_agents` body is the same)
+- `track_b_ms` ≈ 1-3s (ffmpeg concat of three short demo clips)
+- `track_c_ms` ≈ 5-15s (Haiku x3 frame description + Sonnet headline)
+- `parallel_total_ms` ≈ `track_a_ms` (gather wall-clock = max branch)
+- `serial_total_ms` ≈ sum of all three ≈ `track_a_ms + 6-18s`
+- `speedup` ≈ 1.05-1.15x — the gather saves ~10s, but that's a rounding error against the 120s Track A floor
+- `would_timeout_at_60s` = YES on every run until Track A drops below 60s
 
-3. **Publisher reliability is broken at the prod level.** 2 of 3 runs raised `compile finished but no segment row for cluster <id> — Publisher may have failed to call save_segment`. The orchestrator returned a non-error `ResultMessage`, but the haiku publisher subagent never actually invoked `mcp__newz_tools__save_segment`. This is a prod bug — when production hits this, `_run_orchestrator_chain` raises and `compile_segment` falls through to the fallback. Symptom would be: AI-written caption silently replaced with the generic "Multi-angle event captured by N contributors..." fallback.
-
-4. **The pre-existing 60s cap is misleading.** It's not "headroom for the multi-agent pipeline" — it's the dominant constraint, and we're 2× over budget. Either the cap raises, or the orchestrator design changes.
+If those numbers come back materially different, update this section and `.planning/debug/spike-002-bottleneck.md` Resolution.
 
 ### Pivot signals (read this, don't act yet)
 
-- The user's original framing — "caption-writer ‖ angle-selector, drop editor, demote publisher" — is *exactly* the right shape of fix for what this data shows. The orchestrator chain is sequential 3-subagent sonnet+sonnet+haiku. Parallelizing or removing stages directly attacks the 112s.
-- Compression / URL upload optimizations on embed (the spike-001 finding) save ~1.4s. Worth doing only if compile is already sub-30s. Right now it's table-scraps next to the 112s problem.
-- Publisher's failure mode needs investigating before any timing fix lands — otherwise we'll just be making a still-broken pipeline faster.
+- The parallelization buys roughly `track_b + track_c` ≈ 6-18 seconds. That's real, but irrelevant while Track A is at 120s.
+- The real lever for hitting the 30s demo target is **shrinking Track A**: parallelize sub-agents inside the orchestrator chain, drop the editor stage, demote publisher to a direct DB write, or replace the SDK chain with a single hand-orchestrated query.
+- Compression / URL upload optimizations on embed (Spike 001) save ~1.4s. Still table-scraps.
 
 ### Caveats
 
-- N=3 with 67% failure rate is not statistically robust. The 112s number is a single observation. Could be longer or shorter on retry. But the order of magnitude is unambiguous — even a 2× variance still puts us over the 60s cap.
-- The harness deliberately bypasses the 60s cap to get raw numbers. In real `compile_segment`, this run would have raised TimeoutError around the 60s mark and the `orchestrator_ms` measurement would have been clipped.
+- Track C uses RNG-seeded random embeddings (not real Marengo vectors). The `_select_caption_children` cosine ranking will be approximately random across runs, but the *timing* is unaffected — generate_caption still does Haiku x3 + Sonnet regardless of which children are selected.
+- The bench inserts/deletes against the live `newz.db` with a `bench` prefix on all IDs. Don't run while users are uploading.
+- Setting `--cap 60` reproduces the exact prod failure mode (TimeoutError on Track A). Useful for confirming `_save_fallback_segment` would always be triggered today.
