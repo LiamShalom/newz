@@ -1,5 +1,7 @@
+import { useRef } from "react";
 import type { Segment } from "../types";
 import { SegmentCard } from "./SegmentCard";
+import { useMostVisibleIndex } from "../hooks/useMostVisibleIndex";
 
 export function FeedShell({
   segments,
@@ -10,6 +12,12 @@ export function FeedShell({
   viewerLat?: number;
   viewerLng?: number;
 }) {
+  const itemRefs = useRef<(HTMLLIElement | null)[]>([]);
+  const activeIdx = useMostVisibleIndex(itemRefs, segments.length);
+  // Until the observer reports anything, default to the top card so the
+  // feed isn't silent on first paint.
+  const resolvedActive = activeIdx === -1 ? 0 : activeIdx;
+
   return (
     <main
       className="mx-auto max-w-[640px] px-5 pt-5"
@@ -17,12 +25,17 @@ export function FeedShell({
     >
       <ol className="space-y-10">
         {segments.map((s, i) => (
-          <li key={s.id}>
+          <li
+            key={s.id}
+            ref={(el) => {
+              itemRefs.current[i] = el;
+            }}
+          >
             <SegmentCard
               segment={s}
               viewerLat={viewerLat}
               viewerLng={viewerLng}
-              priority={i === 0}
+              active={i === resolvedActive}
             />
           </li>
         ))}
