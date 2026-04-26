@@ -49,3 +49,31 @@ async def test_compute_runs_for_cluster_groups_by_parent():
     assert runs[0].id == "p1_run_0"
     assert runs[0].parent_id == "p1"
     assert runs[0].member_child_ids == ["p1_child_0", "p1_child_3"]
+
+
+@pytest.mark.asyncio
+async def test_compute_runs_synthesizes_run_for_childless_parent():
+    a = _unit(2)
+    fake_rows = [
+        {"id": "p2", "parent_id": None, "parent_path": "/x/p2.mp4",
+         "start_offset_sec": None, "end_offset_sec": None,
+         "lat": 0, "lng": 0, "ts": 0, "path": "/x/p2.mp4"},
+    ]
+    fake_vecs = {"p2": a}
+
+    async def fake_fetch(cluster_id):
+        return fake_rows
+
+    async def fake_get_embedding(clip_id):
+        return fake_vecs.get(clip_id)
+
+    with patch("backend.pipeline.runs.db.fetch_cluster_clips_with_children",
+               side_effect=fake_fetch), \
+         patch("backend.pipeline.runs.db.get_embedding",
+               side_effect=fake_get_embedding):
+        runs = await compute_runs_for_cluster("cluster-y")
+    assert len(runs) == 1
+    assert runs[0].id == "p2_run_0"
+    assert runs[0].parent_id == "p2"
+    assert runs[0].member_child_ids == []
+    assert runs[0].parent_path == "/x/p2.mp4"
