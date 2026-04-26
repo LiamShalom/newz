@@ -1,6 +1,6 @@
 ---
 slug: stitch-clips-bottleneck
-status: investigating
+status: root_cause_found
 trigger: |
   stitch_clips dominates compile pipeline wall-clock at ~66s p50, blowing the
   60s prod timeout in 3/3 parallel bench runs and the 30s CLAUDE.md hard cap by
@@ -31,18 +31,6 @@ PARALLEL (ms, N=3)
 | TOTAL (parallel)       |  66421 |  66512 |  66832 |
 
 would TimeoutError in prod (cap=60s): 3/3
-
-SERIAL (ms, N=3)
-| stage                  |    min |    p50 |    max |
-|------------------------|-------:|-------:|-------:|
-| track_a (_run_agents)  |   2827 |   2894 |   4200 |
-| track_b (stitch_clips) |  66746 |  66834 |  67038 |
-| track_c (gen_caption)  |    306 |    316 |    356 |
-| TOTAL (serial)         |  69968 |  70248 |  71302 |
-
-Parallel vs serial (medians):
-  saved   = 3736 ms (~3.7s)
-  speedup = 1.06x
 ```
 
 Implication: Track B dominates so completely that parallelization barely helps. The fix MUST be inside `stitch_clips`, not in the orchestration.
@@ -51,7 +39,7 @@ Implication: Track B dominates so completely that parallelization barely helps. 
 
 - **Active phase:** Phase 4 — Multi-Agent Compile + Real-Time Feed.
 - **Hard cap:** 30s wall-clock on the entire compile pipeline (CLAUDE.md). Currently >2x over budget on stitch alone.
-- **Stack:** FastAPI backend, Python 3.11, likely ffmpeg via subprocess for stitching.
+- **Stack:** FastAPI backend, Python 3.11, ffmpeg via `ffmpeg-python` subprocess.
 - **Test corpus:** 3 clips/run, sourced from `/Users/liamshalom/Hacktech/data`.
 - **Bench script:** `.planning/spikes/002-compile-baseline/bench.py`.
 
@@ -59,25 +47,29 @@ Implication: Track B dominates so completely that parallelization barely helps. 
 
 ```yaml
 hypothesis: |
-  stitch_clips is calling ffmpeg with re-encoding (libx264 / libx265 / similar)
-  rather than stream-copy, OR is doing per-clip transcoding before concat. At
-  ~22s per clip on three short clips, this is consistent with full-pipeline
-  re-encoding instead of `-c copy` concat. Alternative hypotheses: (1) running
-  ffmpeg in a thread that doesn't release the GIL despite being subprocess —
-  unlikely since subprocess is fine; (2) downloading clips from disk via slow
-  IO path; (3) demux+remux via concat protocol with audio re-sample.
+  CONFIRMED: stitch_clips uses the concat *demuxer* correctly (good!) but pairs
+  it with vcodec="libvpx-vp9" + acodec="libopus", which forces a full software
+  VP9 re-encode of the entire concatenated stream. libvpx-vp9 at default speed
+  is ~CPU-bound at single-digit fps for 720p input — 45s of input → ~66s
+  encode. The concat demuxer doesn't auto-stream-copy; the vcodec arg dictates.
 test: |
-  Read backend stitch_clips source. Look for the ffmpeg invocation: codec args,
-  filter graph (-vf / -filter_complex), -c copy vs -c:v libx264, concat list
-  vs concat filter, audio handling. Time individual sub-steps if possible.
+  Read backend/pipeline/stitch.py — confirmed line 45:
+    .output(output_path, vcodec="libvpx-vp9", acodec="libopus", **{"b:v": "1M"})
+  Reproduced bottleneck via direct ffmpeg call: 66.10s wall-clock, 118s user CPU.
+  Tested H.264 ultrafast normalize-and-concat: 0.52s wall-clock (~127x faster).
 expecting: |
-  Likely (1) re-encode rather than stream-copy concat, or (2) using the concat
-  filter (which forces re-encode) when source clips are already H.264-aligned
-  and could use the concat demuxer with -c copy for sub-second stitching.
+  Two issues compound:
+    (a) libvpx-vp9 software encode is the slow path for any container.
+    (b) Source clips have mismatched specs (720x1296@30, 476x848@24, 720x1280@25
+        with B-frames), so naive -c copy stream-copy concat is NOT safe — the
+        clips need normalization (resize/pad/fps) before concat or after.
+  Fix: switch to libx264 with -preset ultrafast, normalize via concat filter
+  (handles mismatched specs), output .mp4. Bonus: iOS Safari (the demo target,
+  CLAUDE.md hard constraint) prefers MP4 over WebM natively.
 next_action: |
-  Locate stitch_clips in backend/. Read the ffmpeg invocation. Identify whether
-  it's re-encoding and whether stream-copy concat is feasible given the clip
-  format coming off iPhone Safari MediaRecorder (likely mp4/h264 or webm/vp9).
+  Apply fix: rewrite _sync_stitch to use H.264 ultrafast + concat filter,
+  switch output extension to .mp4, update compile.py:381 accordingly.
+  Verify with bench re-run after fix.
 reasoning_checkpoint: ""
 tdd_checkpoint: ""
 ```
@@ -86,13 +78,42 @@ tdd_checkpoint: ""
 
 - timestamp: 2026-04-25 17:57 — Bench results above. p50=66.5s parallel, p50=66.8s serial. 3/3 parallel runs exceed 60s prod cap.
 - timestamp: 2026-04-25 — Spike 002 bench script `.planning/spikes/002-compile-baseline/bench.py` ran successfully against `/Users/liamshalom/Hacktech/data`.
+- timestamp: 2026-04-25 18:10 — Read `backend/pipeline/stitch.py:42-47`. Confirmed: `ffmpeg.input(list_path, format="concat", safe=0).output(output_path, vcodec="libvpx-vp9", acodec="libopus", **{"b:v": "1M"})`. The concat *demuxer* is used (good — no scale/fps filters), but the vcodec is libvpx-vp9 which forces full software re-encode. **This is the root cause.**
+- timestamp: 2026-04-25 18:11 — Probed seed clips. All H.264 but mismatched: clip1=720x1296@30 Constrained Baseline, clip2=476x848@24 Constrained Baseline, clip3=720x1280@25 High (B-frames=2). **Stream-copy `-c copy` is NOT safe** here without normalization.
+- timestamp: 2026-04-25 18:12 — Reproduced current behavior via direct ffmpeg: `f concat | -c:v libvpx-vp9 -b:v 1M -c:a libopus` = 66.10s wall-clock, 118.81s user CPU. Matches bench p50 exactly (~66.5s).
+- timestamp: 2026-04-25 18:12 — Tested fix candidate: 3-input filter_complex with scale-pad-fps normalize then concat, encode with `-c:v libx264 -preset ultrafast -crf 28 -pix_fmt yuv420p -movflags +faststart`. Result: **0.52s wall-clock**, output 13MB, 720x1280@30 valid 45.5s mp4. Faster than current by ~127x.
 
 ## Eliminated
 
 - Track A (_run_agents) is not the bottleneck (3.15s p50, fails fast with caption-writer error).
 - Track C (generate_caption) is not the bottleneck (0.39s p50).
 - Parallelization itself is fine; the issue is that Track B's wall-clock dwarfs the others.
+- Slow IO is NOT the cause (ffmpeg user CPU = 118s, well above wall-clock — clearly compute-bound).
+- Audio resample is NOT the dominant cost (libopus is fast vs libvpx).
+- GIL / asyncio executor is NOT the cause (wall-clock matches direct ffmpeg call).
+
+## Root Cause
+
+`backend/pipeline/stitch.py:45` calls ffmpeg with `vcodec="libvpx-vp9"`, which forces full software VP9 re-encode of the concatenated 45s of 720p video. libvpx-vp9 at default speed runs at ~3-5 fps for 720p → ~66s. The concat *demuxer* (correct choice for this layout) honors whatever codec args you pass to `.output()`; it does not auto-select stream-copy.
+
+Compounding issue: source clips have mismatched resolution / framerate / profile, so naive `-c copy` stream-copy is not safe — they need normalization first.
+
+## Proposed Fix
+
+Rewrite `_sync_stitch` to:
+1. Use a 3-input `filter_complex` with `scale → pad → setsar=1 → fps=30` per input, then `concat=n=N:v=1:a=0`.
+2. Encode with `-c:v libx264 -preset ultrafast -crf 28 -pix_fmt yuv420p -movflags +faststart`.
+3. Drop audio (matches CLAUDE.md scope — no audio rendering called out).
+4. Switch output extension from `.webm` to `.mp4`.
+
+Bonus alignment with project constraints:
+- iOS Safari (CLAUDE.md hard constraint demo target) plays H.264 MP4 natively without codec negotiation; it does support WebM/VP9 in iOS 14.5+ but H.264 is the safer demo path.
+- New stitch budget: ~0.5-1s for 3 clips. Leaves ~29s of the 30s cap for Tracks A and C.
+
+## Specialist Hint
+
+`python` — engineering review of subprocess invocation, error handling, and file extension contract change at the call site (`compile.py:381`).
 
 ## Resolution
 
-(pending)
+(pending user confirmation to apply)
