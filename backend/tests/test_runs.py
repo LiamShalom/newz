@@ -81,3 +81,19 @@ def test_multiple_parents_independent_runs():
     runs = find_runs(children, threshold=0.85)
     assert {r.id for r in runs} == {"p1_run_0", "p2_run_0"}
     assert {r.parent_id for r in runs} == {"p1", "p2"}
+
+
+def test_empty_children_returns_empty():
+    assert find_runs([], threshold=0.85) == []
+
+
+def test_single_child_becomes_one_run():
+    v = _unit(11)
+    children = [{
+        "id": "p1_child_0", "parent_id": "p1", "parent_path": "/x/p1.mp4",
+        "start_offset_sec": 0.0, "end_offset_sec": 3.0, "vec": v,
+    }]
+    runs = find_runs(children, threshold=0.85)
+    assert len(runs) == 1
+    assert runs[0].member_child_ids == ["p1_child_0"]
+    assert runs[0].id == "p1_run_0"
