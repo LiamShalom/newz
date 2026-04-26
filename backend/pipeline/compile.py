@@ -360,13 +360,13 @@ async def _stitch_segment_runs(cluster_id: str) -> list[str]:
 
 
 async def compile_segment(cluster_id: str) -> None:
-    """Top-level entry. LLM work in parallel under 120s cap, then stitch sequentially.
+    """Top-level entry. LLM work in parallel under 300s cap, then stitch sequentially.
 
-    Phase 1 (LLM, 120s budget): orchestrator chain ‖ caption pipeline.
+    Phase 1 (LLM, 300s budget): orchestrator chain ‖ caption pipeline.
         Orchestrator chain saves segment row with run_ids + empty title/caption.
         Caption pipeline returns {caption, location, [title]} or None.
-        Budget bumped from 60s → 120s after observing chain regularly hits
-        50-60s under real LLM latency variance.
+        Budget set to 300s to swallow long LLM latency variance and
+        retry/throttle bursts without falling back to parent-id segments.
     Phase 2 (deterministic, 30s budget): stitch chosen runs into compiled.mp4.
         Pulled out of the LLM gather because stitch is fast and must not be
         cancelled by orchestrator-chain timeouts.
@@ -391,7 +391,7 @@ async def compile_segment(cluster_id: str) -> None:
                 _branch_caption(cluster_id),
                 return_exceptions=True,
             ),
-            timeout=120.0,
+            timeout=300.0,
         )
         a_result, b_result = results
 
@@ -460,7 +460,7 @@ async def compile_segment(cluster_id: str) -> None:
         )
 
     except asyncio.TimeoutError:
-        log.warning("compile TIMEOUT cluster_id=%s after 120s — using fallback", cluster_id)
+        log.warning("compile TIMEOUT cluster_id=%s after 300s — using fallback", cluster_id)
         segment_id = await _save_fallback_segment(cluster_id, video_url)
     except Exception:
         log.exception("compile FAILED cluster_id=%s — using fallback", cluster_id)
