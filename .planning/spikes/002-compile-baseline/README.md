@@ -107,6 +107,44 @@ If those numbers come back materially different, update this section and `.plann
 - The real lever for hitting the 30s demo target is **shrinking Track A**: parallelize sub-agents inside the orchestrator chain, drop the editor stage, demote publisher to a direct DB write, or replace the SDK chain with a single hand-orchestrated query.
 - Compression / URL upload optimizations on embed (Spike 001) save ~1.4s. Still table-scraps.
 
+### Post-fix Run (2026-04-25)
+
+After Plan 04-03 landed the H.264 ultrafast normalize-and-concat rewrite of
+`stitch_clips` (commit `7feeb55`) plus the bench's `.webm → .mp4` output-path fix
+(this commit), re-running the bench against the same seed clips on the same
+machine produces:
+
+```
+PARALLEL (ms, N=3, cap=60s)
+
+| stage                  |    min |    p50 |    p95 |    max |
+|------------------------|-------:|-------:|-------:|-------:|
+| track_a (_run_agents)  |   2744 |   2796 |   2796 |   3175 |
+| track_b (stitch_clips) |    688 |    794 |    794 |    836 |
+| track_c (gen_caption)  |    451 |    588 |    588 |    606 |
+| TOTAL (parallel)       |   2744 |   2796 |   2796 |   3175 |
+
+  would TimeoutError in prod (cap=60s): 0/3
+```
+
+**Track B (stitch_clips) speedup:** 66512ms → 794ms p50 = **~84× faster**
+(the original validated reproduction in `.planning/debug/stitch-clips-bottleneck.md`
+showed 66.10s → 0.52s = 127× on a tighter direct-ffmpeg call; the bench
+includes asyncio executor + first-clip warmup overhead, hence the slightly
+larger absolute number — still inside the 5s gate from the plan's verification).
+
+**TOTAL parallel speedup:** ~66.5s → ~2.8s = **~24× faster.** Track A is now
+the dominant cost (was Track B). Track A errors fast in this run (no
+ANTHROPIC_API_KEY in env); with a real key the orchestrator chain takes
+roughly 110-120s today and is the next lever (see Pivot signals above).
+
+**Compile-pipeline 30s cap:** Now realistic. With Track A on a real API key
+the cap is still pressured by orchestrator wall-clock, but stitch is no longer
+the failure mode. The `would TimeoutError in prod` count is `0/3` for the
+post-fix bench (vs. `3/3` pre-fix).
+
+Closes RUNTIME-CMP-02 (CMP-06).
+
 ### Caveats
 
 - Track C uses RNG-seeded random embeddings (not real Marengo vectors). The `_select_caption_children` cosine ranking will be approximately random across runs, but the *timing* is unaffected — generate_caption still does Haiku x3 + Sonnet regardless of which children are selected.

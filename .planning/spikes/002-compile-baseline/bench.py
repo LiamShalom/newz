@@ -174,7 +174,7 @@ async def _build_tracks(cluster_id: str) -> tuple[list[dict], np.ndarray | None,
 
     cache = CLUSTERS.get(cluster_id)
     centroid = cache.centroid if cache else None
-    output_path = str(config.DATA_DIR / "clips" / f"{cluster_id}_compiled.webm")
+    output_path = str(config.DATA_DIR / "clips" / f"{cluster_id}_compiled.mp4")
     return stitch_refs, centroid, children, output_path
 
 
