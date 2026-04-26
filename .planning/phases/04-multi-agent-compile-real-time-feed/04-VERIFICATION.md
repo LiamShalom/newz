@@ -12,6 +12,8 @@ gaps:
     source: ".planning/debug/captions-multi-angle-template.md"
     evidence: "compile.py:401-420 unconditionally overwrites Track A's vision caption with Track C's result, including when Track C falls back. Track C fallback at caption_pipeline.py:171 emits the literal 'Multi-angle event captured by N contributor(s)' string. Same template duplicated in compile.py:328 _save_fallback_segment and seed/demo_segment.py:50-53."
     requirement: CMP-08
+    closed: 2026-04-25
+    closed_in: 04-03
   - id: RUNTIME-CMP-02
     truth: "stitch_clips completes inside the 30s compile-pipeline budget"
     severity: critical
@@ -19,6 +21,8 @@ gaps:
     source: ".planning/debug/stitch-clips-bottleneck.md"
     evidence: "Spike 002 bench: stitch_clips p50 = 66.5s parallel / 66.8s serial across N=3 runs of 3 clips each. 3/3 parallel runs exceed the 60s prod cap. Root cause: stitch.py:45 uses vcodec='libvpx-vp9' forcing software VP9 re-encode (~3-5 fps for 720p). Validated fix (H.264 ultrafast normalize-and-concat) measured at 0.52s wall-clock — 127x faster."
     requirement: CMP-06
+    closed: 2026-04-25
+    closed_in: 04-03
 deferred:
   - truth: "compile_segment checks OFFLINE_DEMO=true flag and skips query() call"
     addressed_in: "Phase 5"
@@ -231,6 +235,8 @@ Two runtime regressions surfaced after initial verification via debug sessions:
 | RUNTIME-CMP-02 | critical | stitch_clips must complete inside the 30s compile-pipeline budget (currently p50 = 66.5s — >2x over the cap, 3/3 prod-cap timeouts) | `.planning/debug/stitch-clips-bottleneck.md` |
 
 Both have validated fixes (full RCA + reproduction in the linked debug files). Closure planned in `04-03-PLAN.md`.
+
+**Status (2026-04-25 post-04-03 execution):** Both gaps closed. Bench shows stitch p50 < 5s; caption grounding test passes; demo seed and fallback paths emit place+date captions only.
 
 ### Gaps Summary
 
