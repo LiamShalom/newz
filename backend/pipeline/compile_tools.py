@@ -62,12 +62,13 @@ async def get_clip_metadata(args: dict) -> dict:
     "save_segment",
     (
         "Persist the final compiled segment to the database. "
-        "Call EXACTLY ONCE with all five required fields. "
-        "Only the Publisher subagent is allowed to call this tool (CMP-03)."
+        "Call EXACTLY ONCE with all required fields. "
+        "Only the Publisher subagent is allowed to call this tool."
     ),
     {
         "cluster_id":       str,
-        "ordered_clip_ids": list[str],
+        "ordered_run_ids":  list[str],
+        "title":            str,
         "caption":          str,
         "location":         str,
         "source_count":     int,
@@ -76,12 +77,16 @@ async def get_clip_metadata(args: dict) -> dict:
 async def save_segment(args: dict) -> dict:
     seg_id = await db.insert_segment(
         cluster_id=args["cluster_id"],
-        ordered_clip_ids=args["ordered_clip_ids"],
+        ordered_clip_ids=args["ordered_run_ids"],  # column name retained; payload = run ids
+        title=args["title"],
         caption=args["caption"],
         location=args["location"],
         source_count=args["source_count"],
     )
-    log.info("save_segment called cluster_id=%s seg_id=%s", args["cluster_id"], seg_id)
+    log.info(
+        "save_segment cluster_id=%s seg_id=%s runs=%d",
+        args["cluster_id"], seg_id, len(args["ordered_run_ids"]),
+    )
     return {"content": [{"type": "text", "text": f"saved:{seg_id}"}]}
 
 
