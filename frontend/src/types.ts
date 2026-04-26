@@ -53,6 +53,8 @@ export interface Segment {
   cluster_id: string;
   /** Ordered clip IDs chosen by Angle Selector + Editor subagents. */
   ordered_clip_ids: string[];
+  /** AP-wire-style breaking-news headline (4-8 words). Written by Gemini caption pipeline. */
+  title: string | null;
   /** AP-wire-style caption written by Caption Writer subagent (CMP-08). */
   caption: string;
   /** Human-readable location string, e.g. "Pasadena, CA". */

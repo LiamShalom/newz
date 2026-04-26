@@ -36,6 +36,7 @@ const segment: Segment & { url: string | null } = {
   id: "seg-1",
   cluster_id: "cluster-1",
   ordered_clip_ids: ["clip-1"],
+  title: "Test Title",
   caption: "Test caption",
   location: "Pasadena, CA",
   source_count: 1,

@@ -129,7 +129,7 @@ export function SegmentCard({
       <h2
         className="relative z-20 mt-3 dark:-mt-8 dark:sm:-mt-10 px-4 font-display uppercase text-[40px] sm:text-[48px] leading-[0.92] tracking-[-0.005em] text-ink-primary"
       >
-        {segment.caption}
+        {segment.title || segment.caption}
       </h2>
 
       <p className="mt-3 text-[13px] font-semibold leading-[1.35] px-4 bg-gradient-to-r from-coral-light to-coral bg-clip-text text-transparent">
@@ -137,10 +137,7 @@ export function SegmentCard({
       </p>
 
       <p className="mt-3 px-4 text-[13px] leading-[1.5] text-ink-primary">
-        Two contributors uploaded footage from adjacent vantage points within a 90-second window.
-        Visual and audio analysis confirms a shared scene; angles complement rather than duplicate.
-        No vehicles or additional bystanders detected. Compiled into a single segment with
-        temporal alignment across sources.
+        {segment.caption}
       </p>
     </article>
   );

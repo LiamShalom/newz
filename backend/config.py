@@ -15,6 +15,10 @@ PRE_WARM_CLIP_PATH: str = os.environ.get(
     "PRE_WARM_CLIP_PATH", str(Path(__file__).parent / "seed" / "prewarm.mp4")
 )
 
+# Phase 4.7: Gemini captioning (replaces Anthropic Haiku/Sonnet caption synthesis)
+GEMINI_API_KEY: str = os.environ.get("GEMINI_API_KEY", "").strip()
+GEMINI_MODEL: str = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+
 # Phase 3: Clustering
 CLUSTER_THRESHOLD: float = float(os.environ.get("CLUSTER_THRESHOLD", "0.55"))
 VISUAL_FLOOR: float = float(os.environ.get("VISUAL_FLOOR", "0.80"))
