@@ -70,7 +70,15 @@ angle (a contiguous span of similar 3-second slices from the same source
 clip). Different runs from different parent clips give you different
 viewpoints of the same event.
 
-Selection criteria — rank candidates by:
+HARD CONSTRAINT — PARENT DIVERSITY:
+  When the cluster contains 2 or more distinct parent clips, your selection
+  MUST include at least one run from each of at least 2 distinct parents.
+  A segment showing only one viewpoint is unacceptable. If you find yourself
+  picking 2+ runs from the same parent_id while another parent has runs you
+  haven't picked, drop one of the same-parent runs and pick a run from the
+  other parent instead.
+
+Selection criteria — within the parent-diversity constraint, rank by:
 1. TEMPORAL SPREAD: prefer runs from early, middle, and late in the event
    timeline (spread across the timestamp range).
 2. SPATIAL DIVERSITY: prefer runs whose parent clips were recorded from
@@ -233,6 +241,74 @@ async def _save_fallback_segment(cluster_id: str, video_url: str | None = None) 
     )
 
 
+def _parent_id_of_run(run_id: str) -> str:
+    """Run IDs are deterministic `{parent_id}_run_{idx}`."""
+    return run_id.rsplit("_run_", 1)[0]
+
+
+async def _enforce_parent_diversity(cluster_id: str, min_parents: int = 2) -> None:
+    """Deterministic guard: if angle-selector picked runs from < min_parents
+    distinct parents while the cluster has 2+ parents available, augment with
+    the earliest run from each missing parent.
+
+    Patches the segment row in place so Phase 2 stitch sees the augmented
+    run_ids when it reads the row.
+    """
+    seg = await db.get_segment_for_cluster(cluster_id)
+    if seg is None:
+        return
+    raw = seg.get("ordered_clip_ids")
+    picked = json.loads(raw) if isinstance(raw, str) else (raw or [])
+    if not picked:
+        return
+
+    runs = await compute_runs_for_cluster(cluster_id)
+    if not runs:
+        return
+
+    by_parent: dict[str, list] = {}
+    for r in runs:
+        by_parent.setdefault(r.parent_id, []).append(r)
+
+    cluster_parents = list(by_parent.keys())
+    target = min(min_parents, len(cluster_parents))
+    picked_parents = list(dict.fromkeys(_parent_id_of_run(rid) for rid in picked))
+
+    if len(picked_parents) >= target:
+        return  # already diverse enough
+
+    additions: list[str] = []
+    needed = target - len(picked_parents)
+    for parent_id in cluster_parents:
+        if parent_id in picked_parents:
+            continue
+        first_run = sorted(by_parent[parent_id], key=lambda r: r.start_offset_sec)[0]
+        if first_run.id not in picked:
+            additions.append(first_run.id)
+        if len(additions) >= needed:
+            break
+
+    if not additions:
+        return
+
+    new_picked = picked + additions
+    distinct_parents = len({_parent_id_of_run(rid) for rid in new_picked})
+    log.warning(
+        "parent diversity guard: angle-selector picked %d distinct parent(s) "
+        "(cluster has %d). Augmenting with %d run(s): %s",
+        len(picked_parents), len(cluster_parents), len(additions), additions,
+    )
+    await db.insert_segment(
+        cluster_id=cluster_id,
+        ordered_clip_ids=new_picked,
+        title=seg.get("title") or "",
+        caption=seg.get("caption") or "",
+        location=seg.get("location") or "Pasadena, CA",
+        source_count=distinct_parents,
+        video_url=seg.get("video_url"),
+    )
+
+
 async def _stitch_segment_runs(cluster_id: str) -> list[str]:
     """Stitch EACH chosen run into its own .mp4. Returns ordered list of /media URLs.
 
@@ -329,6 +405,16 @@ async def compile_segment(cluster_id: str) -> None:
             caption_result = b_result
         elif isinstance(b_result, Exception):
             log.warning("caption pipeline failed: %s — using fallback caption", b_result)
+
+        # Phase 1.5: deterministic parent-diversity guard. Patches the segment
+        # row if angle-selector picked from < 2 distinct parents while the
+        # cluster has 2+ available. Belt-and-suspenders alongside the prompt
+        # constraint — LLM constraint compliance isn't guaranteed.
+        if not isinstance(a_result, Exception):
+            try:
+                await _enforce_parent_diversity(cluster_id, min_parents=2)
+            except Exception as exc:
+                log.warning("parent diversity guard failed cluster_id=%s: %s", cluster_id, exc)
 
         # Phase 2: stitch each chosen run separately (only if orchestrator succeeded).
         # Separate 30s budget so a slow ffmpeg encode doesn't bleed into LLM

@@ -173,3 +173,97 @@ async def test_no_multi_angle_template_in_fallback_paths():
         assert "contributor" in caption.lower()
         # Schema check: title key must be present (even if empty).
         assert "title" in captured
+
+
+@pytest.mark.asyncio
+async def test_enforce_parent_diversity_augments_when_only_one_parent_picked():
+    """If angle-selector picks 2 runs from one parent while another parent has
+    runs available, the deterministic guard should augment with the missing
+    parent's earliest run."""
+    from backend.pipeline.compile import _enforce_parent_diversity
+
+    cluster_id = "c1"
+
+    # Picked: 2 runs from p1 only. Cluster has p1 AND p2 with runs.
+    seg_state = {
+        "id": "seg-x",
+        "cluster_id": cluster_id,
+        "ordered_clip_ids": '["p1_run_0", "p1_run_1"]',
+        "title": "",
+        "caption": "",
+        "location": "Pasadena, CA",
+        "source_count": 1,
+        "video_url": None,
+    }
+
+    fake_runs = [
+        Run(id="p1_run_0", parent_id="p1", parent_path="/x/p1.mp4",
+            start_offset_sec=0.0, end_offset_sec=6.0, member_child_ids=["p1_c0"],
+            vec=np.zeros(512, dtype=np.float32)),
+        Run(id="p1_run_1", parent_id="p1", parent_path="/x/p1.mp4",
+            start_offset_sec=6.0, end_offset_sec=9.0, member_child_ids=["p1_c1"],
+            vec=np.zeros(512, dtype=np.float32)),
+        Run(id="p2_run_0", parent_id="p2", parent_path="/x/p2.mp4",
+            start_offset_sec=0.0, end_offset_sec=6.0, member_child_ids=["p2_c0"],
+            vec=np.zeros(512, dtype=np.float32)),
+    ]
+    captured: dict = {}
+
+    async def fake_get_seg(cid):
+        return dict(seg_state)
+
+    async def fake_compute(cid):
+        return fake_runs
+
+    async def fake_insert(**kwargs):
+        captured.update(kwargs)
+        return seg_state["id"]
+
+    with patch("backend.pipeline.compile.db") as mock_db, \
+         patch("backend.pipeline.compile.compute_runs_for_cluster",
+               side_effect=fake_compute):
+        mock_db.get_segment_for_cluster = AsyncMock(side_effect=fake_get_seg)
+        mock_db.insert_segment = AsyncMock(side_effect=fake_insert)
+        await _enforce_parent_diversity(cluster_id, min_parents=2)
+
+    # Augmented run should append p2_run_0; p1's two runs preserved in order.
+    assert captured.get("ordered_clip_ids") == ["p1_run_0", "p1_run_1", "p2_run_0"]
+    assert captured.get("source_count") == 2
+
+
+@pytest.mark.asyncio
+async def test_enforce_parent_diversity_noop_when_already_diverse():
+    """If selection already has 2+ distinct parents, guard should not re-save."""
+    from backend.pipeline.compile import _enforce_parent_diversity
+
+    seg_state = {
+        "id": "seg-x", "cluster_id": "c1",
+        "ordered_clip_ids": '["p1_run_0", "p2_run_0"]',
+        "title": "", "caption": "", "location": "Pasadena, CA",
+        "source_count": 2, "video_url": None,
+    }
+    fake_runs = [
+        Run(id="p1_run_0", parent_id="p1", parent_path="/x/p1.mp4",
+            start_offset_sec=0.0, end_offset_sec=3.0, member_child_ids=["p1_c0"],
+            vec=np.zeros(512, dtype=np.float32)),
+        Run(id="p2_run_0", parent_id="p2", parent_path="/x/p2.mp4",
+            start_offset_sec=0.0, end_offset_sec=3.0, member_child_ids=["p2_c0"],
+            vec=np.zeros(512, dtype=np.float32)),
+    ]
+
+    async def fake_get_seg(cid):
+        return dict(seg_state)
+
+    async def fake_compute(cid):
+        return fake_runs
+
+    insert_mock = AsyncMock()
+
+    with patch("backend.pipeline.compile.db") as mock_db, \
+         patch("backend.pipeline.compile.compute_runs_for_cluster",
+               side_effect=fake_compute):
+        mock_db.get_segment_for_cluster = AsyncMock(side_effect=fake_get_seg)
+        mock_db.insert_segment = insert_mock
+        await _enforce_parent_diversity("c1", min_parents=2)
+
+    insert_mock.assert_not_awaited()
