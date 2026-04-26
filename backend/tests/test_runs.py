@@ -97,3 +97,31 @@ def test_single_child_becomes_one_run():
     assert len(runs) == 1
     assert runs[0].member_child_ids == ["p1_child_0"]
     assert runs[0].id == "p1_run_0"
+
+
+def test_max_members_caps_run_length_even_if_all_similar():
+    """Five all-similar children with max_members=2 → 3 runs of [2, 2, 1]."""
+    base = _unit(42)
+
+    def jitter(v, n):
+        rng = np.random.default_rng(n)
+        out = v + 0.005 * rng.random(512).astype(np.float32)
+        out /= np.linalg.norm(out) + 1e-12
+        return out
+
+    children = [
+        {"id": f"p1_child_{i*3}", "parent_id": "p1", "parent_path": "/x/p1.mp4",
+         "start_offset_sec": float(i * 3), "end_offset_sec": float(i * 3 + 3),
+         "vec": jitter(base, i + 1)}
+        for i in range(5)
+    ]
+    runs = find_runs(children, threshold=0.85, max_members=2)
+    assert len(runs) == 3
+    assert [r.id for r in runs] == ["p1_run_0", "p1_run_1", "p1_run_2"]
+    assert [len(r.member_child_ids) for r in runs] == [2, 2, 1]
+    # First run spans 0-6s (two 3s windows).
+    assert runs[0].start_offset_sec == 0.0
+    assert runs[0].end_offset_sec == 6.0
+    # Last run covers the leftover 12-15s window.
+    assert runs[2].start_offset_sec == 12.0
+    assert runs[2].end_offset_sec == 15.0

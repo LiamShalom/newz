@@ -24,12 +24,20 @@ class Run:
     vec: np.ndarray  # float32, unit-length, mean of member child vecs
 
 
-def find_runs(children: list[dict], threshold: float) -> list[Run]:
+def find_runs(
+    children: list[dict],
+    threshold: float,
+    max_members: int | None = None,
+) -> list[Run]:
     """Group children into runs.
 
     Children are bucketed by parent_id, sorted by start_offset_sec, then walked
-    pairwise: a new run starts when adjacent cosine drops below threshold.
-    Each run's vec is the renormalized mean of member vecs.
+    pairwise: a new run starts when (a) adjacent cosine drops below threshold,
+    or (b) the current group has reached max_members. Each run's vec is the
+    renormalized mean of member vecs.
+
+    max_members=None means unbounded. With 3s child windows, max_members=2
+    caps a run at 6 seconds — see config.MAX_RUN_MEMBERS.
     """
     if not children:
         return []
@@ -44,7 +52,10 @@ def find_runs(children: list[dict], threshold: float) -> list[Run]:
         run_groups: list[list[dict]] = [[group[0]]]
         for prev, cur in zip(group, group[1:]):
             cos = float(np.dot(prev["vec"], cur["vec"]))
-            if cos >= threshold:
+            extend = cos >= threshold and (
+                max_members is None or len(run_groups[-1]) < max_members
+            )
+            if extend:
                 run_groups[-1].append(cur)
             else:
                 run_groups.append([cur])
@@ -101,7 +112,11 @@ async def compute_runs_for_cluster(cluster_id: str) -> list[Run]:
                 "vec": vec,
             })
 
-    runs = find_runs(children, threshold=config.RUN_THRESHOLD)
+    runs = find_runs(
+        children,
+        threshold=config.RUN_THRESHOLD,
+        max_members=config.MAX_RUN_MEMBERS,
+    )
 
     # Edge: a parent with NO children at all -> emit one synthetic run spanning
     # the full parent file (member_child_ids=[] is the sentinel).
