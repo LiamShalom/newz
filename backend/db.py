@@ -427,36 +427,56 @@ async def fetch_cluster_clips(cluster_id: str) -> list[dict]:
 
 
 async def fetch_cluster_clips_with_children(cluster_id: str) -> list[dict]:
-    """Like fetch_cluster_clips but includes parent_id, start/end offsets, and parent_path.
+    """Return parent rows in this cluster + their children (walk via parent_id).
 
-    For children (parent_id IS NOT NULL): parent_path is the actual video file path.
-    For parent clips (parent_id IS NULL): path is the video file path.
-    Used by get_cluster_clips MCP tool so Angle Agent sees child offsets.
+    Phase 4.6 (Pivot 1): children no longer carry a cluster_id, so we can no
+    longer SELECT them by cluster_id. Two-step walk:
+      A) find parent ids (parent_id IS NULL) in this cluster
+      B) fetch those parents themselves PLUS any rows whose parent_id is in (A)
+
+    Output rows keep the existing shape (id, path, parent_path, lat, lng, ts,
+    parent_id, start_offset_sec, end_offset_sec) so compile.py's
+    `_get_children_with_vecs` and the Angle Selector MCP tool stay backward
+    compatible. For parent rows path == parent_path. For child rows path may
+    be empty (children store path="") — callers fall back to parent_path.
     """
     async with aiosqlite.connect(DB_PATH) as conn:
         conn.row_factory = aiosqlite.Row
-        cursor = await conn.execute(
-            """SELECT id, path, lat, lng, ts, parent_id,
-                      start_offset_sec, end_offset_sec
-               FROM clips WHERE cluster_id = ? ORDER BY ts ASC, start_offset_sec ASC""",
+        # Step A: parent rows in this cluster
+        parent_cur = await conn.execute(
+            """SELECT id, path, lat, lng, ts
+               FROM clips
+               WHERE cluster_id = ? AND parent_id IS NULL
+               ORDER BY ts ASC""",
             (cluster_id,),
         )
-        rows = [dict(r) for r in await cursor.fetchall()]
+        parent_rows = [dict(r) for r in await parent_cur.fetchall()]
+        parent_ids = [p["id"] for p in parent_rows]
+        parent_path_map: dict[str, str] = {p["id"]: p["path"] for p in parent_rows}
 
-        parent_ids = list({r["parent_id"] for r in rows if r.get("parent_id")})
-        parent_path_map: dict[str, str] = {}
-        if parent_ids:
-            placeholders = ",".join("?" * len(parent_ids))
-            path_cur = await conn.execute(
-                f"SELECT id, path FROM clips WHERE id IN ({placeholders})",
-                parent_ids,
-            )
-            for p in await path_cur.fetchall():
-                parent_path_map[p["id"]] = p["path"]
+        if not parent_ids:
+            return []
+
+        # Step B: parents themselves + any child of those parents.
+        placeholders = ",".join("?" * len(parent_ids))
+        rows_cur = await conn.execute(
+            f"""SELECT id, path, lat, lng, ts, parent_id,
+                       start_offset_sec, end_offset_sec
+                FROM clips
+                WHERE id IN ({placeholders})
+                   OR parent_id IN ({placeholders})
+                ORDER BY ts ASC, start_offset_sec ASC""",
+            parent_ids + parent_ids,
+        )
+        rows = [dict(r) for r in await rows_cur.fetchall()]
 
     out = []
     for r in rows:
-        parent_path = parent_path_map.get(r["parent_id"], "") if r.get("parent_id") else r["path"]
+        parent_path = (
+            parent_path_map.get(r["parent_id"], "")
+            if r.get("parent_id")
+            else r["path"]
+        )
         out.append({
             "id": r["id"],
             "path": r["path"] or parent_path,
@@ -478,6 +498,22 @@ async def get_cluster(cluster_id: str) -> dict | None:
         async with conn.execute("SELECT * FROM clusters WHERE id = ?", (cluster_id,)) as cur:
             row = await cur.fetchone()
     return dict(row) if row else None
+
+
+async def count_distinct_parents_in_cluster(cluster_id: str) -> int:
+    """Pivot 2 gate: count parent (parent_id IS NULL) clip rows in this cluster.
+
+    Defensive — under Pivot 1 cluster.member_count already equals this value
+    (children never get a cluster_id), but if cluster_id ever leaks onto a
+    child row this query stays correct.
+    """
+    async with aiosqlite.connect(DB_PATH) as conn:
+        async with conn.execute(
+            "SELECT COUNT(*) FROM clips WHERE cluster_id = ? AND parent_id IS NULL",
+            (cluster_id,),
+        ) as cur:
+            row = await cur.fetchone()
+    return int(row[0]) if row else 0
 
 
 # ---------------------------------------------------------------------------

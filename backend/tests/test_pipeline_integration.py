@@ -4,11 +4,13 @@ Integration tests for pipeline wiring (Task 3):
   - lifespan rebuild_cache repopulates CLUSTERS from sqlite
 """
 
+import asyncio
 import io
 import types
 import uuid
 from unittest.mock import AsyncMock, call, patch
 
+import aiosqlite
 import numpy as np
 import pytest
 import pytest_asyncio
@@ -158,3 +160,113 @@ async def test_lifespan_rebuilds_cache_from_sqlite(tmp_db, monkeypatch):
     # Centroid bytes must match original
     rebuilt_blob = cc.centroid.astype(np.float32).tobytes()
     assert rebuilt_blob == original_blob, "rebuilt centroid does not match original"
+
+
+# ---------------------------------------------------------------------------
+# Test 4 (Pivot 2 negative gate): solo-parent cluster — even with N children —
+# must NEVER trigger compile_segment.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_solo_parent_cluster_does_not_trigger_compile(tmp_db, monkeypatch):
+    """Pivot 2 gate: a single-uploader cluster — even with N children — must NEVER compile.
+
+    Also asserts Pivot 1: child rows have cluster_id=NULL after run_pipeline.
+    """
+    monkeypatch.setattr(config, "USE_MOCK_EMBEDDINGS", True)
+
+    compile_calls: list[str] = []
+
+    async def fake_compile(cluster_id: str) -> None:
+        compile_calls.append(cluster_id)
+
+    # Patch compile_segment AT THE IMPORT SITE inside run.py
+    with patch("backend.pipeline.run.compile_segment", side_effect=fake_compile):
+        clip_id = await _insert_fake_clip(tmp_db)
+        await run_pipeline(clip_id)
+        # Yield once so any stray asyncio.create_task can run
+        await asyncio.sleep(0)
+
+    # Cluster created
+    assert len(cluster_mod.CLUSTERS) == 1
+    cluster_id = next(iter(cluster_mod.CLUSTERS))
+    cluster = cluster_mod.CLUSTERS[cluster_id]
+    assert cluster.member_count == 1, (
+        f"member_count must be 1 (one parent), got {cluster.member_count}. "
+        "If this is 3 or 5, you're still counting children."
+    )
+
+    # Compile MUST NOT have been called
+    assert compile_calls == [], (
+        f"compile_segment was called for solo-parent cluster: {compile_calls}. "
+        "Pivot 2 gate failed — multi-angle = the pitch."
+    )
+
+    # Children exist in DB but carry NO cluster_id (Pivot 1)
+    children = await db.get_children_by_parent(clip_id)
+    assert len(children) >= 1, "expected mock to insert at least 1 child"
+    async with aiosqlite.connect(db.DB_PATH) as conn:
+        async with conn.execute(
+            "SELECT COUNT(*) FROM clips "
+            "WHERE parent_id IS NOT NULL AND cluster_id IS NOT NULL"
+        ) as cur:
+            row = await cur.fetchone()
+    assert row[0] == 0, (
+        f"{row[0]} child row(s) carry a cluster_id — Pivot 1 violated. "
+        "Children must have cluster_id=NULL."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 5 (Pivot 2 positive gate): two parent uploads in same cluster -> compile
+# fires exactly once.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_two_parents_triggers_compile(tmp_db, monkeypatch):
+    """Pivot 2 gate (positive): two parent uploads in same cluster -> compile fires exactly once."""
+    monkeypatch.setattr(config, "USE_MOCK_EMBEDDINGS", True)
+
+    # Force both uploads into the same cluster by stubbing _mock_embedding to return
+    # the SAME parent vector for both clips (mock children are randomized via
+    # int.from_bytes so they would naturally diverge — only the parent must match).
+    from backend.pipeline import embed as embed_mod
+    fixed_parent = np.ones(512, dtype=np.float32)
+    fixed_parent /= np.linalg.norm(fixed_parent)
+    real_mock = embed_mod._mock_embedding
+
+    def stub_mock(clip_id: str) -> np.ndarray:
+        # Parent ids look like uuid4().hex (32 chars no underscore); children look
+        # like "<parent>_child_<offset>". Detect parent by absence of "_child_".
+        if "_child_" in clip_id or clip_id == "__prewarm__":
+            return real_mock(clip_id)
+        return fixed_parent.copy()
+
+    monkeypatch.setattr(embed_mod, "_mock_embedding", stub_mock)
+
+    compile_calls: list[str] = []
+
+    async def fake_compile(cluster_id: str) -> None:
+        compile_calls.append(cluster_id)
+
+    with patch("backend.pipeline.run.compile_segment", side_effect=fake_compile):
+        # Same lat/lng/ts so GPS+time gates pass; parent vec match so visual floor passes
+        clip_a = await _insert_fake_clip(tmp_db, lat=34.1, lng=-118.1, ts=1_000_000.0)
+        await run_pipeline(clip_a)
+        clip_b = await _insert_fake_clip(tmp_db, lat=34.1, lng=-118.1, ts=1_000_010.0)
+        await run_pipeline(clip_b)
+        await asyncio.sleep(0)
+
+    # Single cluster of size 2
+    assert len(cluster_mod.CLUSTERS) == 1, f"expected 1 cluster, got {len(cluster_mod.CLUSTERS)}"
+    cluster_id = next(iter(cluster_mod.CLUSTERS))
+    assert cluster_mod.CLUSTERS[cluster_id].member_count == 2
+
+    # Distinct-parent count from DB matches
+    parent_count = await db.count_distinct_parents_in_cluster(cluster_id)
+    assert parent_count == 2, f"expected 2 distinct parents, got {parent_count}"
+
+    # Compile fired exactly once for this cluster
+    assert compile_calls == [cluster_id], (
+        f"expected compile_segment called once with {cluster_id}, got {compile_calls}"
+    )

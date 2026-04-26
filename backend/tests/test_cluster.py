@@ -240,3 +240,36 @@ async def test_cluster_worker_joins_when_above_threshold(tmp_db, monkeypatch):
     assert cluster_assigned_events[1]["is_new_cluster"] is False, (
         f"second cluster_assigned should be join, got: {cluster_assigned_events[1]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# 6. count_distinct_parents_in_cluster (Pivot 2 helper)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_count_distinct_parents_in_cluster_ignores_children(tmp_db):
+    """Pivot 2 helper: counts only parent (parent_id IS NULL) rows.
+
+    Even if a child somehow gets a cluster_id, the helper still returns the
+    parent count.
+    """
+    cid = uuid.uuid4().hex
+    # Insert a parent in the cluster
+    parent_id = await _insert_fake_clip(tmp_db)
+    await db.assign_clip_to_cluster(parent_id, cid)
+    # Insert children referencing the parent — DO NOT assign them to the cluster
+    await db.insert_child_clip(
+        parent_id=parent_id, start_offset_sec=0, end_offset_sec=3,
+        lat=34.1, lng=-118.1, ts=1_000_000.0, session_id=None,
+    )
+    await db.insert_child_clip(
+        parent_id=parent_id, start_offset_sec=3, end_offset_sec=6,
+        lat=34.1, lng=-118.1, ts=1_000_000.0, session_id=None,
+    )
+    assert await db.count_distinct_parents_in_cluster(cid) == 1
+
+    # Defensive: even if a child leaks a cluster_id, count stays at parent count
+    children = await db.get_children_by_parent(parent_id)
+    await db.assign_clip_to_cluster(children[0]["id"], cid)
+    assert await db.count_distinct_parents_in_cluster(cid) == 1, \
+        "helper must filter parent_id IS NULL"

@@ -83,6 +83,7 @@ None.
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 260425-pw1 | Add anthropic dependency to backend requirements | 2026-04-26 | e2236fe | [260425-pw1-add-anthropic-dependency-to-backend-requ](./quick/260425-pw1-add-anthropic-dependency-to-backend-requ/) |
+| 260425-q06 | Gate seed_demo_segment on OFFLINE_DEMO so prod doesn't ship a broken demo card | 2026-04-26 | 74a4861 | [260425-q06-gate-seed-demo-segment-on-offline-demo-s](./quick/260425-q06-gate-seed-demo-segment-on-offline-demo-s/) |
 
 ### Risks Being Tracked
 
@@ -94,7 +95,7 @@ None.
 ## Session Continuity
 
 **Last session ended:** 2026-04-25, after completing Phase 3 (clustering engine + debug overlay + calibration notebook)
-**Last activity:** 2026-04-26 - Completed quick task 260425-pw1: Add anthropic dependency to backend requirements
+**Last activity:** 2026-04-26 - Completed quick task 260425-q06: Gate seed_demo_segment on OFFLINE_DEMO so prod doesn't ship a broken demo card
 **Next action:** Push to Railway (redeploy) to restore vision-grounded captions in prod; then resume `/gsd-execute-phase 4` — Wave 1 (backend compile pipeline + SSE bus) then Wave 2 (frontend Segment feed)
 
 **Key files to load on resume:**

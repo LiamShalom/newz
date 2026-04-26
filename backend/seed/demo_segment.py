@@ -2,12 +2,16 @@
 backend/seed/demo_segment.py — FED-05 pre-seeded staged demo segment.
 
 seed_demo_segment() is called from app.lifespan after db.init().
-Inserts one record when the segments table is empty so the feed is never blank.
+Gated on OFFLINE_DEMO=true — production deploys skip this entirely so the feed
+only contains real ingested clips. When OFFLINE_DEMO=true (Tier-5 WiFi-dies
+fallback), inserts one record if the segments table is empty so the feed is
+never blank during the staged-replay demo.
 The ordered_clip_ids reference backend/seed/demo/ placeholders (replaced in Phase 5
 with real staged clips filmed at Caltech venue).
 The cluster row is a stub — no real clips or embeddings exist for it.
 """
 import logging
+import os
 import time
 
 import aiosqlite
@@ -23,8 +27,13 @@ DEMO_CLIP_IDS = ["demo-clip-1", "demo-clip-2", "demo-clip-3"]
 async def seed_demo_segment() -> None:
     """Insert a staged demo segment if segments table is empty (FED-05).
 
+    Gated on OFFLINE_DEMO=true. Returns immediately when OFFLINE_DEMO is unset
+    or not "true" — production deploys do not auto-seed (live capture only).
     Idempotent: no-op if any segment already exists.
     """
+    if os.environ.get("OFFLINE_DEMO", "").lower() != "true":
+        log.info("seed_demo_segment skipped (OFFLINE_DEMO not enabled)")
+        return
     async with aiosqlite.connect(db.DB_PATH) as conn:
         async with conn.execute("SELECT COUNT(*) FROM segments") as cur:
             row = await cur.fetchone()

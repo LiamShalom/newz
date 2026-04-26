@@ -2,10 +2,12 @@
 backend/pipeline/embed.py — Marengo 3.0 embed stage.
 
 Public API:
-    embed_worker(clip_id) -> list[tuple[str, np.ndarray]]
+    embed_worker(clip_id) -> tuple[str, np.ndarray]
         Async entry point. Called by run_pipeline(). Never blocks the event loop.
-        Returns [(child_id, vec), ...] for clips that produce children,
-        or [(clip_id, parent_vec)] for short clips with no children.
+        Returns exactly one (parent_clip_id, parent_vec) pair.
+        Phase 4.6 pivot: clustering operates on the parent (asset-scope) vector
+        only — children are still inserted + embedded for compile-time slicing,
+        but they do NOT enter the clustering loop.
 
 Private helpers:
     _sync_embed(clip_path, clip_id) -> tuple[np.ndarray, list[dict], int]
@@ -132,12 +134,13 @@ def _sync_embed(
     return _call_marengo(clip_path, clip_id)
 
 
-async def embed_worker(clip_id: str) -> list[tuple[str, np.ndarray]]:
+async def embed_worker(clip_id: str) -> tuple[str, np.ndarray]:
     """Async embed stage. Called by run_pipeline(clip_id).
 
-    Phase 4.5: returns list of (id, vec) pairs for cluster_worker.
-    - If clip produces children: returns [(child_id, vec), ...] — children cluster, not parent.
-    - If clip is short (<= 3s, no children returned): returns [(clip_id, parent_vec)].
+    Phase 4.6: returns (parent_clip_id, parent_vec) — exactly one pair.
+    Children are still inserted + embedded but cluster on the parent only
+    (per locked architectural pivot). Children remain in the DB for
+    compile-time slicing (Angle Selector / Caption Writer / stitch).
 
     Reads clip path from DB, runs _sync_embed in thread pool, persists parent + child BLOBs.
     """
@@ -154,15 +157,11 @@ async def embed_worker(clip_id: str) -> list[tuple[str, np.ndarray]]:
         parent_vec, children, latency_ms = await loop.run_in_executor(
             None, _sync_embed, clip_path, clip_id
         )
-        # Always store parent embedding
+        # Always store parent embedding on the parent row
         await db.store_embedding(clip_id, parent_vec, latency_ms)
 
-        if not children:
-            # Short clip — parent enters clustering directly
-            return [(clip_id, parent_vec)]
-
-        # Insert child rows and store their embeddings
-        results: list[tuple[str, np.ndarray]] = []
+        # Insert child rows and store their embeddings (compile-time slicing
+        # metadata only — children do NOT enter clustering).
         for child in children:
             child_id = await db.insert_child_clip(
                 parent_id=clip_id,
@@ -174,8 +173,10 @@ async def embed_worker(clip_id: str) -> list[tuple[str, np.ndarray]]:
                 session_id=clip.get("session_id"),
             )
             await db.store_embedding(child_id, child["vec"], latency_ms)
-            results.append((child_id, child["vec"]))
-        return results
+
+        # Pivot 1: always surface the parent for clustering. Short-clip branch
+        # (no children) and long-clip branch both return the same shape.
+        return clip_id, parent_vec
 
     except Exception:
         import aiosqlite

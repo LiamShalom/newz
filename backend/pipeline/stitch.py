@@ -19,6 +19,8 @@ over the prior VP9 software encode path (66.5s p50 → 0.52s).
 
 import asyncio
 import logging
+import os
+import time
 
 import ffmpeg
 
@@ -31,6 +33,11 @@ def _sync_stitch(clip_refs: list[dict], output_path: str) -> str:
     Per-input chain: scale (preserving aspect, fitting in 720x1280) → pad to
     720x1280 (centered, black bars) → setsar=1 → fps=30. Then concat n=N v=1 a=0.
     Output: .mp4 (H.264 yuv420p, faststart). Returns output_path on success.
+
+    Re-compile-safe: ffmpeg writes to a sibling .part-<ts> file, then we
+    os.replace into output_path. POSIX rename is atomic and preserves any
+    open file descriptors via the old inode, so a browser already streaming
+    the previous compile keeps reading clean bytes instead of a truncated file.
     """
     if not clip_refs:
         return ""
@@ -53,19 +60,29 @@ def _sync_stitch(clip_refs: list[dict], output_path: str) -> str:
         for inp in inputs
     ]
 
-    (
-        ffmpeg
-        .concat(*norm, n=len(norm), v=1, a=0)
-        .output(
-            output_path,
-            vcodec="libx264",
-            preset="ultrafast",
-            crf=28,
-            pix_fmt="yuv420p",
-            movflags="+faststart",
+    tmp_path = f"{output_path}.part-{int(time.time() * 1000)}-{os.getpid()}"
+    try:
+        (
+            ffmpeg
+            .concat(*norm, n=len(norm), v=1, a=0)
+            .output(
+                tmp_path,
+                format="mp4",
+                vcodec="libx264",
+                preset="ultrafast",
+                crf=28,
+                pix_fmt="yuv420p",
+                movflags="+faststart",
+            )
+            .run(overwrite_output=True, quiet=True)
         )
-        .run(overwrite_output=True, quiet=True)
-    )
+        os.replace(tmp_path, output_path)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except FileNotFoundError:
+            pass
+        raise
     log.info("stitch ok output=%s", output_path)
     return output_path
 
