@@ -284,6 +284,7 @@ async def insert_segment(
     location: str,
     source_count: int,
     video_url: str | None = None,
+    title: str | None = None,
 ) -> str:
     """Idempotent: one segment per cluster. ON CONFLICT(cluster_id) updates. CMP-09."""
     seg_id = uuid.uuid4().hex
@@ -291,18 +292,19 @@ async def insert_segment(
     async with aiosqlite.connect(DB_PATH) as conn:
         cur = await conn.execute(
             """INSERT INTO segments
-                 (id, cluster_id, ordered_clip_ids, caption, location, source_count,
-                  created_at, video_url)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                 (id, cluster_id, ordered_clip_ids, title, caption, location,
+                  source_count, created_at, video_url)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(cluster_id) DO UPDATE SET
                  ordered_clip_ids = excluded.ordered_clip_ids,
+                 title            = excluded.title,
                  caption          = excluded.caption,
                  location         = excluded.location,
                  source_count     = excluded.source_count,
                  video_url        = excluded.video_url
                RETURNING id""",
             (seg_id, cluster_id, json.dumps(ordered_clip_ids),
-             caption, location, source_count, now, video_url),
+             title, caption, location, source_count, now, video_url),
         )
         row = await cur.fetchone()
         await conn.commit()
@@ -314,7 +316,7 @@ async def fetch_recent_segments(limit: int = 50) -> list[dict]:
     async with aiosqlite.connect(DB_PATH) as conn:
         conn.row_factory = aiosqlite.Row
         cursor = await conn.execute(
-            """SELECT s.id, s.cluster_id, s.ordered_clip_ids, s.caption,
+            """SELECT s.id, s.cluster_id, s.ordered_clip_ids, s.title, s.caption,
                       s.location, c.member_count AS source_count, s.created_at,
                       c.centroid_lat, c.centroid_lng, s.video_url AS stored_video_url
                FROM segments s
@@ -350,6 +352,7 @@ async def fetch_recent_segments(limit: int = 50) -> list[dict]:
             "id": r["id"],
             "cluster_id": r["cluster_id"],
             "ordered_clip_ids": ids,
+            "title": r["title"],
             "caption": r["caption"],
             "location": r["location"],
             "source_count": r["source_count"],

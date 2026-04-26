@@ -180,3 +180,25 @@ async def test_fetch_cluster_clips_ordered_by_ts(tmp_db):
     assert ts_values[0] == 100.0
     assert ts_values[1] == 200.0
     assert ts_values[2] == 300.0
+
+
+@pytest.mark.asyncio
+async def test_insert_segment_persists_title(tmp_db):
+    """insert_segment stores title; get_segment_for_cluster returns it."""
+    cluster = _make_cluster()
+    await db.upsert_cluster(cluster)
+
+    seg_id = await db.insert_segment(
+        cluster_id=cluster.id,
+        ordered_clip_ids=["p1_run_0"],
+        title="Test Title",
+        caption="Test Caption",
+        location="Pasadena, CA",
+        source_count=1,
+    )
+    assert seg_id is not None
+
+    seg = await db.get_segment_for_cluster(cluster.id)
+    assert seg is not None
+    assert seg["title"] == "Test Title"
+    assert seg["caption"] == "Test Caption"
