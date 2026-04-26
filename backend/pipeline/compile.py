@@ -342,6 +342,24 @@ async def _get_children_with_vecs(cluster_id: str) -> list[dict]:
     return children
 
 
+async def _branch_caption(cluster_id: str) -> dict | None:
+    """Branch B: describe centroid-closest children, synth title+caption.
+
+    Wraps the existing caption_pipeline.generate_caption. Returns whatever
+    that pipeline emits — currently {caption, location, source} (M5 will
+    extend with title). compile_segment uses .get("title") defensively so
+    pre-M5 calls gracefully leave title empty.
+    """
+    from .cluster import CLUSTERS  # local import: avoid module-load cycle
+    cluster_cache = CLUSTERS.get(cluster_id)
+    if cluster_cache is None:
+        return None
+    children = await _get_children_with_vecs(cluster_id)
+    if not children:
+        return None
+    return await generate_caption(cluster_id, cluster_cache.centroid, children)
+
+
 async def _resolve_run_ids_to_stitch_refs(
     cluster_id: str, ordered_run_ids: list[str]
 ) -> list[dict]:
