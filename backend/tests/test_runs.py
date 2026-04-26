@@ -68,3 +68,16 @@ def test_scene_cut_splits_into_two_runs():
     assert runs[1].id == "p1_run_1"
     assert runs[1].start_offset_sec == 6.0
     assert runs[1].end_offset_sec == 12.0
+
+
+def test_multiple_parents_independent_runs():
+    a = _unit(7)
+    children = [
+        {"id": "p1_child_0", "parent_id": "p1", "parent_path": "/x/p1.mp4",
+         "start_offset_sec": 0.0, "end_offset_sec": 3.0, "vec": a},
+        {"id": "p2_child_0", "parent_id": "p2", "parent_path": "/x/p2.mp4",
+         "start_offset_sec": 0.0, "end_offset_sec": 3.0, "vec": a},
+    ]
+    runs = find_runs(children, threshold=0.85)
+    assert {r.id for r in runs} == {"p1_run_0", "p2_run_0"}
+    assert {r.parent_id for r in runs} == {"p1", "p2"}
