@@ -41,6 +41,7 @@ from .compile_tools import newz_tools_server
 from .keyframes import extract_cluster_keyframes
 from .stitch import stitch_clips
 from .caption_pipeline import generate_caption
+from .runs import compute_runs_for_cluster
 
 log = logging.getLogger(__name__)
 
@@ -325,6 +326,32 @@ async def _get_children_with_vecs(cluster_id: str) -> list[dict]:
         vec = await db.get_embedding(r["id"])
         children.append({**r, "vec": vec})
     return children
+
+
+async def _resolve_run_ids_to_stitch_refs(
+    cluster_id: str, ordered_run_ids: list[str]
+) -> list[dict]:
+    """Re-derive runs from cluster, then look up each ordered_run_id.
+
+    Childless-parent runs (member_child_ids == []) emit end_offset_sec=None
+    so ffmpeg ingests the full parent file. Otherwise we use the run's
+    [start, end] window. Unknown run_ids are dropped with a warning.
+    """
+    runs = await compute_runs_for_cluster(cluster_id)
+    by_id = {r.id: r for r in runs}
+    refs: list[dict] = []
+    for rid in ordered_run_ids:
+        r = by_id.get(rid)
+        if r is None:
+            log.warning("resolve: unknown run_id=%s cluster_id=%s", rid, cluster_id)
+            continue
+        end = None if not r.member_child_ids else r.end_offset_sec
+        refs.append({
+            "path": r.parent_path,
+            "start_offset_sec": r.start_offset_sec,
+            "end_offset_sec": end,
+        })
+    return refs
 
 
 async def _save_fallback_segment(cluster_id: str, video_url: str | None = None) -> str:
