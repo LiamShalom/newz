@@ -12,26 +12,40 @@ import logging
 from claude_agent_sdk import tool, create_sdk_mcp_server
 
 from .. import db
+from .runs import compute_runs_for_cluster
 
 log = logging.getLogger(__name__)
 
 
 @tool(
-    "get_cluster_clips",
+    "get_cluster_runs",
     (
-        "Return all clip metadata for a cluster (clip IDs, lat/lng, ts, paths, child offsets). "
-        "Children include start_offset_sec and end_offset_sec for duration calculation. "
-        "Use to get available clips for angle selection."
+        "Return all RUNS in a cluster. A run is a contiguous span of similar "
+        "3-second slices within a single parent clip — i.e. one continuous "
+        "camera angle. Use these as candidates for angle selection. "
+        "Each run has: id, parent_id, parent_path, start_offset_sec, "
+        "end_offset_sec, duration_sec, lat/lng/ts (from parent), member_child_ids."
     ),
     {"cluster_id": str},
 )
-async def get_cluster_clips(args: dict) -> dict:
-    rows = await db.fetch_cluster_clips_with_children(args["cluster_id"])
-    for r in rows:
-        start = r.get("start_offset_sec") or 0.0
-        end = r.get("end_offset_sec")
-        r["duration_sec"] = round((end - start), 2) if end is not None else None
-    return {"content": [{"type": "text", "text": json.dumps(rows)}]}
+async def get_cluster_runs(args: dict) -> dict:
+    runs = await compute_runs_for_cluster(args["cluster_id"])
+    out: list[dict] = []
+    for r in runs:
+        parent = await db.get_clip(r.parent_id)
+        out.append({
+            "id": r.id,
+            "parent_id": r.parent_id,
+            "parent_path": r.parent_path,
+            "start_offset_sec": r.start_offset_sec,
+            "end_offset_sec": r.end_offset_sec,
+            "duration_sec": round(max(0.0, r.end_offset_sec - r.start_offset_sec), 2),
+            "lat": parent.get("lat") if parent else None,
+            "lng": parent.get("lng") if parent else None,
+            "ts": parent.get("ts") if parent else None,
+            "member_child_ids": r.member_child_ids,
+        })
+    return {"content": [{"type": "text", "text": json.dumps(out)}]}
 
 
 @tool(
@@ -74,5 +88,5 @@ async def save_segment(args: dict) -> dict:
 newz_tools_server = create_sdk_mcp_server(
     name="newz_tools",
     version="1.0.0",
-    tools=[get_cluster_clips, get_clip_metadata, save_segment],
+    tools=[get_cluster_runs, get_clip_metadata, save_segment],
 )
