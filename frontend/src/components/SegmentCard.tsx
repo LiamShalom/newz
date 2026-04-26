@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import type { Segment } from "../types";
 import { relativeTime } from "../timeFormat";
 import { distanceLabel } from "../distance";
@@ -14,22 +14,37 @@ export function SegmentCard({
   segment,
   viewerLat,
   viewerLng,
-  priority = false,
+  active = false,
 }: {
   segment: Segment & { url: string };
   viewerLat?: number;
   viewerLng?: number;
-  priority?: boolean;
+  /** True when this card is the most-visible one in the viewport. */
+  active?: boolean;
 }) {
   const urls = segment.video_urls?.filter(Boolean) as string[] | undefined;
   const hasMultiple = urls && urls.length > 1;
   const [angleIdx, setAngleIdx] = useState(0);
   const currentUrl = hasMultiple ? urls[angleIdx] : segment.url;
+  const videoRef = useRef<HTMLVideoElement | null>(null);
 
   const handleEnded = useCallback(() => {
     if (!hasMultiple) return;
     setAngleIdx((i) => (i + 1) % urls.length);
   }, [hasMultiple, urls]);
+
+  // iOS Safari may reject play() without a user gesture in some states —
+  // swallow the rejection so a stale promise doesn't spam the console.
+  useEffect(() => {
+    const el = videoRef.current;
+    if (!el) return;
+    if (active) {
+      const p = el.play();
+      if (p && typeof p.catch === "function") p.catch(() => {});
+    } else {
+      el.pause();
+    }
+  }, [active, currentUrl]);
 
   const locationStr =
     viewerLat !== undefined &&
@@ -45,12 +60,12 @@ export function SegmentCard({
     <article className="relative">
       <div className="relative overflow-hidden rounded-2xl bg-surface aspect-[4/5]">
         <video
+          ref={videoRef}
           key={currentUrl}
           src={currentUrl}
-          autoPlay={priority}
           muted
           playsInline
-          preload={priority ? "auto" : "metadata"}
+          preload={active ? "auto" : "metadata"}
           onEnded={handleEnded}
           className="absolute inset-0 w-full h-full object-cover"
         />
