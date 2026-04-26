@@ -175,40 +175,98 @@ async def sse_events(request: Request):
 
 @app.get("/debug/clusters", include_in_schema=False)
 async def debug_clusters() -> dict:
-    """CLU-09: per-cluster member breakdown with composite score against centroid.
+    """CLU-09: per-cluster member breakdown + cross-cluster pairwise diagnostic.
 
     Internal calibration endpoint. Reads in-memory CLUSTERS dict + DB embeddings.
     Do NOT expose to authenticated public traffic in production.
+
+    For each clip, emits TWO views:
+      - `members[*]` (legacy): score against the cluster the clip already belongs to.
+        For singletons this is trivially 1.0/1.0/1.0/1.0 (the clip IS the centroid).
+      - `pairwise_scores[*]` (added 2026-04-26 per .planning/debug/clips-not-clustering.md):
+        score the clip against every OTHER cluster's centroid, plus reasons it was
+        rejected. Answers the real diagnostic question: "why didn't these cluster?"
     """
     from .pipeline import cluster as cluster_mod
 
-    clusters_out = []
+    # Pre-load every clip's embedding + metadata once so we can score across clusters
+    # without re-fetching from sqlite for each (cluster, clip) pair.
+    all_clips: list[dict] = []
     for c in cluster_mod.CLUSTERS.values():
-        members = []
         for clip_id in c.member_ids:
             clip = await db.get_clip(clip_id)
             vec = await db.get_embedding(clip_id)
             if clip is None or vec is None:
-                continue   # race: clip in cluster but embedding not yet stored
-            sb = cluster_mod.score_against(c, vec, clip["lat"], clip["lng"], clip["ts"])
-            gps_distance_m = (
-                None if not sb.gps_available
-                else round(cluster_mod.haversine_m(
-                    clip["lat"], clip["lng"], c.centroid_lat, c.centroid_lng), 1)
-            )
-            members.append({
+                continue
+            all_clips.append({
                 "clip_id": clip_id,
+                "own_cluster_id": c.id,
                 "lat": clip["lat"],
                 "lng": clip["lng"],
                 "ts": clip["ts"],
+                "vec": vec,
+            })
+
+    clusters_out = []
+    for c in cluster_mod.CLUSTERS.values():
+        members = []
+        pairwise_scores = []
+        for clip_info in all_clips:
+            sb = cluster_mod.score_against(
+                c, clip_info["vec"], clip_info["lat"], clip_info["lng"], clip_info["ts"]
+            )
+            gps_distance_m: float | None = None
+            if (sb.gps_available
+                    and clip_info["lat"] is not None and clip_info["lng"] is not None
+                    and c.centroid_lat is not None and c.centroid_lng is not None):
+                gps_distance_m = round(cluster_mod.haversine_m(
+                    clip_info["lat"], clip_info["lng"],
+                    c.centroid_lat, c.centroid_lng), 1)
+
+            # Reproduce the cluster_worker gate logic so the diagnostic matches reality.
+            rejected_by: list[str] = []
+            if sb.visual < config.VISUAL_FLOOR:
+                rejected_by.append("visual_floor")
+            if sb.composite < config.CLUSTER_THRESHOLD:
+                rejected_by.append("composite_threshold")
+
+            entry = {
+                "clip_id": clip_info["clip_id"],
+                "lat": clip_info["lat"],
+                "lng": clip_info["lng"],
+                "ts": clip_info["ts"],
                 "visual": round(sb.visual, 4),
                 "gps": round(sb.gps, 4),
                 "time": round(sb.time, 4),
                 "composite": round(sb.composite, 4),
                 "gps_available": sb.gps_available,
                 "gps_distance_m": gps_distance_m,
-                "time_delta_s": round(abs(clip["ts"] - c.median_ts), 1),
-            })
+                "time_delta_s": round(abs(clip_info["ts"] - c.median_ts), 1),
+                "is_self": clip_info["own_cluster_id"] == c.id and c.member_count == 1,
+                "rejected_by": rejected_by,
+                "would_join": (not rejected_by),
+            }
+
+            if clip_info["own_cluster_id"] == c.id:
+                # Legacy: this clip's score against its own cluster's centroid
+                members.append({
+                    "clip_id": entry["clip_id"],
+                    "lat": entry["lat"],
+                    "lng": entry["lng"],
+                    "ts": entry["ts"],
+                    "visual": entry["visual"],
+                    "gps": entry["gps"],
+                    "time": entry["time"],
+                    "composite": entry["composite"],
+                    "gps_available": entry["gps_available"],
+                    "gps_distance_m": entry["gps_distance_m"],
+                    "time_delta_s": entry["time_delta_s"],
+                })
+            else:
+                # Cross-cluster: clip belongs to a DIFFERENT cluster — this is the
+                # diagnostic line that exposes "why didn't clip X join cluster Y?"
+                pairwise_scores.append(entry)
+
         clusters_out.append({
             "cluster_id": c.id,
             "member_count": c.member_count,
@@ -216,6 +274,7 @@ async def debug_clusters() -> dict:
             "centroid_lng": c.centroid_lng,
             "median_ts": c.median_ts,
             "members": members,
+            "pairwise_scores": pairwise_scores,
         })
 
     return {
@@ -279,90 +338,3 @@ async def debug_clip(clip_id: str):
     return {"found": True, "clip": clip}
 
 
-@app.post("/debug/caption_writer/{cluster_id}")
-async def debug_caption_writer(cluster_id: str):
-    """Dev-only: run the vision caption-writer directly. Does NOT write to DB.
-
-    Returns the raw caption/location on success, or the exception type+message
-    on failure. Also reports keyframe extraction count so we can isolate where
-    the pipeline is failing.
-    """
-    from .pipeline.compile import _run_caption_writer_with_vision
-    from .pipeline.keyframes import (
-        extract_cluster_keyframes,
-        _fetch_cluster_clips_with_duration,
-        _extract_one,
-        FFMPEG,
-    )
-    import os as _os
-
-    diagnostics: dict = {"ffmpeg_path": FFMPEG, "ffmpeg_exists": _os.path.exists(FFMPEG)}
-
-    # Stage 1: DB lookup
-    try:
-        kf_clips = await _fetch_cluster_clips_with_duration(cluster_id)
-        diagnostics["keyframes_db_clips"] = [
-            {"id": c["id"], "path": c["path"], "duration_sec": c.get("duration_sec"),
-             "path_exists": _os.path.exists(c["path"])}
-            for c in kf_clips
-        ]
-    except Exception as e:
-        return {"stage": "keyframes_db_lookup", "error": type(e).__name__,
-                "message": str(e), "diagnostics": diagnostics}
-
-    # Cross-check: what does compile's own DB lookup return?
-    try:
-        compile_clips = await db.fetch_cluster_clips(cluster_id)
-        diagnostics["compile_db_clips_count"] = len(compile_clips)
-    except Exception as e:
-        diagnostics["compile_db_clips_error"] = f"{type(e).__name__}: {e}"
-
-    if not kf_clips:
-        return {
-            "stage": "keyframes_db_lookup",
-            "note": "no clips with this cluster_id — DB mismatch",
-            "diagnostics": diagnostics,
-        }
-
-    # Stage 2: per-clip ffmpeg
-    per_clip = []
-    for c in kf_clips:
-        try:
-            png = await _extract_one(c["path"], c.get("duration_sec"))
-            per_clip.append({"id": c["id"], "png_bytes": len(png) if png else 0})
-        except Exception as e:
-            per_clip.append({"id": c["id"], "error": f"{type(e).__name__}: {e}"})
-    diagnostics["per_clip_extract"] = per_clip
-
-    try:
-        frames = await extract_cluster_keyframes(cluster_id)
-        frames_info = [{"clip_id": cid, "png_bytes": len(png)} for cid, png in frames]
-    except Exception as e:
-        return {"stage": "extract_keyframes", "error": type(e).__name__,
-                "message": str(e), "diagnostics": diagnostics}
-
-    if not frames:
-        return {
-            "stage": "extract_keyframes",
-            "frames_extracted": 0,
-            "note": "no frames extracted — caption-writer would raise and trigger fallback",
-            "diagnostics": diagnostics,
-        }
-
-    try:
-        result = await _run_caption_writer_with_vision(cluster_id)
-        return {
-            "stage": "success",
-            "frames_extracted": len(frames),
-            "frames": frames_info,
-            "caption": result.get("caption"),
-            "location": result.get("location"),
-        }
-    except Exception as e:
-        return {
-            "stage": "caption_writer",
-            "frames_extracted": len(frames),
-            "frames": frames_info,
-            "error": type(e).__name__,
-            "message": str(e),
-        }

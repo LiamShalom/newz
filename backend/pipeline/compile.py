@@ -18,51 +18,27 @@ Python and inline them into the user message.
 MCP tools (subagents only): get_cluster_clips, get_clip_metadata, save_segment.
 """
 import asyncio
-import base64
 import json
 import logging
-import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 from claude_agent_sdk import (
     query,
     ClaudeAgentOptions,
     AgentDefinition,
     ResultMessage,
-    AssistantMessage,
-    TextBlock,
 )
 
 from .. import config, db, events
 from .compile_tools import newz_tools_server
-from .keyframes import extract_cluster_keyframes
 from .stitch import stitch_clips
 from .caption_pipeline import generate_caption
 from .runs import compute_runs_for_cluster
 
 log = logging.getLogger(__name__)
 
-
-CAPTION_WRITER_SYSTEM = """You are the Caption Writer for the Newz news compile pipeline.
-
-You are given:
-- Cluster metadata: date, neighborhood (inferable from coords), clip count, GPS coordinates, timestamps
-- One keyframe image per clip (midpoint frame), in the same order as the metadata
-
-Write a neutral, AP-wire-style caption grounded in BOTH sources.
-
-Rules:
-- Reference ONLY visually verifiable facts from the keyframes (e.g., "people walking with signs", "vehicles on a roadway", "smoke visible") combined with metadata (date, neighborhood, clip count).
-- DO NOT infer motive, cause, affiliation, or topic. "Tuition protest" is forbidden; "people gathered with signs" is allowed.
-- DO NOT count people unless the count is unambiguous (5 or fewer visible).
-- If keyframes are visually ambiguous, default to metadata-only phrasing.
-
-Return ONLY a single JSON object: {"caption": "...", "location": "Neighborhood, City"}.
-Caption must be 200 characters or fewer. No text outside the JSON.
-"""
 
 ORCHESTRATOR_PROMPT_TEMPLATE = """Compile cluster {cluster_id} into a published news segment.
 
@@ -156,115 +132,6 @@ Return ONLY the segment id string from the tool result.""",
         model="haiku",
     ),
 }
-
-
-def _build_caption_user_message(
-    cluster_id: str,
-    metadata: list[dict],
-    frames: list[tuple[str, bytes]],
-) -> dict[str, Any]:
-    """Build a single user message with text + image content blocks.
-
-    Returned dict matches the SDK's stream-json wire format (see
-    claude_agent_sdk/_internal/client.py). The image blocks pass through the
-    bundled CLI to the Anthropic API verbatim.
-    """
-    content: list[dict[str, Any]] = [
-        {
-            "type": "text",
-            "text": (
-                f"Cluster ID: {cluster_id}\n"
-                f"Cluster metadata (one entry per clip, ordered by timestamp):\n"
-                f"{json.dumps(metadata, indent=2)}\n\n"
-                f"Below are {len(frames)} keyframe(s), one per clip, in the same order."
-            ),
-        }
-    ]
-    for clip_id, png in frames:
-        content.append({"type": "text", "text": f"Keyframe for clip {clip_id}:"})
-        content.append({
-            "type": "image",
-            "source": {
-                "type": "base64",
-                "media_type": "image/png",
-                "data": base64.b64encode(png).decode("ascii"),
-            },
-        })
-    return {
-        "type": "user",
-        "session_id": "",
-        "message": {"role": "user", "content": content},
-        "parent_tool_use_id": None,
-    }
-
-
-def _extract_text_from_assistant(msg: AssistantMessage) -> str:
-    parts: list[str] = []
-    for block in msg.content:
-        if isinstance(block, TextBlock):
-            parts.append(block.text)
-    return "".join(parts)
-
-
-def _parse_caption_json(raw: str) -> dict:
-    """Parse the caption-writer's JSON output. Tolerates ```json fences."""
-    text = raw.strip()
-    if text.startswith("```"):
-        # strip code fence
-        lines = text.splitlines()
-        if lines and lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].startswith("```"):
-            lines = lines[:-1]
-        text = "\n".join(lines).strip()
-    return json.loads(text)
-
-
-async def _run_caption_writer_with_vision(cluster_id: str) -> dict:
-    """Direct query() call with image content blocks. Returns {caption, location}.
-
-    Raises if no frames could be extracted or no JSON came back.
-    """
-    frames = await extract_cluster_keyframes(cluster_id)
-    if not frames:
-        raise RuntimeError(f"no keyframes extracted for cluster {cluster_id}")
-
-    clips = await db.fetch_cluster_clips(cluster_id)
-    metadata = [
-        {"id": c["id"], "lat": c["lat"], "lng": c["lng"], "ts": c["ts"]}
-        for c in clips
-    ]
-    user_msg = _build_caption_user_message(cluster_id, metadata, frames)
-
-    async def _prompt_stream():
-        yield user_msg
-
-    options = ClaudeAgentOptions(
-        system_prompt=CAPTION_WRITER_SYSTEM,
-        model="sonnet",
-        max_turns=1,
-    )
-
-    last_text = ""
-    async for msg in query(prompt=_prompt_stream(), options=options):
-        if isinstance(msg, AssistantMessage):
-            text = _extract_text_from_assistant(msg)
-            if text:
-                last_text = text
-        elif isinstance(msg, ResultMessage):
-            if msg.is_error:
-                raise RuntimeError(
-                    f"caption-writer query error cluster_id={cluster_id} "
-                    f"errors={msg.errors}"
-                )
-            break
-
-    if not last_text:
-        raise RuntimeError(f"caption-writer returned no text for cluster {cluster_id}")
-    data = _parse_caption_json(last_text)
-    if "caption" not in data or "location" not in data:
-        raise RuntimeError(f"caption-writer JSON missing required keys: {data}")
-    return data
 
 
 async def _run_orchestrator_chain(cluster_id: str) -> str:
@@ -402,6 +269,7 @@ async def _save_fallback_segment(cluster_id: str, video_url: str | None = None) 
     return await db.insert_segment(
         cluster_id=cluster_id,
         ordered_clip_ids=clip_ids,
+        title="",
         caption=caption,
         location=location_str,
         source_count=len(clip_ids),
@@ -410,18 +278,15 @@ async def _save_fallback_segment(cluster_id: str, video_url: str | None = None) 
 
 
 async def compile_segment(cluster_id: str) -> None:
-    """Top-level entry. Fire-and-forget via asyncio.create_task. Idempotent (CMP-09).
+    """Top-level entry. Two parallel branches inside a 60s cap.
 
-    Phase 4.5: Three parallel tracks inside a 60s cap:
-      Track A: _run_agents() — existing caption-writer + angle-selector → editor → publisher
-      Track B: stitch_clips() — ffmpeg concat of selected child slices → .webm file
-      Track C: generate_caption() — frame-based Haiku/Sonnet visual caption
+    Branch A: orchestrator chain (angle-select → editor → publisher) → stitch.
+              Writes the segment row with ordered_run_ids; produces video_url.
+    Branch B: describe-3-children → synth caption (and title once M5 lands).
+              Returns the title/caption to overwrite Branch A's placeholders.
 
-    After all tracks complete, insert_segment is called again (idempotent ON CONFLICT)
-    to update video_url and vision caption on the row Track A already wrote.
+    Both write through one final insert_segment call to land everything atomically.
     """
-    from .cluster import CLUSTERS  # avoid circular at module level
-
     started_at = time.time()
     await events.broadcast({
         "type": "compile_started",
@@ -429,77 +294,49 @@ async def compile_segment(cluster_id: str) -> None:
         "started_at": started_at,
     })
 
-    video_url: str | None = None
     segment_id: str = ""
+    video_url: str | None = None
+    caption_result: dict | None = None
 
     try:
-        cluster_cache = CLUSTERS.get(cluster_id)
-        children = await _get_children_with_vecs(cluster_id)
-
-        stitch_refs = []
-        for child in children:
-            if child.get("parent_path") and child.get("end_offset_sec") is not None:
-                stitch_refs.append({
-                    "path": child["parent_path"],
-                    "start_offset_sec": child.get("start_offset_sec", 0.0),
-                    "end_offset_sec": child["end_offset_sec"],
-                })
-        if not stitch_refs:
-            clips = await db.fetch_cluster_clips(cluster_id)
-            stitch_refs = [
-                {"path": c["path"], "start_offset_sec": 0.0, "end_offset_sec": None}
-                for c in clips[:3]
-            ]
-
-        output_path = str(config.DATA_DIR / "clips" / f"{cluster_id}_compiled.mp4")
-        centroid = cluster_cache.centroid if cluster_cache else None
-
         results = await asyncio.wait_for(
             asyncio.gather(
-                _run_agents(cluster_id),
-                stitch_clips(stitch_refs, output_path),
-                generate_caption(cluster_id, centroid, children) if centroid is not None and children else asyncio.sleep(0),
+                _branch_angles_then_stitch(cluster_id),
+                _branch_caption(cluster_id),
                 return_exceptions=True,
             ),
             timeout=60.0,
         )
+        a_result, b_result = results
 
-        agent_result, stitch_result, caption_result_raw = results
-
-        if isinstance(stitch_result, str) and stitch_result and Path(stitch_result).exists():
-            video_url = f"/media/{Path(stitch_result).name}"
+        if isinstance(a_result, Exception):
+            log.error("Branch A failed: %s — using fallback", a_result)
+            segment_id = await _save_fallback_segment(cluster_id, None)
         else:
-            log.warning("stitch returned no usable path: %s", stitch_result)
+            segment_id, video_url = a_result
 
-        # Only overwrite Track A's vision caption when Track C produced a real
-        # vision-grounded result (source=="vision"). Track C's fallback now
-        # returns None, but defend against future regressions by checking the
-        # source discriminator explicitly. RUNTIME-CAP-01.
-        caption_result = (
-            caption_result_raw
-            if isinstance(caption_result_raw, dict)
-            and caption_result_raw.get("source") == "vision"
-            else None
-        )
+        if isinstance(b_result, dict) and b_result.get("source") == "vision":
+            caption_result = b_result
+        elif isinstance(b_result, Exception):
+            log.warning("Branch B failed: %s — using existing/fallback caption", b_result)
 
-        if isinstance(agent_result, Exception):
-            log.error("agent track failed: %s — using fallback", agent_result)
-            segment_id = await _save_fallback_segment(cluster_id, video_url)
-        else:
-            segment_id = agent_result
-
-        if video_url or caption_result:
-            seg = await db.get_segment_for_cluster(cluster_id)
-            if seg:
-                clip_ids = json.loads(seg["ordered_clip_ids"]) if isinstance(seg.get("ordered_clip_ids"), str) else seg.get("ordered_clip_ids", [])
-                await db.insert_segment(
-                    cluster_id=cluster_id,
-                    ordered_clip_ids=clip_ids,
-                    caption=caption_result["caption"] if caption_result else seg.get("caption", ""),
-                    location=caption_result["location"] if caption_result else seg.get("location", ""),
-                    source_count=seg.get("source_count", 1),
-                    video_url=video_url or seg.get("video_url"),
-                )
+        seg = await db.get_segment_for_cluster(cluster_id)
+        if seg is not None:
+            run_ids = (
+                json.loads(seg["ordered_clip_ids"])
+                if isinstance(seg.get("ordered_clip_ids"), str)
+                else seg.get("ordered_clip_ids", [])
+            )
+            distinct_parents = len({rid.rsplit("_run_", 1)[0] for rid in run_ids})
+            await db.insert_segment(
+                cluster_id=cluster_id,
+                ordered_clip_ids=run_ids,
+                title=(caption_result.get("title", "") if caption_result else seg.get("title") or ""),
+                caption=(caption_result["caption"] if caption_result else seg.get("caption") or ""),
+                location=(caption_result["location"] if caption_result else seg.get("location") or "Pasadena, CA"),
+                source_count=distinct_parents or seg.get("source_count", 1),
+                video_url=video_url or seg.get("video_url"),
+            )
 
         elapsed_ms = int((time.time() - started_at) * 1000)
         log.info(
