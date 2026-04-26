@@ -269,7 +269,7 @@ async def test_track_c_fallback_does_not_overwrite_track_a_caption(tmp_path):
 @pytest.mark.asyncio
 async def test_no_multi_angle_template_in_fallback_paths():
     """RUNTIME-CAP-01: _save_fallback_segment must NOT emit the forbidden
-    'Multi-angle event captured' template.
+    cluster-framing template (substring check below catches it).
     """
     captured = {}
     fake_clips = [
