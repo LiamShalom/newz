@@ -33,7 +33,7 @@ async def _pre_warm_marengo() -> None:
     try:
         from .pipeline.embed import _sync_embed
         loop = asyncio.get_event_loop()
-        _, latency_ms = await loop.run_in_executor(None, _sync_embed, pre_warm_path, "__prewarm__")
+        _, _, latency_ms = await loop.run_in_executor(None, _sync_embed, pre_warm_path, "__prewarm__")
         log.info("Marengo pre-warm complete latency_ms=%d", latency_ms)
     except Exception as exc:
         log.warning("Marengo pre-warm failed (non-fatal): %s", exc)
