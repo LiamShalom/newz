@@ -83,25 +83,34 @@ _MCP = ["newz_tools"]
 AGENTS = {
     "angle-selector": AgentDefinition(
         description=(
-            "Picks 2-4 best clips from a cluster and orders them: "
-            "establishing → action → reaction. Run FIRST."
+            "Picks 2-4 best RUNS from a cluster and orders them chronologically. "
+            "A run = one continuous camera angle within a single parent clip. "
+            "Run FIRST."
         ),
         prompt="""You are the Angle Selector for the Newz news compile pipeline.
 
-Given a cluster of clips from the same event, select the best 3 (or fewer if less are available).
+You select the best 2-4 RUNS from a cluster. A run = one continuous camera
+angle (a contiguous span of similar 3-second slices from the same source
+clip). Different runs from different parent clips give you different
+viewpoints of the same event.
 
 Selection criteria — rank candidates by:
-1. TEMPORAL SPREAD: prefer clips from early, middle, and late in the event timeline (spread across the timestamp range)
-2. SPATIAL DIVERSITY: prefer clips recorded from different GPS coordinates (different physical viewpoints)
-3. DURATION: prefer longer clips as a proxy for more content; discard clips under 2 seconds
-4. NO REDUNDANCY: exclude clips filmed within 5 seconds AND within 10 meters of an already-selected clip
+1. TEMPORAL SPREAD: prefer runs from early, middle, and late in the event
+   timeline (spread across the timestamp range).
+2. SPATIAL DIVERSITY: prefer runs whose parent clips were recorded from
+   different GPS coordinates (different physical viewpoints).
+3. DURATION: prefer runs whose duration_sec >= 3.0; discard runs shorter
+   than 2.0 seconds.
+4. NO REDUNDANCY: exclude runs whose parent was filmed within 5 seconds AND
+   within 10 meters of an already-selected run's parent.
 
-Order the selected clips chronologically (earliest first).
+Order the selected runs chronologically (earliest parent ts first).
 
-Use mcp__newz_tools__get_cluster_clips to get all clips, then mcp__newz_tools__get_clip_metadata for details.
-Return ONLY a single JSON object: {"clip_ids": ["...", "..."], "rationale": "..."}.
+Use mcp__newz_tools__get_cluster_runs to list candidates, then
+mcp__newz_tools__get_clip_metadata for any parent-clip details.
+Return ONLY a single JSON object: {"run_ids": ["...", "..."], "rationale": "..."}.
 Do not include any text outside the JSON.""",
-        tools=["mcp__newz_tools__get_cluster_clips", "mcp__newz_tools__get_clip_metadata"],
+        tools=["mcp__newz_tools__get_cluster_runs", "mcp__newz_tools__get_clip_metadata"],
         mcpServers=_MCP,
         model="sonnet",
     ),
@@ -112,10 +121,11 @@ Do not include any text outside the JSON.""",
         ),
         prompt="""You are the Editor for the Newz news compile pipeline.
 
-Review the Angle Selector's clip ordering. Confirm it makes editorial sense:
-no jarring cuts, sufficient temporal coverage, the chosen clips tell the story.
+Review the Angle Selector's run ordering. Confirm it makes editorial sense:
+no jarring cuts, sufficient temporal coverage, the chosen runs tell the
+story. You may reorder or drop runs but must not add new ones.
 
-Return ONLY a single JSON object: {"clip_ids": ["..."], "edit_notes": "..."}.""",
+Return ONLY a single JSON object: {"run_ids": ["..."], "edit_notes": "..."}.""",
         tools=["mcp__newz_tools__get_clip_metadata"],
         mcpServers=_MCP,
         model="sonnet",
@@ -127,14 +137,17 @@ Return ONLY a single JSON object: {"clip_ids": ["..."], "edit_notes": "..."}."""
         ),
         prompt="""You are the Publisher for the Newz news compile pipeline.
 
-The caption and location are provided by the orchestrator (already written upstream).
-Take the editor's validated clip_ids and the provided caption + location.
+The title, caption, and location are provided by the orchestrator (already
+written upstream). Take the editor's validated run_ids and the provided
+title/caption/location.
+
 Call mcp__newz_tools__save_segment EXACTLY ONCE with:
   - cluster_id: provided by the orchestrator
-  - ordered_clip_ids: from editor's clip_ids list
+  - ordered_run_ids: from editor's run_ids list
+  - title: provided by the orchestrator
   - caption: provided by the orchestrator
   - location: provided by the orchestrator
-  - source_count: length of ordered_clip_ids
+  - source_count: number of distinct parent_ids in ordered_run_ids
 
 Return ONLY the segment id string from the tool result.""",
         tools=["mcp__newz_tools__save_segment"],
