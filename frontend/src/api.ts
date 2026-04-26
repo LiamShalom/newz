@@ -9,13 +9,14 @@ export const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000"
 /**
  * Fetch compiled segments from GET /feed.
  * Passes viewer coordinates for proximity sort when available (FED-01).
- * Attaches a synthetic `url` field pointing to the first clip's video file
- * so FeedTile can render without knowing the backend path structure.
+ * Attaches a synthetic `url` field pointing to the compiled video when ready,
+ * or null while the segment is still being stitched. After M6, ordered_clip_ids
+ * holds run IDs (not file IDs), so we never try to construct a clip-path URL.
  */
 export async function fetchSegments(
   lat?: number,
   lng?: number,
-): Promise<(Segment & { url: string })[]> {
+): Promise<(Segment & { url: string | null })[]> {
   let endpoint = `${API_BASE}/feed`;
   if (lat !== undefined && lng !== undefined) {
     endpoint += `?lat=${lat}&lng=${lng}`;
@@ -25,9 +26,7 @@ export async function fetchSegments(
   const data = (await res.json()) as { segments: Segment[] };
   return data.segments.map((s) => ({
     ...s,
-    url: s.video_url
-      ? `${API_BASE}${s.video_url}`
-      : `${API_BASE}/media/${s.ordered_clip_ids[0]}.webm`,
+    url: s.video_url ? `${API_BASE}${s.video_url}` : null,
     video_urls: s.video_urls
       ? s.video_urls.map((v) => (v ? `${API_BASE}${v}` : null))
       : null,

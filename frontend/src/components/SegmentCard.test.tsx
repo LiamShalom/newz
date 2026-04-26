@@ -32,7 +32,7 @@ afterEach(() => {
   mounted = [];
 });
 
-const segment: Segment & { url: string } = {
+const segment: Segment & { url: string | null } = {
   id: "seg-1",
   cluster_id: "cluster-1",
   ordered_clip_ids: ["clip-1"],

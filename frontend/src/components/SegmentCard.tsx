@@ -16,7 +16,7 @@ export function SegmentCard({
   viewerLng,
   active = false,
 }: {
-  segment: Segment & { url: string };
+  segment: Segment & { url: string | null };
   viewerLat?: number;
   viewerLng?: number;
   /** True when this card is the most-visible one in the viewport. */
@@ -37,7 +37,7 @@ export function SegmentCard({
   // swallow the rejection so a stale promise doesn't spam the console.
   useEffect(() => {
     const el = videoRef.current;
-    if (!el) return;
+    if (!el || !currentUrl) return;
     if (active) {
       const p = el.play();
       if (p && typeof p.catch === "function") p.catch(() => {});
@@ -59,16 +59,22 @@ export function SegmentCard({
   return (
     <article className="relative">
       <div className="relative overflow-hidden rounded-2xl bg-surface aspect-[4/5]">
-        <video
-          ref={videoRef}
-          key={currentUrl}
-          src={currentUrl}
-          muted
-          playsInline
-          preload={active ? "auto" : "metadata"}
-          onEnded={handleEnded}
-          className="absolute inset-0 w-full h-full object-cover"
-        />
+        {currentUrl ? (
+          <video
+            ref={videoRef}
+            key={currentUrl}
+            src={currentUrl}
+            muted
+            playsInline
+            preload={active ? "auto" : "metadata"}
+            onEnded={handleEnded}
+            className="absolute inset-0 w-full h-full object-cover"
+          />
+        ) : (
+          <div className="absolute inset-0 flex items-center justify-center text-ink-secondary text-sm">
+            Compiling…
+          </div>
+        )}
 
         <div
           aria-hidden

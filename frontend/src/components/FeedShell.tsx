@@ -8,7 +8,7 @@ export function FeedShell({
   viewerLat,
   viewerLng,
 }: {
-  segments: (Segment & { url: string })[];
+  segments: (Segment & { url: string | null })[];
   viewerLat?: number;
   viewerLng?: number;
 }) {

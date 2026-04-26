@@ -11,7 +11,7 @@ import { FeedShell } from "../components/FeedShell";
 import { Masthead } from "../components/Masthead";
 
 export function Feed() {
-  const [segments, setSegments] = useState<(Segment & { url: string })[]>([]);
+  const [segments, setSegments] = useState<(Segment & { url: string | null })[]>([]);
   const [loaded, setLoaded] = useState(false);
   const location = useLocation();
   const coordsRef = useRef<{ lat: number; lng: number } | undefined>(undefined);
