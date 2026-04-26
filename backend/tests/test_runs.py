@@ -46,3 +46,25 @@ def test_one_parent_all_similar_collapses_to_one_run():
     assert r.member_child_ids == ["p1_child_0", "p1_child_3", "p1_child_6"]
     assert r.vec.shape == (512,)
     assert abs(np.linalg.norm(r.vec) - 1.0) < 1e-5
+
+
+def test_scene_cut_splits_into_two_runs():
+    a, b = _unit(1), _unit(99)  # orthogonal-ish -> cosine << 0.85
+    children = [
+        {"id": "p1_child_0", "parent_id": "p1", "parent_path": "/x/p1.mp4",
+         "start_offset_sec": 0.0, "end_offset_sec": 3.0, "vec": a},
+        {"id": "p1_child_3", "parent_id": "p1", "parent_path": "/x/p1.mp4",
+         "start_offset_sec": 3.0, "end_offset_sec": 6.0, "vec": a},
+        {"id": "p1_child_6", "parent_id": "p1", "parent_path": "/x/p1.mp4",
+         "start_offset_sec": 6.0, "end_offset_sec": 9.0, "vec": b},  # cut here
+        {"id": "p1_child_9", "parent_id": "p1", "parent_path": "/x/p1.mp4",
+         "start_offset_sec": 9.0, "end_offset_sec": 12.0, "vec": b},
+    ]
+    runs = find_runs(children, threshold=0.85)
+    assert len(runs) == 2
+    assert runs[0].id == "p1_run_0"
+    assert runs[0].end_offset_sec == 6.0
+    assert runs[0].member_child_ids == ["p1_child_0", "p1_child_3"]
+    assert runs[1].id == "p1_run_1"
+    assert runs[1].start_offset_sec == 6.0
+    assert runs[1].end_offset_sec == 12.0
