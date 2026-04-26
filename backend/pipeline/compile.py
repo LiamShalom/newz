@@ -173,32 +173,6 @@ async def _run_orchestrator_chain(cluster_id: str) -> str:
     return seg["id"]
 
 
-async def _branch_angles_then_stitch(cluster_id: str) -> tuple[str, str | None]:
-    """Sequential: orchestrator chain (writes segment with run_ids) → stitch.
-
-    Returns (segment_id, video_url_or_None).
-    """
-    import json as _json
-    segment_id = await _run_orchestrator_chain(cluster_id)
-    seg = await db.get_segment_for_cluster(cluster_id)
-    raw = seg.get("ordered_clip_ids") if seg else None
-    run_ids = _json.loads(raw) if isinstance(raw, str) else (raw or [])
-
-    if not run_ids:
-        log.warning("Branch A: no run_ids saved for cluster_id=%s", cluster_id)
-        return segment_id, None
-
-    refs = await _resolve_run_ids_to_stitch_refs(cluster_id, run_ids)
-    if not refs:
-        return segment_id, None
-
-    output_path = str(config.DATA_DIR / "clips" / f"{cluster_id}_compiled.mp4")
-    stitched = await stitch_clips(refs, output_path)
-    if stitched and Path(stitched).exists() and stitched == output_path:
-        return segment_id, f"/media/{Path(stitched).name}"
-    return segment_id, None
-
-
 async def _get_children_with_vecs(cluster_id: str) -> list[dict]:
     """Load child clips for cluster with their embedding vectors attached."""
     rows = await db.fetch_cluster_clips_with_children(cluster_id)
@@ -277,15 +251,45 @@ async def _save_fallback_segment(cluster_id: str, video_url: str | None = None) 
     )
 
 
+async def _stitch_segment_runs(cluster_id: str) -> str | None:
+    """Resolve run_ids saved by the publisher and produce {cluster_id}_compiled.mp4.
+
+    Returns the /media/* video_url on success, None on failure or no run_ids.
+    Runs OUTSIDE the LLM wall-clock budget — stitch is fast (<1s typical) and
+    must not be cancelled by the orchestrator-chain timeout.
+    """
+    seg = await db.get_segment_for_cluster(cluster_id)
+    if seg is None:
+        return None
+    raw = seg.get("ordered_clip_ids")
+    run_ids = (
+        json.loads(raw) if isinstance(raw, str)
+        else (raw or [])
+    )
+    if not run_ids:
+        log.warning("stitch: no run_ids saved for cluster_id=%s", cluster_id)
+        return None
+    refs = await _resolve_run_ids_to_stitch_refs(cluster_id, run_ids)
+    if not refs:
+        return None
+    output_path = str(config.DATA_DIR / "clips" / f"{cluster_id}_compiled.mp4")
+    stitched = await stitch_clips(refs, output_path)
+    if stitched and Path(stitched).exists() and stitched == output_path:
+        return f"/media/{Path(stitched).name}"
+    return None
+
+
 async def compile_segment(cluster_id: str) -> None:
-    """Top-level entry. Two parallel branches inside a 60s cap.
+    """Top-level entry. LLM work in parallel under 60s cap, then stitch sequentially.
 
-    Branch A: orchestrator chain (angle-select → editor → publisher) → stitch.
-              Writes the segment row with ordered_run_ids; produces video_url.
-    Branch B: describe-3-children → synth caption (and title once M5 lands).
-              Returns the title/caption to overwrite Branch A's placeholders.
-
-    Both write through one final insert_segment call to land everything atomically.
+    Phase 1 (LLM, 60s budget): orchestrator chain ‖ caption pipeline.
+        Orchestrator chain saves segment row with run_ids + empty title/caption.
+        Caption pipeline returns {caption, location, [title]} or None.
+    Phase 2 (deterministic, 30s budget): stitch chosen runs into compiled.mp4.
+        Pulled out of the LLM gather because stitch is fast and must not be
+        cancelled by orchestrator-chain timeouts. See debug log
+        clips-not-clustering.md / black-screen investigation.
+    Phase 3: single insert_segment combines both phases atomically.
     """
     started_at = time.time()
     await events.broadcast({
@@ -299,9 +303,10 @@ async def compile_segment(cluster_id: str) -> None:
     caption_result: dict | None = None
 
     try:
+        # Phase 1: LLM work in parallel.
         results = await asyncio.wait_for(
             asyncio.gather(
-                _branch_angles_then_stitch(cluster_id),
+                _run_orchestrator_chain(cluster_id),
                 _branch_caption(cluster_id),
                 return_exceptions=True,
             ),
@@ -310,16 +315,32 @@ async def compile_segment(cluster_id: str) -> None:
         a_result, b_result = results
 
         if isinstance(a_result, Exception):
-            log.error("Branch A failed: %s — using fallback", a_result)
+            log.error("orchestrator chain failed: %s — using fallback", a_result)
             segment_id = await _save_fallback_segment(cluster_id, None)
         else:
-            segment_id, video_url = a_result
+            segment_id = a_result
 
         if isinstance(b_result, dict) and b_result.get("source") == "vision":
             caption_result = b_result
         elif isinstance(b_result, Exception):
-            log.warning("Branch B failed: %s — using existing/fallback caption", b_result)
+            log.warning("caption pipeline failed: %s — using fallback caption", b_result)
 
+        # Phase 2: stitch sequentially (only if orchestrator succeeded). Separate
+        # 30s budget so a slow ffmpeg encode doesn't bleed into LLM phase failures.
+        if not isinstance(a_result, Exception):
+            try:
+                video_url = await asyncio.wait_for(
+                    _stitch_segment_runs(cluster_id),
+                    timeout=30.0,
+                )
+            except asyncio.TimeoutError:
+                log.warning("stitch TIMEOUT cluster_id=%s after 30s", cluster_id)
+                video_url = None
+            except Exception as exc:
+                log.warning("stitch failed cluster_id=%s: %s", cluster_id, exc)
+                video_url = None
+
+        # Phase 3: re-insert with all updates landed.
         seg = await db.get_segment_for_cluster(cluster_id)
         if seg is not None:
             run_ids = (

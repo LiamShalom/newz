@@ -59,7 +59,7 @@ async def test_compile_segment_branch_a_exception_uses_fallback():
     async def passing_branch_b(cid):
         return None
 
-    with patch("backend.pipeline.compile._branch_angles_then_stitch",
+    with patch("backend.pipeline.compile._run_orchestrator_chain",
                side_effect=failing_branch_a), \
          patch("backend.pipeline.compile._branch_caption",
                side_effect=passing_branch_b), \
