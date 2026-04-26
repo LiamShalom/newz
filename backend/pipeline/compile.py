@@ -378,7 +378,7 @@ async def compile_segment(cluster_id: str) -> None:
                 for c in clips[:3]
             ]
 
-        output_path = str(config.DATA_DIR / "clips" / f"{cluster_id}_compiled.webm")
+        output_path = str(config.DATA_DIR / "clips" / f"{cluster_id}_compiled.mp4")
         centroid = cluster_cache.centroid if cluster_cache else None
 
         results = await asyncio.wait_for(
