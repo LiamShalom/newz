@@ -63,8 +63,8 @@ async def test_compile_segment_happy_path(tmp_path):
     async def fake_compute_runs(cid):
         return fake_runs
 
-    async def fake_stitch(refs, out):
-        Path(out).write_bytes(b"stitched")
+    async def fake_trim(ref, out):
+        Path(out).write_bytes(b"trimmed")
         return out
 
     async def fake_caption(cid):
@@ -74,7 +74,7 @@ async def test_compile_segment_happy_path(tmp_path):
 
     with patch("backend.pipeline.compile._run_orchestrator_chain", side_effect=fake_orchestrator), \
          patch("backend.pipeline.compile.compute_runs_for_cluster", side_effect=fake_compute_runs), \
-         patch("backend.pipeline.compile.stitch_clips", side_effect=fake_stitch), \
+         patch("backend.pipeline.compile.trim_window", side_effect=fake_trim), \
          patch("backend.pipeline.compile._branch_caption", side_effect=fake_caption), \
          patch("backend.pipeline.compile.db") as mock_db, \
          patch("backend.pipeline.compile.events") as mock_events, \

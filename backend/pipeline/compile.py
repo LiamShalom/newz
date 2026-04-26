@@ -33,7 +33,7 @@ from claude_agent_sdk import (
 
 from .. import config, db, events
 from .compile_tools import newz_tools_server
-from .stitch import stitch_clips
+from .stitch import stitch_clips, trim_window
 from .caption_pipeline import generate_caption
 from .runs import compute_runs_for_cluster
 
@@ -259,16 +259,28 @@ async def _stitch_segment_runs(cluster_id: str) -> list[str]:
     if not refs:
         return []
 
-    urls: list[str] = []
-    # refs is in the same order as run_ids (resolver preserves input order).
-    for run_id, ref in zip(run_ids, refs):
+    # Trim each run's window in PARALLEL via -c copy stream-copy (no re-encode).
+    # Runs are always contiguous within ONE parent file, so this is a fast
+    # ffmpeg trim, not a real concat. asyncio.gather lets ffmpeg processes
+    # share CPU instead of awaiting one-at-a-time.
+    async def _trim_one(run_id: str, ref: dict) -> tuple[str, str | None]:
         output_path = str(config.DATA_DIR / "clips" / f"{run_id}.mp4")
-        result = await stitch_clips([ref], output_path)
+        t0 = time.monotonic()
+        result = await trim_window(ref, output_path)
+        elapsed_ms = int((time.monotonic() - t0) * 1000)
         if result and Path(result).exists() and result == output_path:
-            urls.append(f"/media/{run_id}.mp4")
-        else:
-            log.warning("stitch failed for run_id=%s cluster_id=%s", run_id, cluster_id)
-    return urls
+            log.info("trim ok run_id=%s elapsed_ms=%d", run_id, elapsed_ms)
+            return run_id, f"/media/{run_id}.mp4"
+        log.warning(
+            "trim failed run_id=%s cluster_id=%s elapsed_ms=%d",
+            run_id, cluster_id, elapsed_ms,
+        )
+        return run_id, None
+
+    results = await asyncio.gather(
+        *[_trim_one(rid, ref) for rid, ref in zip(run_ids, refs)],
+    )
+    return [url for _rid, url in results if url is not None]
 
 
 async def compile_segment(cluster_id: str) -> None:

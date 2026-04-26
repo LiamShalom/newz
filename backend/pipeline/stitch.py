@@ -107,3 +107,70 @@ async def stitch_clips(clip_refs: list[dict], output_path: str) -> str:
     except Exception as exc:
         log.warning("stitch FAILED — falling back to first clip path: %s", exc)
         return fallback_path
+
+
+def _sync_trim(ref: dict, output_path: str) -> str:
+    """Fast `-c copy` trim of a single window from one parent file.
+
+    Per-run case (Phase 4.6): runs are always contiguous slices of ONE parent,
+    so there's nothing to concatenate across files. A stream-copy trim avoids
+    libx264 re-encode entirely (~50-100ms vs. 1-3s for the normalize pipeline).
+    iOS Safari plays mp4-from-mp4 trims fine when the source is already H.264
+    (MediaRecorder output from iPhone Safari) — `+faststart` ensures the moov
+    atom is at the front so playback can start before the file is fully fetched.
+
+    Output is .mp4 regardless of input extension; if input is webm/VP9 the trim
+    will produce an mp4 container around VP9 which iOS won't play. That's an
+    acceptable trade for the demo target (iPhone Safari producing H.264 .mp4).
+    """
+    if not ref:
+        return ""
+
+    start = float(ref.get("start_offset_sec", 0.0))
+    end = ref.get("end_offset_sec")
+
+    tmp_path = f"{output_path}.part-{int(time.time() * 1000)}-{os.getpid()}"
+    input_kwargs = {"ss": start}
+    if end is not None:
+        input_kwargs["to"] = end
+
+    try:
+        out = (
+            ffmpeg
+            .input(ref["path"], **input_kwargs)
+            .output(
+                tmp_path,
+                format="mp4",
+                vcodec="copy",
+                acodec="copy",
+                movflags="+faststart",
+                avoid_negative_ts="make_zero",
+            )
+            .global_args("-loglevel", "error")
+            .run_async(pipe_stderr=True)
+        )
+        _, stderr = out.communicate()
+        if out.returncode != 0:
+            raise RuntimeError(stderr.decode(errors="replace")[:500])
+        os.replace(tmp_path, output_path)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except FileNotFoundError:
+            pass
+        raise
+    log.info("trim ok output=%s", output_path)
+    return output_path
+
+
+async def trim_window(ref: dict, output_path: str) -> str:
+    """Async wrapper around _sync_trim. Falls back to ref['path'] on any failure."""
+    if not ref:
+        return ""
+    fallback_path = ref["path"]
+    try:
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, _sync_trim, ref, output_path)
+    except Exception as exc:
+        log.warning("trim FAILED — falling back to source path: %s", exc)
+        return fallback_path
