@@ -1,277 +1,151 @@
 """
-Tests for backend/pipeline/compile.py — happy-path compile_segment.
+Tests for backend/pipeline/compile.py — Phase 4.6 two-branch shape.
 
-The vision-enabled caption-writer makes one query() call (with image content
-blocks) and the orchestrator chain makes another (subagents). The mocks below
-patch query() with side_effects keyed off whether the prompt is a string
-(orchestrator) or an AsyncIterable (caption-writer).
+Branch A: orchestrator chain (angle-select → editor → publisher) → stitch chosen runs.
+Branch B: describe-3-children → synth caption (title arrives once M5 lands).
+
+These tests mock at the branch-helper boundary so the orchestrator subagent
+chain doesn't actually execute. The legacy vision-caption-writer test scaffolding
+(query() string-vs-AsyncIterable mock, extract_cluster_keyframes, _run_agents)
+is gone — those code paths were deleted in M6.4.
 """
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+import numpy as np
 import pytest
 
-
-class FakeResultMessage:
-    """Mimic ResultMessage's surface used by compile.py."""
-
-    is_error = False
-    errors = None
-    num_turns = 1
-    duration_ms = 100
-    result = "ok"
-
-
-class FakeAssistantMessage:
-    """Mimic AssistantMessage with a single TextBlock for the caption JSON."""
-
-    def __init__(self, text: str):
-        from claude_agent_sdk import TextBlock
-        self.content = [TextBlock(text=text)]
-        self.model = "sonnet"
-
-
-def _make_query_mock(caption_json: str):
-    """Build a fake query() that branches on prompt shape.
-
-    - AsyncIterable prompt → caption-writer → yield AssistantMessage(JSON) + ResultMessage
-    - str prompt → orchestrator → yield ResultMessage only
-    """
-    captured = {"caption_user_msg": None}
-
-    async def fake_query(prompt, options):
-        if isinstance(prompt, str):
-            yield FakeResultMessage()
-            return
-        # AsyncIterable: drain to capture the user message we sent
-        async for msg in prompt:
-            captured["caption_user_msg"] = msg
-        yield FakeAssistantMessage(caption_json)
-        yield FakeResultMessage()
-
-    return fake_query, captured
+from backend.pipeline.runs import Run
 
 
 @pytest.mark.asyncio
-async def test_compile_segment_happy_path():
-    """Vision caption-writer + orchestrator → segment_published with vision-derived caption."""
-    fake_segment = {
-        "id": "seg-abc123",
-        "cluster_id": "cluster-xyz",
-        "ordered_clip_ids": ["c1", "c2"],
-        "caption": "People with signs gathered on a Pasadena street, April 25, 2026.",
-        "location": "Pasadena, CA",
-        "source_count": 2,
-        "created_at": 1_000_000.0,
-    }
-    caption_json = (
-        '{"caption": "People with signs gathered on a Pasadena street, April 25, 2026.",'
-        ' "location": "Pasadena, CA"}'
-    )
-    fake_query, captured = _make_query_mock(caption_json)
-
-    fake_clips = [
-        {"id": "c1", "path": "/tmp/c1.mp4", "lat": 34.1, "lng": -118.1, "ts": 1_700_000_000.0},
-        {"id": "c2", "path": "/tmp/c2.mp4", "lat": 34.11, "lng": -118.11, "ts": 1_700_000_010.0},
-    ]
-    fake_frames = [("c1", b"\x89PNG\r\n\x1a\n_fake_1"), ("c2", b"\x89PNG\r\n\x1a\n_fake_2")]
-
-    with patch("backend.pipeline.compile.query", side_effect=fake_query), \
-         patch("backend.pipeline.compile.extract_cluster_keyframes",
-               new_callable=AsyncMock, return_value=fake_frames), \
-         patch("backend.pipeline.compile.stitch_clips",
-               new_callable=AsyncMock, return_value=""), \
-         patch("backend.pipeline.compile.generate_caption",
-               new_callable=AsyncMock, return_value=None), \
-         patch("backend.pipeline.compile._get_children_with_vecs",
-               new_callable=AsyncMock, return_value=[]), \
-         patch("backend.pipeline.compile.db") as mock_db, \
-         patch("backend.pipeline.compile.events") as mock_events:
-
-        mock_db.fetch_cluster_clips = AsyncMock(return_value=fake_clips)
-        mock_db.get_segment_for_cluster = AsyncMock(return_value=fake_segment)
-        mock_db.set_compile_in_flight = AsyncMock(return_value=True)
-        mock_events.broadcast = AsyncMock()
-
-        from backend.pipeline.compile import compile_segment
-        await compile_segment("cluster-xyz")
-
-        mock_db.set_compile_in_flight.assert_awaited_with("cluster-xyz", False)
-
-        broadcast_calls = mock_events.broadcast.await_args_list
-        event_types = [c.args[0]["type"] for c in broadcast_calls]
-        assert "segment_published" in event_types, f"got {event_types}"
-
-        pub_call = next(c for c in broadcast_calls if c.args[0]["type"] == "segment_published")
-        assert pub_call.args[0]["segment_id"] == "seg-abc123"
-        assert pub_call.args[0]["cluster_id"] == "cluster-xyz"
-
-        # The caption-writer received a user message containing image content blocks.
-        sent = captured["caption_user_msg"]
-        assert sent is not None, "caption-writer never received a user message"
-        assert sent["type"] == "user"
-        content = sent["message"]["content"]
-        assert isinstance(content, list)
-        image_blocks = [b for b in content if b.get("type") == "image"]
-        assert len(image_blocks) == 2, f"expected 2 image blocks, got {len(image_blocks)}"
-        assert image_blocks[0]["source"]["media_type"] == "image/png"
-        assert image_blocks[0]["source"]["type"] == "base64"
-
-
-@pytest.mark.asyncio
-async def test_compile_segment_partial_keyframe_failure():
-    """ffmpeg fails on 1 of 3 clips → caption-writer still runs with N-1 frames."""
-    fake_segment = {
-        "id": "seg-partial",
-        "cluster_id": "cluster-partial",
-        "ordered_clip_ids": ["c1", "c3"],
-        "caption": "Partial frames caption.",
-        "location": "Pasadena, CA",
-        "source_count": 2,
-        "created_at": 1_000_000.0,
-    }
-    caption_json = '{"caption": "Partial frames caption.", "location": "Pasadena, CA"}'
-    fake_query, captured = _make_query_mock(caption_json)
-
-    fake_clips = [
-        {"id": "c1", "path": "/tmp/c1.mp4", "lat": 34.1, "lng": -118.1, "ts": 1_700_000_000.0},
-        {"id": "c2", "path": "/tmp/c2.mp4", "lat": 34.11, "lng": -118.11, "ts": 1_700_000_010.0},
-        {"id": "c3", "path": "/tmp/c3.mp4", "lat": 34.12, "lng": -118.12, "ts": 1_700_000_020.0},
-    ]
-    # c2 dropped — ffmpeg failed
-    partial_frames = [("c1", b"_png1"), ("c3", b"_png3")]
-
-    with patch("backend.pipeline.compile.query", side_effect=fake_query), \
-         patch("backend.pipeline.compile.extract_cluster_keyframes",
-               new_callable=AsyncMock, return_value=partial_frames), \
-         patch("backend.pipeline.compile.stitch_clips",
-               new_callable=AsyncMock, return_value=""), \
-         patch("backend.pipeline.compile.generate_caption",
-               new_callable=AsyncMock, return_value=None), \
-         patch("backend.pipeline.compile._get_children_with_vecs",
-               new_callable=AsyncMock, return_value=[]), \
-         patch("backend.pipeline.compile.db") as mock_db, \
-         patch("backend.pipeline.compile.events") as mock_events:
-
-        mock_db.fetch_cluster_clips = AsyncMock(return_value=fake_clips)
-        mock_db.get_segment_for_cluster = AsyncMock(return_value=fake_segment)
-        mock_db.set_compile_in_flight = AsyncMock(return_value=True)
-        mock_events.broadcast = AsyncMock()
-
-        from backend.pipeline.compile import compile_segment
-        await compile_segment("cluster-partial")
-
-        sent = captured["caption_user_msg"]
-        image_blocks = [b for b in sent["message"]["content"] if b.get("type") == "image"]
-        assert len(image_blocks) == 2, "should have run with N-1 frames"
-
-        broadcast_calls = mock_events.broadcast.await_args_list
-        event_types = [c.args[0]["type"] for c in broadcast_calls]
-        assert "segment_published" in event_types
-
-
-@pytest.mark.asyncio
-async def test_compile_segment_no_keyframes_falls_back():
-    """When zero frames extract, caption-writer raises → fallback path runs."""
-    fallback_id = "seg-fallback-novision"
-
-    async def never_called_query(prompt, options):
-        raise AssertionError("query() should not be called when no frames")
-        yield  # pragma: no cover
-
-    with patch("backend.pipeline.compile.query", side_effect=never_called_query), \
-         patch("backend.pipeline.compile.extract_cluster_keyframes",
-               new_callable=AsyncMock, return_value=[]), \
-         patch("backend.pipeline.compile.stitch_clips",
-               new_callable=AsyncMock, return_value=""), \
-         patch("backend.pipeline.compile.generate_caption",
-               new_callable=AsyncMock, return_value=None), \
-         patch("backend.pipeline.compile._get_children_with_vecs",
-               new_callable=AsyncMock, return_value=[]), \
-         patch("backend.pipeline.compile._save_fallback_segment",
-               new_callable=AsyncMock, return_value=fallback_id) as mock_fallback, \
-         patch("backend.pipeline.compile.db") as mock_db, \
-         patch("backend.pipeline.compile.events") as mock_events:
-
-        mock_db.fetch_cluster_clips = AsyncMock(return_value=[])
-        mock_db.get_segment_for_cluster = AsyncMock(return_value=None)
-        mock_db.set_compile_in_flight = AsyncMock(return_value=True)
-        mock_events.broadcast = AsyncMock()
-
-        from backend.pipeline.compile import compile_segment
-        await compile_segment("cluster-noframes")
-
-        # _save_fallback_segment is called with (cluster_id, video_url) — the
-        # parallel-track shape passes video_url even when stitch produced nothing.
-        mock_fallback.assert_awaited_once()
-        call_args = mock_fallback.await_args
-        assert call_args.args[0] == "cluster-noframes"
-        broadcast_calls = mock_events.broadcast.await_args_list
-        pub_call = next(c for c in broadcast_calls if c.args[0]["type"] == "segment_published")
-        assert pub_call.args[0]["segment_id"] == fallback_id
-
-
-@pytest.mark.asyncio
-async def test_track_c_fallback_does_not_overwrite_track_a_caption(tmp_path):
-    """RUNTIME-CAP-01: when generate_caption returns None (Track C fallback),
-    compile_segment must preserve Track A's vision-grounded caption on the row.
-    """
-    cluster_id = "cluster-trackc-fallback"
-    track_a_caption = "VISION_CAPTION_FROM_TRACK_A"
-    fake_segment = {
-        "id": "seg-trackc-fallback",
+async def test_compile_segment_happy_path(tmp_path):
+    """Both branches succeed → stitch video_url + Branch-B caption land in segment."""
+    cluster_id = "cluster-xyz"
+    seg_state = {
+        "id": "seg-abc",
         "cluster_id": cluster_id,
-        "ordered_clip_ids": ["c1"],
-        "caption": track_a_caption,
+        "ordered_clip_ids": '["p1_run_0"]',
+        "title": "",
+        "caption": "",
         "location": "Pasadena, CA",
         "source_count": 1,
         "video_url": None,
-        "created_at": 1_000_000.0,
+        "created_at": 1.0,
     }
-    fake_clips = [
-        {"id": "c1", "path": "/tmp/c1.mp4", "lat": 34.1, "lng": -118.1, "ts": 1_700_000_000.0},
+
+    captured: dict = {}
+
+    async def fake_get_seg(cid):
+        return dict(seg_state)
+
+    async def fake_insert(**kwargs):
+        captured.update(kwargs)
+        seg_state["title"] = kwargs.get("title", seg_state["title"])
+        seg_state["caption"] = kwargs.get("caption", seg_state["caption"])
+        seg_state["video_url"] = kwargs.get("video_url", seg_state["video_url"])
+        return "seg-abc"
+
+    async def fake_set_inflight(cid, val, ttl_seconds=None):
+        return True
+
+    async def fake_orchestrator(cid):
+        return "seg-abc"
+
+    fake_runs = [
+        Run(id="p1_run_0", parent_id="p1", parent_path=str(tmp_path / "p1.mp4"),
+            start_offset_sec=0.0, end_offset_sec=3.0,
+            member_child_ids=["p1_child_0"],
+            vec=np.zeros(512, dtype=np.float32)),
     ]
-    # stitch_clips needs to return a real existing file so video_url is set
-    # and the re-insert branch runs.
-    fake_stitch_path = tmp_path / "fake_stitch.mp4"
-    fake_stitch_path.write_bytes(b"\x00\x00\x00\x18ftypmp42")
+    (tmp_path / "p1.mp4").write_bytes(b"fake")
 
-    with patch("backend.pipeline.compile._run_agents",
-               new_callable=AsyncMock, return_value=fake_segment["id"]) as mock_agents, \
-         patch("backend.pipeline.compile.stitch_clips",
-               new_callable=AsyncMock, return_value=str(fake_stitch_path)), \
-         patch("backend.pipeline.compile.generate_caption",
-               new_callable=AsyncMock, return_value=None), \
-         patch("backend.pipeline.compile._get_children_with_vecs",
-               new_callable=AsyncMock, return_value=[]), \
+    async def fake_compute_runs(cid):
+        return fake_runs
+
+    async def fake_stitch(refs, out):
+        Path(out).write_bytes(b"stitched")
+        return out
+
+    async def fake_caption(cid):
+        return {"caption": "Two contributors filmed people gathering.",
+                "location": "Pasadena, CA",
+                "source": "vision"}
+
+    with patch("backend.pipeline.compile._run_orchestrator_chain", side_effect=fake_orchestrator), \
+         patch("backend.pipeline.compile.compute_runs_for_cluster", side_effect=fake_compute_runs), \
+         patch("backend.pipeline.compile.stitch_clips", side_effect=fake_stitch), \
+         patch("backend.pipeline.compile._branch_caption", side_effect=fake_caption), \
          patch("backend.pipeline.compile.db") as mock_db, \
-         patch("backend.pipeline.compile.events") as mock_events:
+         patch("backend.pipeline.compile.events") as mock_events, \
+         patch("backend.pipeline.compile.config") as mock_config:
 
-        mock_db.fetch_cluster_clips = AsyncMock(return_value=fake_clips)
-        mock_db.get_segment_for_cluster = AsyncMock(return_value=fake_segment)
-        mock_db.insert_segment = AsyncMock(return_value=fake_segment["id"])
-        mock_db.set_compile_in_flight = AsyncMock(return_value=True)
+        mock_config.DATA_DIR = tmp_path
+        (tmp_path / "clips").mkdir(exist_ok=True)
+        mock_db.get_segment_for_cluster = AsyncMock(side_effect=fake_get_seg)
+        mock_db.insert_segment = AsyncMock(side_effect=fake_insert)
+        mock_db.set_compile_in_flight = AsyncMock(side_effect=fake_set_inflight)
         mock_events.broadcast = AsyncMock()
 
         from backend.pipeline.compile import compile_segment
         await compile_segment(cluster_id)
 
-        mock_agents.assert_awaited_once_with(cluster_id)
-        # Track C returned None → caption_result is None → re-insert preserves seg.caption.
-        # The re-insert call should have happened (video_url is set from stitch).
-        assert mock_db.insert_segment.await_count >= 1, "expected re-insert to run"
-        last_call = mock_db.insert_segment.await_args
-        assert last_call.kwargs["caption"] == track_a_caption, (
-            f"Track A caption was overwritten: got {last_call.kwargs['caption']!r}"
-        )
+    assert captured.get("caption", "").startswith("Two contributors")
+    video_url = captured.get("video_url", "")
+    assert isinstance(video_url, str) and video_url.endswith("_compiled.mp4")
+    # ordered_clip_ids should round-trip the run_ids unchanged.
+    assert captured.get("ordered_clip_ids") == ["p1_run_0"]
+
+
+@pytest.mark.asyncio
+async def test_compile_segment_branch_a_failure_uses_fallback(tmp_path):
+    """Branch A raises → _save_fallback_segment runs; Branch B caption still applied if vision."""
+    cluster_id = "cluster-branch-a-fails"
+
+    async def failing_branch_a(cid):
+        raise RuntimeError("orchestrator blew up")
+
+    async def fake_caption(cid):
+        return {"caption": "fallback-caption",
+                "location": "Pasadena, CA",
+                "source": "vision"}
+
+    async def fake_set_inflight(cid, val, ttl_seconds=None):
+        return True
+
+    fallback_id = "seg-fallback"
+
+    with patch("backend.pipeline.compile._branch_angles_then_stitch", side_effect=failing_branch_a), \
+         patch("backend.pipeline.compile._branch_caption", side_effect=fake_caption), \
+         patch("backend.pipeline.compile._save_fallback_segment",
+               new_callable=AsyncMock, return_value=fallback_id) as mock_fallback, \
+         patch("backend.pipeline.compile.db") as mock_db, \
+         patch("backend.pipeline.compile.events") as mock_events:
+
+        mock_db.get_segment_for_cluster = AsyncMock(return_value=None)
+        mock_db.insert_segment = AsyncMock(return_value=fallback_id)
+        mock_db.set_compile_in_flight = AsyncMock(side_effect=fake_set_inflight)
+        mock_events.broadcast = AsyncMock()
+
+        from backend.pipeline.compile import compile_segment
+        await compile_segment(cluster_id)
+
+        mock_fallback.assert_awaited_once()
+        # The first arg should be the cluster_id; second arg may be None.
+        call = mock_fallback.await_args
+        assert call.args[0] == cluster_id
+        broadcast_types = [c.args[0]["type"] for c in mock_events.broadcast.await_args_list]
+        pub = next(c for c in mock_events.broadcast.await_args_list
+                   if c.args[0]["type"] == "segment_published")
+        assert pub.args[0]["segment_id"] == fallback_id
 
 
 @pytest.mark.asyncio
 async def test_no_multi_angle_template_in_fallback_paths():
-    """RUNTIME-CAP-01: _save_fallback_segment must NOT emit the forbidden
-    cluster-framing template (substring check below catches it).
+    """_save_fallback_segment must NOT emit the forbidden cluster-framing template,
+    and must pass title="" so the new schema row is well-formed.
     """
-    captured = {}
+    captured: dict = {}
     fake_clips = [
         {"id": "c1", "path": "/tmp/c1.mp4", "lat": 34.1, "lng": -118.1, "ts": 1_700_000_000.0},
         {"id": "c2", "path": "/tmp/c2.mp4", "lat": 34.11, "lng": -118.11, "ts": 1_700_000_010.0},
@@ -294,6 +168,7 @@ async def test_no_multi_angle_template_in_fallback_paths():
         assert "multi-angle" not in caption.lower(), (
             f"forbidden template appeared in fallback caption: {caption!r}"
         )
-        # Sanity: place + date framing instead of multi-angle.
         assert "Pasadena" in caption
         assert "contributor" in caption.lower()
+        # Schema check: title key must be present (even if empty).
+        assert "title" in captured
