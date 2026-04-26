@@ -64,3 +64,61 @@ def find_runs(children: list[dict], threshold: float) -> list[Run]:
                 vec=mean.astype(np.float32),
             ))
     return out
+
+
+from .. import config, db  # noqa: E402  (import here to avoid pulling DB on type-only use)
+
+
+async def compute_runs_for_cluster(cluster_id: str) -> list[Run]:
+    """Load child rows for cluster's parents, attach embeddings, return runs.
+
+    Parents whose Marengo call returned NO clip-scope items have no child rows;
+    we synthesize a single run that spans the full parent file (member_child_ids
+    is empty — the stitch resolver detects this and uses the full parent file).
+    """
+    rows = await db.fetch_cluster_clips_with_children(cluster_id)
+    if not rows:
+        return []
+
+    parent_paths: dict[str, str] = {}
+    children: list[dict] = []
+    parents_with_children: set[str] = set()
+
+    for r in rows:
+        if r.get("parent_id") is None:
+            parent_paths[r["id"]] = r.get("path") or ""
+        else:
+            vec = await db.get_embedding(r["id"])
+            if vec is None:
+                continue
+            parents_with_children.add(r["parent_id"])
+            children.append({
+                "id": r["id"],
+                "parent_id": r["parent_id"],
+                "parent_path": r.get("parent_path") or parent_paths.get(r["parent_id"], ""),
+                "start_offset_sec": r.get("start_offset_sec") or 0.0,
+                "end_offset_sec": r.get("end_offset_sec") or 0.0,
+                "vec": vec,
+            })
+
+    runs = find_runs(children, threshold=config.RUN_THRESHOLD)
+
+    # Edge: a parent with NO children at all -> emit one synthetic run spanning
+    # the full parent file (member_child_ids=[] is the sentinel).
+    for parent_id, parent_path in parent_paths.items():
+        if parent_id in parents_with_children:
+            continue
+        parent_vec = await db.get_embedding(parent_id)
+        if parent_vec is None:
+            continue
+        runs.append(Run(
+            id=f"{parent_id}_run_0",
+            parent_id=parent_id,
+            parent_path=parent_path,
+            start_offset_sec=0.0,
+            end_offset_sec=0.0,
+            member_child_ids=[],
+            vec=parent_vec,
+        ))
+
+    return runs
