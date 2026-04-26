@@ -111,6 +111,11 @@ async def init() -> None:
             await conn.execute(
                 "ALTER TABLE segments ADD COLUMN video_url TEXT DEFAULT NULL"
             )
+        # Phase 4.6 migration: add title column to segments (nullable; back-fills NULL)
+        if "title" not in seg_cols:
+            await conn.execute(
+                "ALTER TABLE segments ADD COLUMN title TEXT"
+            )
         await conn.commit()
     log.info("db.init: schema ready at %s", DB_PATH)
 
