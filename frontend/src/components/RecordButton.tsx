@@ -28,9 +28,9 @@ export function RecordButton({ recording, progress, canStop = true, onTap }: Pro
             : "Recording — wait for minimum duration"
           : "Start recording"
       }
-      className="absolute left-1/2 -translate-x-1/2 z-20"
+      className="absolute left-1/2 -translate-x-1/2 z-40"
       style={{
-        bottom: "calc(16px + env(safe-area-inset-bottom))",
+        bottom: "calc(72px + env(safe-area-inset-bottom))",
         opacity: blocked ? 0.5 : 1,
       }}
     >

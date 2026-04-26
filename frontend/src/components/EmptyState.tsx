@@ -10,7 +10,7 @@ export function EmptyState() {
         Anonymous footage near you will appear here. Tap record to start one.
       </p>
       <Link
-        to="/record"
+        to="/"
         className="inline-flex items-center mt-6 bg-accent-record text-white text-[13px] font-bold uppercase tracking-[0.08em] px-4 py-2.5 rounded-md"
       >
         Record a clip

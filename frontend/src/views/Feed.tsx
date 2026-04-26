@@ -5,11 +5,10 @@ import { getOrCreateSessionId } from "../session";
 import { flushUploadQueue } from "../uploadQueue";
 import { useEventSource } from "../hooks/useEventSource";
 import type { Segment, ServerEvent } from "../types";
+import { BottomTabBar } from "../components/BottomTabBar";
 import { EmptyState } from "../components/EmptyState";
 import { FeedShell } from "../components/FeedShell";
 import { Masthead } from "../components/Masthead";
-import { RecordFAB } from "../components/RecordFAB";
-import { UploadFAB } from "../components/UploadFAB";
 
 export function Feed() {
   const [segments, setSegments] = useState<(Segment & { url: string })[]>([]);
@@ -76,11 +75,7 @@ export function Feed() {
           viewerLng={coordsRef.current?.lng}
         />
       )}
-      <RecordFAB />
-      <UploadFAB
-        fallbackLat={coordsRef.current?.lat}
-        fallbackLng={coordsRef.current?.lng}
-      />
+      <BottomTabBar />
     </>
   );
 }

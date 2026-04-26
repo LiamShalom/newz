@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { PrimingModal } from "../components/PrimingModal";
 import { CameraView } from "../components/CameraView";
+import { BottomTabBar } from "../components/BottomTabBar";
 import { CameraFlipButton } from "../components/CameraFlipButton";
+import { CameraUploadButton } from "../components/CameraUploadButton";
 import { RecordButton } from "../components/RecordButton";
 import { RetakeScreen } from "../components/RetakeScreen";
 import {
@@ -184,7 +186,7 @@ export function Recorder() {
         lng: pos.lng,
         ts,
       });
-      navigate("/");
+      navigate("/feed");
     } catch {
       // Network / 5xx — CAP-09 enqueue. 4xx would also land here; uploadQueue.flush
       // drops 4xx as permanent on the next visit, so this is safe.
@@ -195,7 +197,7 @@ export function Recorder() {
         lng: pos.lng,
         ts,
       });
-      navigate("/"); // feed will show prior clips; queue retries on next visit
+      navigate("/feed"); // feed will show prior clips; queue retries on next visit
     }
   };
 
@@ -261,12 +263,15 @@ export function Recorder() {
     <div className="fixed inset-0 bg-[#0A0A0A]" style={{ height: "100dvh" }}>
       <CameraView stream={streamRef.current} mirrored={facing === "user"} />
       {!isRecording && phase.kind === "ready" && (
-        <CameraFlipButton
-          facing={facing}
-          onFlip={() => {
-            void flipCamera();
-          }}
-        />
+        <>
+          <CameraFlipButton
+            facing={facing}
+            onFlip={() => {
+              void flipCamera();
+            }}
+          />
+          <CameraUploadButton />
+        </>
       )}
       <RecordButton
         recording={isRecording}
@@ -274,6 +279,7 @@ export function Recorder() {
         canStop={!isRecording || progress >= MIN_RECORD_SEC / RECORD_CAP_SEC}
         onTap={isRecording ? stopRecording : startRecording}
       />
+      {!isRecording && <BottomTabBar />}
     </div>
   );
 }

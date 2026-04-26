@@ -1,7 +1,7 @@
 import { ThemeToggle } from "./ThemeToggle";
 
-// Red wordmark badge centered, ThemeToggle right. Matches the sport-channel
-// reference's "SPORT" red box. No profile icon — Newz is anonymous.
+// Centered NEWZ wordmark, ThemeToggle right. Bottom tab bar handles
+// navigation, so the masthead stays focused on brand + theme.
 export function Masthead() {
   return (
     <header className="sticky top-0 z-20 bg-surface">

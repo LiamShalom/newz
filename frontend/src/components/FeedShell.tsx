@@ -11,7 +11,10 @@ export function FeedShell({
   viewerLng?: number;
 }) {
   return (
-    <main className="mx-auto max-w-[640px] px-5 pb-32 pt-5">
+    <main
+      className="mx-auto max-w-[640px] px-5 pt-5"
+      style={{ paddingBottom: "calc(80px + env(safe-area-inset-bottom))" }}
+    >
       <ol className="space-y-10">
         {segments.map((s, i) => (
           <li key={s.id}>
