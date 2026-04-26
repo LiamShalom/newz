@@ -125,6 +125,10 @@ async def generate_caption(
             return_exceptions=True,
         )
 
+        for i, d in enumerate(descriptions):
+            if isinstance(d, Exception):
+                log.warning("_describe_child_frames[%d] failed: %s: %s", i, type(d).__name__, d)
+
         desc_texts = [
             d for d in descriptions
             if isinstance(d, str) and "(no visual" not in d
