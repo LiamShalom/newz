@@ -48,8 +48,7 @@ async def seed_demo_segment() -> None:
         cluster_id=DEMO_CLUSTER_ID,
         ordered_clip_ids=DEMO_CLIP_IDS,
         caption=(
-            "Staged demo: multi-angle event captured at Caltech campus, "
-            "Pasadena, CA. Compiled from 3 angles."
+            "Pedestrians crossing in front of Caltech campus at midday — Pasadena, CA."
         ),
         location="Pasadena, CA",
         source_count=3,
