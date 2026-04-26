@@ -164,7 +164,9 @@ async def sse_events(request: Request):
                     break
                 try:
                     event = await asyncio.wait_for(q.get(), timeout=1.0)
-                    yield {"event": event.get("type", "message"), "data": json.dumps(event)}
+                    # Default "message" event so es.onmessage receives all types.
+                    # Frontend discriminates on ev.type from the JSON payload.
+                    yield {"data": json.dumps(event)}
                 except asyncio.TimeoutError:
                     continue
         finally:
