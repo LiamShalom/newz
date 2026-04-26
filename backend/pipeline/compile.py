@@ -48,10 +48,9 @@ overwrite them.
 
 Steps — use the named subagents in this order:
 1. Run angle-selector to pick the best 2-4 RUNS and order them.
-2. Run editor on angle-selector's JSON output to validate the run order.
-3. Run publisher with editor's run_ids. Pass title="" and caption="".
+2. Run publisher with angle-selector's run_ids. Pass title="" and caption="".
 
-Pass each subagent's JSON output verbatim into the next subagent's prompt.
+Pass angle-selector's JSON output verbatim into publisher's prompt.
 The cluster_id is: {cluster_id}
 """
 
@@ -91,39 +90,22 @@ Do not include any text outside the JSON.""",
         mcpServers=_MCP,
         model="sonnet",
     ),
-    "editor": AgentDefinition(
-        description=(
-            "Validates the angle-selector's clip ordering for editorial quality. "
-            "Run AFTER angle-selector completes."
-        ),
-        prompt="""You are the Editor for the Newz news compile pipeline.
-
-Review the Angle Selector's run ordering. Confirm it makes editorial sense:
-no jarring cuts, sufficient temporal coverage, the chosen runs tell the
-story. You may reorder or drop runs but must not add new ones.
-
-Return ONLY a single JSON object: {"run_ids": ["..."], "edit_notes": "..."}.""",
-        tools=["mcp__newz_tools__get_clip_metadata"],
-        mcpServers=_MCP,
-        model="sonnet",
-    ),
     "publisher": AgentDefinition(
         description=(
-            "Persists the finished segment via save_segment. Run LAST. "
+            "Persists the finished segment via save_segment. Run AFTER angle-selector. "
             "Only calls the save_segment tool — does not rewrite captions."
         ),
         prompt="""You are the Publisher for the Newz news compile pipeline.
 
-The title, caption, and location are provided by the orchestrator (already
-written upstream). Take the editor's validated run_ids and the provided
-title/caption/location.
+Take the Angle Selector's run_ids and persist the segment. Title and caption
+are filled in later by another worker — pass empty strings for both here.
 
 Call mcp__newz_tools__save_segment EXACTLY ONCE with:
   - cluster_id: provided by the orchestrator
-  - ordered_run_ids: from editor's run_ids list
-  - title: provided by the orchestrator
-  - caption: provided by the orchestrator
-  - location: provided by the orchestrator
+  - ordered_run_ids: from angle-selector's run_ids list
+  - title: ""
+  - caption: ""
+  - location: "Pasadena, CA"
   - source_count: number of distinct parent_ids in ordered_run_ids
 
 Return ONLY the segment id string from the tool result.""",
@@ -280,15 +262,16 @@ async def _stitch_segment_runs(cluster_id: str) -> str | None:
 
 
 async def compile_segment(cluster_id: str) -> None:
-    """Top-level entry. LLM work in parallel under 60s cap, then stitch sequentially.
+    """Top-level entry. LLM work in parallel under 120s cap, then stitch sequentially.
 
-    Phase 1 (LLM, 60s budget): orchestrator chain ‖ caption pipeline.
+    Phase 1 (LLM, 120s budget): orchestrator chain ‖ caption pipeline.
         Orchestrator chain saves segment row with run_ids + empty title/caption.
         Caption pipeline returns {caption, location, [title]} or None.
+        Budget bumped from 60s → 120s after observing chain regularly hits
+        50-60s under real LLM latency variance.
     Phase 2 (deterministic, 30s budget): stitch chosen runs into compiled.mp4.
         Pulled out of the LLM gather because stitch is fast and must not be
-        cancelled by orchestrator-chain timeouts. See debug log
-        clips-not-clustering.md / black-screen investigation.
+        cancelled by orchestrator-chain timeouts.
     Phase 3: single insert_segment combines both phases atomically.
     """
     started_at = time.time()
@@ -310,7 +293,7 @@ async def compile_segment(cluster_id: str) -> None:
                 _branch_caption(cluster_id),
                 return_exceptions=True,
             ),
-            timeout=60.0,
+            timeout=120.0,
         )
         a_result, b_result = results
 
@@ -366,7 +349,7 @@ async def compile_segment(cluster_id: str) -> None:
         )
 
     except asyncio.TimeoutError:
-        log.warning("compile TIMEOUT cluster_id=%s after 60s — using fallback", cluster_id)
+        log.warning("compile TIMEOUT cluster_id=%s after 120s — using fallback", cluster_id)
         segment_id = await _save_fallback_segment(cluster_id, video_url)
     except Exception:
         log.exception("compile FAILED cluster_id=%s — using fallback", cluster_id)
