@@ -325,12 +325,13 @@ async def _save_fallback_segment(cluster_id: str, video_url: str | None = None) 
         when = datetime.fromtimestamp(clips[0]["ts"], tz=timezone.utc).strftime("%b %-d, %Y")
     else:
         when = datetime.now(tz=timezone.utc).strftime("%b %-d, %Y")
-    caption = f"Multi-angle event captured by {len(clip_ids)} contributors on {when}."
+    location_str = "Pasadena, CA"  # default; cluster centroid reverse-geocode is a Phase 5 follow-up
+    caption = f"{when} — {location_str}. Submitted footage from {len(clip_ids)} contributor(s)."
     return await db.insert_segment(
         cluster_id=cluster_id,
         ordered_clip_ids=clip_ids,
         caption=caption,
-        location="Pasadena, CA",
+        location=location_str,
         source_count=len(clip_ids),
         video_url=video_url,
     )
@@ -398,7 +399,16 @@ async def compile_segment(cluster_id: str) -> None:
         else:
             log.warning("stitch returned no usable path: %s", stitch_result)
 
-        caption_result = caption_result_raw if isinstance(caption_result_raw, dict) else None
+        # Only overwrite Track A's vision caption when Track C produced a real
+        # vision-grounded result (source=="vision"). Track C's fallback now
+        # returns None, but defend against future regressions by checking the
+        # source discriminator explicitly. RUNTIME-CAP-01.
+        caption_result = (
+            caption_result_raw
+            if isinstance(caption_result_raw, dict)
+            and caption_result_raw.get("source") == "vision"
+            else None
+        )
 
         if isinstance(agent_result, Exception):
             log.error("agent track failed: %s — using fallback", agent_result)
