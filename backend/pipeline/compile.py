@@ -21,8 +21,10 @@ import asyncio
 import base64
 import json
 import logging
+import os
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from claude_agent_sdk import (
@@ -34,9 +36,11 @@ from claude_agent_sdk import (
     TextBlock,
 )
 
-from .. import db, events
+from .. import config, db, events
 from .compile_tools import newz_tools_server
 from .keyframes import extract_cluster_keyframes
+from .stitch import stitch_clips
+from .caption_pipeline import generate_caption
 
 log = logging.getLogger(__name__)
 
@@ -300,7 +304,17 @@ async def _run_agents(cluster_id: str) -> str:
     return await _run_orchestrator_chain(cluster_id, caption_data)
 
 
-async def _save_fallback_segment(cluster_id: str) -> str:
+async def _get_children_with_vecs(cluster_id: str) -> list[dict]:
+    """Load child clips for cluster with their embedding vectors attached."""
+    rows = await db.fetch_cluster_clips_with_children(cluster_id)
+    children = []
+    for r in rows:
+        vec = await db.get_embedding(r["id"])
+        children.append({**r, "vec": vec})
+    return children
+
+
+async def _save_fallback_segment(cluster_id: str, video_url: str | None = None) -> str:
     """CMP-06: idempotent fallback. Chronological order, generic AP-wire caption."""
     existing = await db.get_segment_for_cluster(cluster_id)
     if existing:
@@ -318,37 +332,108 @@ async def _save_fallback_segment(cluster_id: str) -> str:
         caption=caption,
         location="Pasadena, CA",
         source_count=len(clip_ids),
+        video_url=video_url,
     )
 
 
 async def compile_segment(cluster_id: str) -> None:
     """Top-level entry. Fire-and-forget via asyncio.create_task. Idempotent (CMP-09).
 
-    Hard 60s wall-clock cap via asyncio.wait_for.
-    Always clears compile_in_flight in finally.
-    Always broadcasts segment_published (or pipeline_error on unexpected failure).
+    Phase 4.5: Three parallel tracks inside a 60s cap:
+      Track A: _run_agents() — existing caption-writer + angle-selector → editor → publisher
+      Track B: stitch_clips() — ffmpeg concat of selected child slices → .webm file
+      Track C: generate_caption() — frame-based Haiku/Sonnet visual caption
+
+    After all tracks complete, insert_segment is called again (idempotent ON CONFLICT)
+    to update video_url and vision caption on the row Track A already wrote.
     """
+    from .cluster import CLUSTERS  # avoid circular at module level
+
     started_at = time.time()
     await events.broadcast({
         "type": "compile_started",
         "cluster_id": cluster_id,
         "started_at": started_at,
     })
+
+    video_url: str | None = None
+    segment_id: str = ""
+
     try:
-        segment_id = await asyncio.wait_for(_run_agents(cluster_id), timeout=60.0)
+        cluster_cache = CLUSTERS.get(cluster_id)
+        children = await _get_children_with_vecs(cluster_id)
+
+        stitch_refs = []
+        for child in children:
+            if child.get("parent_path") and child.get("end_offset_sec") is not None:
+                stitch_refs.append({
+                    "path": child["parent_path"],
+                    "start_offset_sec": child.get("start_offset_sec", 0.0),
+                    "end_offset_sec": child["end_offset_sec"],
+                })
+        if not stitch_refs:
+            clips = await db.fetch_cluster_clips(cluster_id)
+            stitch_refs = [
+                {"path": c["path"], "start_offset_sec": 0.0, "end_offset_sec": None}
+                for c in clips[:3]
+            ]
+
+        output_path = str(config.DATA_DIR / "clips" / f"{cluster_id}_compiled.webm")
+        centroid = cluster_cache.centroid if cluster_cache else None
+
+        results = await asyncio.wait_for(
+            asyncio.gather(
+                _run_agents(cluster_id),
+                stitch_clips(stitch_refs, output_path),
+                generate_caption(cluster_id, centroid, children) if centroid is not None and children else asyncio.sleep(0),
+                return_exceptions=True,
+            ),
+            timeout=60.0,
+        )
+
+        agent_result, stitch_result, caption_result_raw = results
+
+        if isinstance(stitch_result, str) and stitch_result and Path(stitch_result).exists():
+            video_url = f"/media/{Path(stitch_result).name}"
+        else:
+            log.warning("stitch returned no usable path: %s", stitch_result)
+
+        caption_result = caption_result_raw if isinstance(caption_result_raw, dict) else None
+
+        if isinstance(agent_result, Exception):
+            log.error("agent track failed: %s — using fallback", agent_result)
+            segment_id = await _save_fallback_segment(cluster_id, video_url)
+        else:
+            segment_id = agent_result
+
+        if video_url or caption_result:
+            seg = await db.get_segment_for_cluster(cluster_id)
+            if seg:
+                clip_ids = json.loads(seg["ordered_clip_ids"]) if isinstance(seg.get("ordered_clip_ids"), str) else seg.get("ordered_clip_ids", [])
+                await db.insert_segment(
+                    cluster_id=cluster_id,
+                    ordered_clip_ids=clip_ids,
+                    caption=caption_result["caption"] if caption_result else seg.get("caption", ""),
+                    location=caption_result["location"] if caption_result else seg.get("location", ""),
+                    source_count=seg.get("source_count", 1),
+                    video_url=video_url or seg.get("video_url"),
+                )
+
         elapsed_ms = int((time.time() - started_at) * 1000)
         log.info(
-            "compile success cluster_id=%s segment_id=%s elapsed_ms=%d",
-            cluster_id, segment_id, elapsed_ms,
+            "compile success cluster_id=%s segment_id=%s elapsed_ms=%d video_url=%s",
+            cluster_id, segment_id, elapsed_ms, video_url,
         )
+
     except asyncio.TimeoutError:
         log.warning("compile TIMEOUT cluster_id=%s after 60s — using fallback", cluster_id)
-        segment_id = await _save_fallback_segment(cluster_id)
+        segment_id = await _save_fallback_segment(cluster_id, video_url)
     except Exception:
         log.exception("compile FAILED cluster_id=%s — using fallback", cluster_id)
-        segment_id = await _save_fallback_segment(cluster_id)
+        segment_id = await _save_fallback_segment(cluster_id, video_url)
     finally:
         await db.set_compile_in_flight(cluster_id, False)
+
     await events.broadcast({
         "type": "segment_published",
         "cluster_id": cluster_id,

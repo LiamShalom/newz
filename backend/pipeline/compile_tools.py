@@ -18,11 +18,19 @@ log = logging.getLogger(__name__)
 
 @tool(
     "get_cluster_clips",
-    "Return all clip metadata for a cluster (clip_ids, lat/lng, ts, paths). Use to get available clips.",
+    (
+        "Return all clip metadata for a cluster (clip IDs, lat/lng, ts, paths, child offsets). "
+        "Children include start_offset_sec and end_offset_sec for duration calculation. "
+        "Use to get available clips for angle selection."
+    ),
     {"cluster_id": str},
 )
 async def get_cluster_clips(args: dict) -> dict:
-    rows = await db.fetch_cluster_clips(args["cluster_id"])
+    rows = await db.fetch_cluster_clips_with_children(args["cluster_id"])
+    for r in rows:
+        start = r.get("start_offset_sec") or 0.0
+        end = r.get("end_offset_sec")
+        r["duration_sec"] = round((end - start), 2) if end is not None else None
     return {"content": [{"type": "text", "text": json.dumps(rows)}]}
 
 

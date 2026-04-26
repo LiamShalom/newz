@@ -104,6 +104,13 @@ async def init() -> None:
         await conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_segments_cluster_id ON segments(cluster_id)"
         )
+        # Phase 4.5 migration: add video_url column to segments
+        async with conn.execute("PRAGMA table_info(segments)") as cur:
+            seg_cols = {row[1] for row in await cur.fetchall()}
+        if "video_url" not in seg_cols:
+            await conn.execute(
+                "ALTER TABLE segments ADD COLUMN video_url TEXT DEFAULT NULL"
+            )
         await conn.commit()
     log.info("db.init: schema ready at %s", DB_PATH)
 
@@ -271,6 +278,7 @@ async def insert_segment(
     caption: str,
     location: str,
     source_count: int,
+    video_url: str | None = None,
 ) -> str:
     """Idempotent: one segment per cluster. ON CONFLICT(cluster_id) updates. CMP-09."""
     seg_id = uuid.uuid4().hex
@@ -278,16 +286,18 @@ async def insert_segment(
     async with aiosqlite.connect(DB_PATH) as conn:
         cur = await conn.execute(
             """INSERT INTO segments
-                 (id, cluster_id, ordered_clip_ids, caption, location, source_count, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)
+                 (id, cluster_id, ordered_clip_ids, caption, location, source_count,
+                  created_at, video_url)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(cluster_id) DO UPDATE SET
                  ordered_clip_ids = excluded.ordered_clip_ids,
                  caption          = excluded.caption,
                  location         = excluded.location,
-                 source_count     = excluded.source_count
+                 source_count     = excluded.source_count,
+                 video_url        = excluded.video_url
                RETURNING id""",
             (seg_id, cluster_id, json.dumps(ordered_clip_ids),
-             caption, location, source_count, now),
+             caption, location, source_count, now, video_url),
         )
         row = await cur.fetchone()
         await conn.commit()
@@ -301,7 +311,7 @@ async def fetch_recent_segments(limit: int = 50) -> list[dict]:
         cursor = await conn.execute(
             """SELECT s.id, s.cluster_id, s.ordered_clip_ids, s.caption,
                       s.location, c.member_count AS source_count, s.created_at,
-                      c.centroid_lat, c.centroid_lng
+                      c.centroid_lat, c.centroid_lng, s.video_url AS stored_video_url
                FROM segments s
                JOIN clusters c ON c.id = s.cluster_id
                ORDER BY s.created_at DESC LIMIT ?""",
@@ -341,7 +351,7 @@ async def fetch_recent_segments(limit: int = 50) -> list[dict]:
             "created_at": r["created_at"],
             "centroid_lat": r["centroid_lat"],
             "centroid_lng": r["centroid_lng"],
-            "video_url": video_urls[0] if video_urls else None,
+            "video_url": r["stored_video_url"] if r["stored_video_url"] else (video_urls[0] if video_urls else None),
             "video_urls": video_urls,
         })
     return out
@@ -414,6 +424,51 @@ async def fetch_cluster_clips(cluster_id: str) -> list[dict]:
         )
         rows = await cursor.fetchall()
     return [dict(r) for r in rows]
+
+
+async def fetch_cluster_clips_with_children(cluster_id: str) -> list[dict]:
+    """Like fetch_cluster_clips but includes parent_id, start/end offsets, and parent_path.
+
+    For children (parent_id IS NOT NULL): parent_path is the actual video file path.
+    For parent clips (parent_id IS NULL): path is the video file path.
+    Used by get_cluster_clips MCP tool so Angle Agent sees child offsets.
+    """
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            """SELECT id, path, lat, lng, ts, parent_id,
+                      start_offset_sec, end_offset_sec
+               FROM clips WHERE cluster_id = ? ORDER BY ts ASC, start_offset_sec ASC""",
+            (cluster_id,),
+        )
+        rows = [dict(r) for r in await cursor.fetchall()]
+
+        parent_ids = list({r["parent_id"] for r in rows if r.get("parent_id")})
+        parent_path_map: dict[str, str] = {}
+        if parent_ids:
+            placeholders = ",".join("?" * len(parent_ids))
+            path_cur = await conn.execute(
+                f"SELECT id, path FROM clips WHERE id IN ({placeholders})",
+                parent_ids,
+            )
+            for p in await path_cur.fetchall():
+                parent_path_map[p["id"]] = p["path"]
+
+    out = []
+    for r in rows:
+        parent_path = parent_path_map.get(r["parent_id"], "") if r.get("parent_id") else r["path"]
+        out.append({
+            "id": r["id"],
+            "path": r["path"] or parent_path,
+            "parent_path": parent_path,
+            "lat": r["lat"],
+            "lng": r["lng"],
+            "ts": r["ts"],
+            "parent_id": r.get("parent_id"),
+            "start_offset_sec": r.get("start_offset_sec") or 0.0,
+            "end_offset_sec": r.get("end_offset_sec"),
+        })
+    return out
 
 
 async def get_cluster(cluster_id: str) -> dict | None:
