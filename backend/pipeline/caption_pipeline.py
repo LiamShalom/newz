@@ -2,15 +2,16 @@
 backend/pipeline/caption_pipeline.py — frame-based visual caption pipeline (Phase 4.5, CMP-08).
 
 Public API:
-    generate_caption(cluster_id, centroid, children) -> dict
+    generate_caption(cluster_id, centroid, children) -> dict | None
         Async. Selects 2-3 children closest to centroid by cosine similarity.
         Extracts 3 JPEG frames per selected child.
         Sends frames to Claude Haiku for per-clip descriptions.
         Aggregates descriptions → Claude Sonnet for AP-wire headline.
-        Returns {"caption": str, "location": str}.
+        Returns {"caption": str, "location": str, "source": "vision"} on success.
 
         If USE_MOCK_EMBEDDINGS=true: skips all API calls, returns hardcoded test caption.
-        On any failure: returns generic fallback caption (never raises).
+        On failure: returns None so the compile.py call site preserves the Track A
+        (subagent) vision caption rather than overwriting it with a generic fallback.
 """
 
 import asyncio
@@ -90,12 +91,14 @@ async def generate_caption(
     cluster_id: str,
     centroid: np.ndarray,
     children: list[dict],
-) -> dict:
+) -> dict | None:
     """Build AP-wire headline from visual frames of centroid-closest children.
 
     children: list of dicts, each must have keys:
         id, parent_path, start_offset_sec, end_offset_sec, lat, lng, ts, vec (np.ndarray or None)
-    Returns: {"caption": str, "location": str}
+    Returns: {"caption": str, "location": str, "source": "vision"} on success,
+             None on fallback (Anthropic unavailable or errored) so the call site
+             preserves Track A's vision caption.
     """
     if config.USE_MOCK_EMBEDDINGS:
         log.info("generate_caption mock cluster_id=%s", cluster_id)
@@ -153,20 +156,19 @@ async def generate_caption(
         )
         caption = result.content[0].text.strip()[:200]
         log.info("generate_caption ok cluster_id=%s caption_len=%d", cluster_id, len(caption))
-        return {"caption": caption, "location": location}
+        return {"caption": caption, "location": location, "source": "vision"}
 
     except Exception as exc:
         log.warning("generate_caption failed cluster_id=%s: %s — using fallback", cluster_id, exc)
         return _fallback_caption(cluster_id, children)
 
 
-def _fallback_caption(cluster_id: str, children: list[dict]) -> dict:
-    """Generic fallback — used when Anthropic API unavailable or errors."""
-    ts = children[0].get("ts") if children else None
-    if ts:
-        when = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%b %-d, %Y")
-    else:
-        when = datetime.now(tz=timezone.utc).strftime("%b %-d, %Y")
-    n = len({c.get("parent_id", c["id"]) for c in children})
-    caption = f"Multi-angle event captured by {n} contributor(s) on {when}."
-    return {"caption": caption, "location": "Pasadena, CA"}
+def _fallback_caption(cluster_id: str, children: list[dict]) -> dict | None:
+    """Track C fallback — Anthropic unavailable or errored.
+
+    Returns None so the compile.py call site preserves Track A's vision-grounded
+    caption (RUNTIME-CAP-01). Previously emitted a generic "multi-angle event
+    captured…" template that overwrote Track A's good output.
+    """
+    log.info("caption fallback (returning None) cluster_id=%s", cluster_id)
+    return None
