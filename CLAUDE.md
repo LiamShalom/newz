@@ -1,81 +1,76 @@
 # Newz — Claude Code Project Guide
 
-AI-native local news from anonymous crowdsourced footage. Hackathon MVP, HackTech (Caltech) April 24-26, 2026. Co-founders: Liam, Roan, Claude.
+AI-native local news from anonymous crowdsourced footage. v1.0 won HackTech 2026 (Caltech, April 24-26 2026). Co-founders: Liam, Roan, Claude.
+
+**Current state:** Post-hackathon. v1.0 shipped and archived. No v1.1 scope locked yet.
 
 ## Authoritative Project Context
 
 Always read `.planning/` before suggesting changes:
 
-- `.planning/PROJECT.md` — vision, requirements (Validated/Active/Out of Scope), key decisions
-- `.planning/REQUIREMENTS.md` — 61 v1 requirements with REQ-IDs
-- `.planning/ROADMAP.md` — 5 phases, requirement-to-phase traceability, success criteria
-- `.planning/STATE.md` — current phase + next action
-- `.planning/research/SUMMARY.md` — synthesized research (stack, architecture, pitfalls)
-- `.planning/research/STACK.md` / `ARCHITECTURE.md` / `PITFALLS.md` / `FEATURES.md` — full research
+- `.planning/PROJECT.md` — vision, current state, validated requirements, out-of-scope reasoning, key decisions
+- `.planning/ROADMAP.md` — milestone summary (v1.0 archived, next milestone TBD)
+- `.planning/STATE.md` — last activity, deferred items, locked decisions
+- `.planning/MILESTONES.md` — shipped milestones with stats and accomplishments
+- `.planning/RETROSPECTIVE.md` — what worked, what didn't, lessons learned per milestone
+- `.planning/milestones/v1.0-*` — archived v1.0 roadmap, requirements, and phase artifacts (PLAN.md / SUMMARY.md / RESEARCH.md / VERIFICATION.md)
 
 PROJECT.md is the source of truth for what's in/out of scope. Defer to it.
 
-## Stack
+## Stack (as shipped in v1.0)
 
 - **Frontend:** React 18 + Vite + TypeScript + Tailwind 4 — deployed to Vercel
-- **Backend:** FastAPI + Uvicorn (Python 3.11) — deployed to Railway with persistent volume
-- **Video AI:** Twelve Labs `marengo3.0` (lowercase, NOT 2.7 — sunset 2026-03-30) via `twelvelabs==1.2.3`. 512-d embeddings.
-- **Multi-agent AI:** Anthropic `claude-agent-sdk==0.1.68` — bundles CLI binary, no Node.js required on backend.
-- **Storage:** SQLite (aiosqlite, WAL mode) + local FS for clips. **No** Postgres, Redis, Pinecone, or S3 at hackathon scale.
+- **Backend:** FastAPI + Uvicorn (Python 3.11) — deployed to Railway with persistent volume at `/data`
+- **Video embeddings:** Twelve Labs `marengo3.0` (lowercase) via `twelvelabs==1.2.3`, 512-d, parent + child clips
+- **Multi-agent compile:** Anthropic `claude-agent-sdk==0.1.68` — bundles CLI binary, no Node.js required on backend
+- **Vision captions:** Gemini 2.5 Flash native video input (replaced Anthropic frame-aggregation)
+- **Storage:** SQLite (aiosqlite, WAL mode) + local FS for clips. **No** Postgres, Redis, Pinecone, or S3 at this scale.
 - **Vector search:** NumPy in-memory cosine over normalized 512-d vectors. **No** vector DB.
+- **Stitching:** ffmpeg with libx264 ultrafast normalize-and-concat, per-run parallel via `asyncio.gather` + `-c copy`
 
 ## Architecture
 
 Single-process FastAPI monolith. Pipeline stages chain via `asyncio.create_task` — no Celery, no message broker. SSE for real-time feed updates.
 
-Hot path: `Browser → POST /clips (202) → embed (Marengo) → cluster (composite score) → maybe compile (Claude Agent SDK 4-subagent pipeline) → SSE broadcast → feed re-renders.`
+Hot path: `Browser → POST /clips (202) → embed (Marengo, parent + children) → cluster (composite score, parent-scope) → maybe compile (Claude Agent SDK + Gemini) → ffmpeg stitch → SSE broadcast → feed re-renders.`
 
-Clustering composite: `0.55 × Marengo cosine + 0.30 × GPS proximity + 0.15 × timestamp proximity`, threshold `0.55` (calibrate empirically against staged demo dataset).
+Clustering composite: `Marengo cosine + GPS proximity + timestamp proximity`, tuned thresholds (0.70 base / 0.85 strict / 50m GPS radius). **Clustering unit is the parent upload** — children remain in DB only as compile-time slicing metadata. Compile fires only when cluster has ≥2 distinct parent uploads.
 
-## Hard Constraints
+Admin endpoint: token-guarded `POST /admin/reset` wipes clips between demo runs.
+
+## Hard Constraints (still applicable)
 
 - **Anonymity is load-bearing.** No accounts, no login, no profiles. Anonymous session UUID in localStorage only.
-- **iOS Safari is the demo target.** Verify on real iPhone, not emulator. MIME-type fallback ladder required: `mp4;avc1 → webm;vp9 → webm → no mimeType`.
-- **Live-first demo with staged-clip fallback.** `OFFLINE_DEMO=true` env flag must serve cached embeddings + cached compile output without any external API calls.
-- **30-second hard cap on compile pipeline wall-clock.** Fallback to default ordering + generic caption on timeout.
-- **Pre-warm Marengo on backend startup** with throwaway call. Cold-start latency = dead demo.
+- **iOS Safari is the demo target.** Verified on real iPhone. MIME-type fallback ladder: `mp4;avc1 → webm;vp9 → webm → no mimeType`.
+- **OFFLINE_DEMO=true** serves cached embeddings + cached compile output without any external API calls.
+- **Pre-warm Marengo on backend startup** with throwaway call. Cold-start latency = dead live demo.
+- **Compile pipeline LLM budget:** 300s wall-clock (raised from original 30s during v1.0 to absorb retries/throttle).
 
-## Out of Scope (do not propose adding)
+## Out of Scope (carried forward from v1.0)
 
 Live streaming · user accounts/login · likes/comments · user-authored captions · content moderation pipeline · native iOS app · in-app editing · map view · national/regional feed · Pinecone/Qdrant · Redis/Celery · server-side transcoding · wow-factor snap animation · streaming caption tokens · multi-agent status banner.
 
-See `.planning/PROJECT.md` and `.planning/REQUIREMENTS.md` "Out of Scope" tables for full reasoning.
+These are deliberately deferred — revisit before v1.1 only if productizing. See `.planning/PROJECT.md` "Out of Scope" for full reasoning.
 
 ## GSD Workflow
 
 This project uses GSD (`get-shit-done`) for phase-by-phase execution.
 
 - `/gsd-progress` — current state + next action
-- `/gsd-discuss-phase <N>` — gather context for a phase before planning
-- `/gsd-plan-phase <N>` — create executable plan
-- `/gsd-execute-phase <N>` — run the plan
-- `/gsd-next` — auto-advance
+- `/gsd-new-milestone` — start v1.1 (questioning → research → requirements → roadmap)
+- `/gsd-add-phase` / `/gsd-plan-phase` / `/gsd-execute-phase` — for individual phases once a milestone is locked
 
-Config: YOLO mode, coarse granularity, parallel execution, research+plan-check+verifier enabled, Quality model profile (Opus for research/roadmap).
+Config: YOLO mode, coarse granularity, parallel execution, research+plan-check+verifier enabled, Quality model profile.
 
-## Phase Map
+## Lessons Carried Forward (from v1.0 retrospective)
 
-1. **Foundation, Capture & Ingest** (5-7hr) — iPhone Safari camera + clip upload + raw feed playback
-2. **Marengo Embedding** (3-4hr) — 512-d vectors per clip, mock flag, pre-warm
-3. **Clustering + Debug Overlay** (4-5hr) — composite-score clustering + calibration notebook + visible score breakdown — **THE PITCH**
-4. **Multi-Agent Compile + Real-Time Feed** (5-7hr) — 4-subagent Claude Agent SDK pipeline + SSE-driven feed
-5. **Demo Hardening** (remaining) — `OFFLINE_DEMO`, staged replay, screencast, single `make demo`
+- **Calibration is anchored to specific inputs.** Changing the clustering unit invalidates threshold tuning.
+- **Measure encoder latency before committing.** libvpx-vp9 was 84× slower than libx264 ultrafast; almost killed the demo.
+- **Native model capabilities > clever workarounds.** Gemini native video > frame-aggregation for captions.
+- **Demoable-at-every-phase is pitch insurance.** Phase 3 carried the demo when later phases were mid-rewrite.
+- **Anonymity-by-default forced simpler infra.** No auth → no per-user state → no Redis → single-process asyncio worked.
 
-## Top Pitfalls (from research/PITFALLS.md)
-
-All 6 WOULD-KILL-DEMO pitfalls have phase homes — do not paper over them:
-
-1. Marengo embed latency (5-30s) → fire-and-forget, never block UI
-2. Untuned clustering thresholds → calibration notebook is a Phase 3 deliverable
-3. iOS Safari MediaRecorder silently fails → MIME ladder + real-iPhone gate before anything else
-4. Indoor GPS unavailable at Caltech → GPS weight collapses to 0; `?demo_location=` override
-5. Compile pipeline >30s → parallel sub-agents (Angle Selector ‖ Caption Writer); 30s hard cap
-6. Hackathon WiFi dies → `OFFLINE_DEMO` mode + 90s screencast Tier-5 fallback
+Full retrospective: `.planning/RETROSPECTIVE.md`.
 
 ---
-*Generated: 2026-04-24 during /gsd-new-project*
+*Last updated: 2026-04-28 after v1.0 milestone close*

@@ -271,21 +271,20 @@ def _select_caption_children(
 
 
 def _build_stitch_refs(selected: list[dict]) -> list[dict]:
-    """Convert child rows to stitch_clips() ref dicts.
+    """Convert child rows to stitch_clips() ref dicts — one ref per child.
 
-    Each child carries parent_path + start/end offsets. Falls back to a 3s
-    window starting at start_offset_sec if end is missing.
+    Each child is a 3s Marengo slice of its parent. Emit refs unmerged so the
+    Gemini composite is always exactly len(selected) * 3s regardless of how
+    long the parent clips are. ffmpeg.input(path, ss=..., to=...) creates an
+    independent input node per ref even when paths repeat — same-parent
+    children do not collide in the filter graph.
 
-    DEDUPE BY PARENT_PATH: ffmpeg-python's filter graph treats one path as one
-    input node. If multiple selected children share a parent (e.g. child_0 and
-    child_3 of the same recording), the chained filters fan out from the same
-    upstream node and require a `split` filter (which Liam's stitch.py doesn't
-    use), causing ffmpeg to fail with "multiple outgoing edges with same
-    upstream label None". So when two refs share a path, merge them into one
-    window covering [min(start), max(end)] — ffmpeg trims a single contiguous
-    range from each unique source file.
+    Earlier versions deduped by parent_path and merged into [min(start),
+    max(end)]. That collapsed two same-parent picks into a window covering
+    the FULL parent duration, so a 90s parent → 90s composite → slow Gemini
+    call → 300s budget exhaustion. See .planning/debug/compile-timeout-300s.md.
     """
-    by_path: dict[str, dict] = {}
+    refs: list[dict] = []
     for child in selected:
         parent_path = child.get("parent_path")
         if not parent_path:
@@ -293,17 +292,12 @@ def _build_stitch_refs(selected: list[dict]) -> list[dict]:
         start = float(child.get("start_offset_sec") or 0.0)
         end = child.get("end_offset_sec")
         end = float(end) if end is not None else start + 3.0
-        if parent_path in by_path:
-            existing = by_path[parent_path]
-            existing["start_offset_sec"] = min(existing["start_offset_sec"], start)
-            existing["end_offset_sec"] = max(existing["end_offset_sec"], end)
-        else:
-            by_path[parent_path] = {
-                "path": parent_path,
-                "start_offset_sec": start,
-                "end_offset_sec": end,
-            }
-    return list(by_path.values())
+        refs.append({
+            "path": parent_path,
+            "start_offset_sec": start,
+            "end_offset_sec": end,
+        })
+    return refs
 
 
 def _mock_response(cluster_id: str, location: str) -> dict:
@@ -387,12 +381,21 @@ async def generate_caption(
         from google import genai
         from google.genai import types
 
-        client = genai.Client(api_key=config.GEMINI_API_KEY)
+        # Set a transport-layer HTTP timeout on the client so a slow Gemini call
+        # actually aborts the underlying request, not just the asyncio future.
+        # Without this, asyncio.wait_for cancels the future but the executor
+        # thread keeps blocking on the socket until the SDK default (>>300s)
+        # eventually returns. See .planning/debug/compile-timeout-300s.md.
+        client = genai.Client(
+            api_key=config.GEMINI_API_KEY,
+            http_options=types.HttpOptions(timeout=120_000),  # ms
+        )
 
         # 1. Upload (sync SDK call wrapped in executor)
         loop = asyncio.get_running_loop()
-        uploaded = await loop.run_in_executor(
-            None, lambda: client.files.upload(file=stitched)
+        uploaded = await asyncio.wait_for(
+            loop.run_in_executor(None, lambda: client.files.upload(file=stitched)),
+            timeout=30.0,
         )
 
         # 2. Poll until ACTIVE
@@ -410,19 +413,25 @@ async def generate_caption(
             )
             return None
 
-        # 3. Generate content with system prompt + structured JSON
-        response = await loop.run_in_executor(
-            None,
-            lambda: client.models.generate_content(
-                model=config.GEMINI_MODEL,
-                contents=[uploaded, user_prompt],
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_PROMPT,
-                    temperature=0.2,
-                    response_mime_type="application/json",
-                    response_schema=RESPONSE_SCHEMA,
+        # 3. Generate content with system prompt + structured JSON.
+        # Inner asyncio.wait_for is belt-and-suspenders alongside the SDK's
+        # HttpOptions(timeout=120_000) — if HTTP doesn't abort, asyncio at
+        # least surfaces the failure in time for the outer 300s budget.
+        response = await asyncio.wait_for(
+            loop.run_in_executor(
+                None,
+                lambda: client.models.generate_content(
+                    model=config.GEMINI_MODEL,
+                    contents=[uploaded, user_prompt],
+                    config=types.GenerateContentConfig(
+                        system_instruction=SYSTEM_PROMPT,
+                        temperature=0.2,
+                        response_mime_type="application/json",
+                        response_schema=RESPONSE_SCHEMA,
+                    ),
                 ),
             ),
+            timeout=125.0,
         )
 
         # 4. Parse + Layer 2 sanitize (forbidden words, length cap, dup detection)

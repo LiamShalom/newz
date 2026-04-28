@@ -385,9 +385,13 @@ async def compile_segment(cluster_id: str) -> None:
 
     try:
         # Phase 1: LLM work in parallel.
+        # Inner cap on the orchestrator chain so SDK throttle/retry can't
+        # consume the full 300s budget on its own. Caption branch already has
+        # its own per-call timeouts inside generate_caption (Gemini upload +
+        # generate_content). See .planning/debug/compile-timeout-300s.md.
         results = await asyncio.wait_for(
             asyncio.gather(
-                _run_orchestrator_chain(cluster_id),
+                asyncio.wait_for(_run_orchestrator_chain(cluster_id), timeout=180.0),
                 _branch_caption(cluster_id),
                 return_exceptions=True,
             ),
