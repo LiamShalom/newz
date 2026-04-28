@@ -150,7 +150,7 @@ async def insert_clip(
             (clip_id, str(path), lat, lng, ts, session_id, now),
         )
         await conn.commit()
-    log.info("insert_clip id=%s lat=%.2f lng=%.2f bytes=%d", clip_id, lat, lng, len(contents))
+    log.info("insert_clip id=%s bytes=%d", clip_id, len(contents))
     return clip_id
 
 
