@@ -56,6 +56,20 @@ def _status_class(code: int) -> str:
 class MetricsMiddleware:
     """Pure ASGI middleware. Records request count + duration per
     (route, method, status_class). Pure ASGI only — see Pitfall 1.
+
+    WR-04 — status_class semantics:
+      - "2xx"/"3xx"/"4xx"/"5xx" come from a real HTTP response sent to
+        the client (status_holder gets populated by `http.response.start`).
+      - "exception" is recorded when the inner ASGI app raises BEFORE
+        sending any response start message (e.g. RuntimeError escaping a
+        downstream middleware/route). Without this distinction a real 500
+        response and an unhandled ASGI exception would both label as 5xx,
+        which conflates "client got an error response" with "uvicorn
+        closed the connection without ever sending one" — a hazard for
+        availability dashboards.
+      - The middleware re-raises after recording so Starlette's outer
+        exception handlers still convert the exception into a 500 response
+        (or close the connection, depending on lifecycle).
     """
 
     def __init__(self, app):
@@ -68,6 +82,7 @@ class MetricsMiddleware:
 
         start = time.perf_counter()
         status_holder: dict = {"code": 500}
+        exception_escaped = False
 
         async def _send(message):
             if message["type"] == "http.response.start":
@@ -76,13 +91,21 @@ class MetricsMiddleware:
 
         try:
             await self.app(scope, receive, _send)
+        except Exception:
+            # WR-04 — distinguish unhandled ASGI exception from a real 500.
+            # Bounded cardinality: status_class only ever gains ONE extra value.
+            exception_escaped = True
+            raise
         finally:
             elapsed = time.perf_counter() - start
             # Pitfall 4 — read templated route from scope, not raw path.
             route_obj = scope.get("route")
             route = getattr(route_obj, "path", "<unmatched>") if route_obj else "<unmatched>"
             method = scope.get("method", "UNKNOWN")
-            status_class = _status_class(status_holder["code"])
+            if exception_escaped:
+                status_class = "exception"
+            else:
+                status_class = _status_class(status_holder["code"])
             REQUEST_COUNT.labels(route=route, method=method, status_class=status_class).inc()
             REQUEST_DURATION.labels(
                 route=route, method=method, status_class=status_class
