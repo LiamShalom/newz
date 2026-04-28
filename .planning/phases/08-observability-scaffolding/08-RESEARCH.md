@@ -886,27 +886,31 @@ if not x_admin_token or x_admin_token != expected:
 
 **A2 is the only assumption with non-trivial risk** — recommend planner schedule a 5-line spike (one new test) early in the wave to verify before committing to D-12 middleware ordering.
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Test isolation for prometheus REGISTRY.**
    - What we know: `prometheus_client.REGISTRY` is a module-level singleton. Defining a new `Counter` with the same name in two tests raises `Duplicated timeseries`.
    - What's unclear: Whether the cleanest solution is (a) per-test `CollectorRegistry()` instances injected via a fixture, OR (b) reuse the global REGISTRY and accept that test ordering matters.
    - Recommendation: Plan to use option (a) — modify `metrics.py` to read a `REGISTRY` arg with default `prometheus_client.REGISTRY`, then test fixtures create a fresh `CollectorRegistry()`. Adds ~5 lines but unblocks parallel test runs cleanly.
+   - **RESOLVED:** Defer the REGISTRY-arg refactor. Phase 8 ships `metrics.py` using the module-level `prometheus_client.REGISTRY` singleton (no extra ctor arg). The 3-test surface (anonymity, logging, middleware/metrics integration) is small enough that import-order driven fixture flakes are unlikely. If a `Duplicated timeseries` flake actually surfaces during execution, the executor's escape hatch is to add a per-test `prometheus_client.CollectorRegistry()` fixture and `monkeypatch.setattr` the module-level globals (`REQUEST_COUNT`, `REQUEST_DURATION`, `STAGE_DURATION`) — without changing the production signature. Revisit if the Phase 8 test surface grows beyond the 3 files. **No plan changes needed.**
 
 2. **Should `STAGE_DURATION` for the `ingest` stage live inside the route handler or middleware?**
    - What we know: `embed`/`cluster`/`compile`/`stitch` have natural call boundaries inside `pipeline/run.py` and `pipeline/compile.py`.
    - What's unclear: `ingest` is roughly "everything in `POST /clips` before `asyncio.create_task(run_pipeline)`" — file write, DB insert, broadcast. Wrapping the whole route handler is a strange shape.
    - Recommendation: Wrap just `db.insert_clip(...)` since that's the bulk of ingest latency (file I/O + sqlite write). Document that `STAGE_DURATION{stage="ingest"}` measures DB-insert latency only; full request latency is captured by `REQUEST_DURATION{route="/clips"}`.
+   - **RESOLVED:** Adopted. Plan 08-03 Task 1 wraps `await db.insert_clip(...)` only inside the POST `/clips` route handler. Documented in Plan 08-03 `<behavior>` section and PATTERNS.md. Full request latency continues to be captured by `REQUEST_DURATION{route="/clips"}` from `MetricsMiddleware`.
 
 3. **Does `disable_existing_loggers=False` interact badly with uvicorn's own logger config?**
    - What we know: Uvicorn (`requirements.txt: uvicorn[standard]==0.32.1`) has its own logger setup it applies on startup via `--log-config` or defaults.
    - What's unclear: Order of operations — our `dictConfig` runs at `import backend.observability` (i.e. when uvicorn imports `backend.app:app`). Uvicorn's own logger config runs before that during uvicorn startup. So uvicorn's loggers are configured first, then our dictConfig with `disable_existing_loggers=False` keeps them but redirects through our formatter via the root logger handler. This SHOULD work; uvicorn.access logs should appear as JSON.
    - Recommendation: Verify in a Phase 8 task — start uvicorn locally with `LOG_FORMAT=json`, hit `/health`, and confirm both `[INFO]   "GET /health HTTP/1.1" 200` becomes a JSON line. If it doesn't, add `"uvicorn": {"handlers": ["default"], "level": "INFO", "propagate": False}` and `"uvicorn.access": {...}` explicit entries to the dictConfig.
+   - **RESOLVED:** Plan 08-02 already passes `disable_existing_loggers=False` (per RESEARCH.md §1 dictConfig snippet). The dictConfig also sets `uvicorn.access` level to `WARNING` to suppress noisy access lines while letting `uvicorn`/`uvicorn.error` propagate through our root JSON formatter. The recommended local smoke test (`uvicorn backend.app:app` + `curl /health` + grep stdout for JSON shape) is NOT a Phase 8 automated task — it is a **manual pre-deploy checklist item** flagged in Plan 08-02's `must_haves.truths`. If the smoke test ever shows uvicorn lines emitting as plain text in production, the executor adds explicit `"uvicorn"` and `"uvicorn.access"` logger entries to the dictConfig as a follow-up. No structural change to Phase 8 plans.
 
 4. **Does `sentry-sdk[fastapi]` 2.53.0 still respect `traces_sample_rate=0.0` such that no transaction events are sent at all?**
    - What we know: Per Sentry docs, `traces_sample_rate=0.0` disables performance tracing entirely; only error events are sent.
    - What's unclear: Some 2.x point releases have shipped subtle bugs around the auto-integration creating transactions even when sample rate is 0. Phase 13 will lock this with a regression test (OBS-08); Phase 8 just needs to set the value.
    - Recommendation: Set `traces_sample_rate=0.0` and document for Phase 13 that the regression test should `assert not any` outbound HTTP POST to Sentry's transactions endpoint during a sample request flow.
+   - **RESOLVED:** Plan 08-01 sets `traces_sample_rate=0.0` in `init_sentry()` and Plan 08-03's `test_init_sentry_calls_sdk_when_dsn_set` asserts the kwarg is passed through to `sentry_sdk.init`. The runtime regression (no transaction HTTP POST observed during a sample request) is deferred to Phase 13 (REQ-OBS-08) — Phase 8's contract is met by config-time enforcement only. Documented in Plan 08-03's `<threat_model>` (T-08-14 covers config drift).
 
 ## Sources
 
