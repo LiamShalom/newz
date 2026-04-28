@@ -4,8 +4,8 @@ milestone: v1.1
 milestone_name: Public-Launch-Ready Backbone
 status: executing
 stopped_at: "Phase 8 context locked (4 gray areas decided: bridge-only logger migration, LOG_FORMAT env var, constant sha256 session_hash, ADMIN_TOKEN-guarded /metrics)"
-last_updated: "2026-04-28T07:52:48.817Z"
-last_activity: 2026-04-28 -- Phase 08 planning complete
+last_updated: "2026-04-28T16:13:09.611Z"
+last_activity: 2026-04-28 -- Phase 08 execution started
 progress:
   total_phases: 6
   completed_phases: 0
@@ -21,14 +21,14 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-27)
 
 **Core value:** Multi-angle event clustering must work — show the same event captured by different people, automatically grouped and compiled into one coherent segment.
-**Current focus:** Phase 8 — Observability Scaffolding (first phase of v1.1)
+**Current focus:** Phase 08 — observability-scaffolding
 
 ## Current Position
 
-Phase: 8 of 13 (Observability Scaffolding) — first v1.1 phase
-Plan: — (not yet planned)
-Status: Ready to execute
-Last activity: 2026-04-28 -- Phase 08 planning complete
+Phase: 08 (observability-scaffolding) — EXECUTING
+Plan: 1 of 3
+Status: Executing Phase 08
+Last activity: 2026-04-28 -- Phase 08 execution started
 
 Progress: [░░░░░░░░░░] 0%
 

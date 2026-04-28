@@ -57,7 +57,7 @@ Full archive: [milestones/v1.0-ROADMAP.md](./milestones/v1.0-ROADMAP.md)
 **Plans:** 3 plans
 
 Plans:
-- [ ] 08-01-PLAN.md — observability module skeleton (anonymity, logging_config, sentry, middleware, metrics) + config + deps + scrubber/logging unit tests
+- [x] 08-01-PLAN.md — observability module skeleton (anonymity, logging_config, sentry, middleware, metrics) + config + deps + scrubber/logging unit tests
 - [ ] 08-02-PLAN.md — wire observability into backend/app.py (first-import, middleware order, /metrics route) + XFF/contextvars/auth integration tests
 - [ ] 08-03-PLAN.md — pipeline stage timing (ingest/embed/cluster) + Sentry OFFLINE_DEMO smoke + before_send round-trip + stage label enum guard
 
