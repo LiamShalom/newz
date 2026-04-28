@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Public-Launch-Ready Backbone
-status: ready_to_plan
-stopped_at: "Phase 8 context locked (4 gray areas decided: bridge-only logger migration, LOG_FORMAT env var, constant sha256 session_hash, ADMIN_TOKEN-guarded /metrics)"
-last_updated: "2026-04-28T16:13:09.611Z"
-last_activity: 2026-04-28 -- Phase 08 execution started
+status: planning
+stopped_at: Phase 9 context gathered
+last_updated: "2026-04-28T20:14:43.206Z"
+last_activity: 2026-04-28
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 3
-  completed_plans: 0
-  percent: 17
+  completed_plans: 3
+  percent: 100
 ---
 
 # Project State: Newz
@@ -98,9 +98,9 @@ Items acknowledged and carried forward from v1.0 milestone close on 2026-04-27:
 
 ## Session Continuity
 
-Last session: 2026-04-28 — Phase 8 context gathered
-Stopped at: Phase 8 context locked (4 gray areas decided: bridge-only logger migration, LOG_FORMAT env var, constant sha256 session_hash, ADMIN_TOKEN-guarded /metrics)
-Resume file: `.planning/phases/08-observability-scaffolding/08-CONTEXT.md` — run `/gsd-plan-phase 8` to plan
+Last session: 2026-04-28T20:14:43.202Z
+Stopped at: Phase 9 context gathered
+Resume file: .planning/phases/09-postgres-migration-neon-asyncpg-alembic/09-CONTEXT.md
 
 ---
 *Last updated: 2026-04-28 — Phase 8 context gathered*
