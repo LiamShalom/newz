@@ -7,6 +7,7 @@ import { CameraFlipButton } from "../components/CameraFlipButton";
 import { CameraUploadButton } from "../components/CameraUploadButton";
 import { RecordButton } from "../components/RecordButton";
 import { RetakeScreen } from "../components/RetakeScreen";
+import { AddToHomeScreenHint } from "../components/AddToHomeScreenHint";
 import {
   PermissionErrorScreen,
   type ErrorKind,
@@ -296,6 +297,7 @@ export function Recorder() {
         canStop={!isRecording || progress >= MIN_RECORD_SEC / RECORD_CAP_SEC}
         onTap={isRecording ? stopRecording : startRecording}
       />
+      <AddToHomeScreenHint dismiss={isRecording} />
       {!isRecording && <BottomTabBar />}
     </div>
   );
