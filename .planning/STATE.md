@@ -1,16 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: milestone
-status: ready_to_execute
-last_updated: "2026-04-28T04:01:11.519Z"
+milestone: v1.1
+milestone_name: Public-Launch-Ready Backbone
+status: planning
+last_updated: "2026-04-28T05:35:27.007Z"
 last_activity: 2026-04-28
 progress:
-  total_phases: 7
-  completed_phases: 4
-  total_plans: 12
-  completed_plans: 13
-  percent: 100
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State: Newz
@@ -25,17 +25,10 @@ progress:
 
 ## Current Position
 
-| Field | Value |
-|-------|-------|
-| Active Milestone | v1 (hackathon MVP) |
-| Active Phase | Phase 4 — Multi-Agent Compile + Real-Time Feed |
-| Active Plan | 04-01 — ready to execute |
-| Status | Phase 1 complete (Liam). Phase 2 complete. Phase 3 complete. Phase 4 planned (2 plans). |
-| Phase Progress | 3/5 phases complete |
-
-```
-[██████░░░░] 60% — Phase 1 + 2 + 3 complete
-```
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-04-28 — Milestone v1.1 started
 
 ## Performance Metrics
 
@@ -126,3 +119,4 @@ Items acknowledged and deferred at v1.0 milestone close on 2026-04-27:
 *Last updated: 2026-04-25 after Phase 4 planning*
 
 **Planned Phase:** 4 (Multi-Agent Compile + Real-Time Feed) — 2 plans — 2026-04-25T10:00:00.000Z
+| 2026-04-27 | fast | Add iOS Add-to-Home-Screen hint on recorder (auto-dismiss 15s/X/record) | ✅ |

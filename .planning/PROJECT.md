@@ -14,15 +14,26 @@ Won HackTech 2026 with the v1.0 demo.
 - Frontend: React 18 + Vite + TypeScript + Tailwind 4 on Vercel; iOS Safari MediaRecorder with MIME-type fallback ladder; SSE-driven feed auto-refresh; Stories-style segment cards with autoplay-on-scroll.
 - Codebase: ~28K LOC TS+Python, 177 commits, ~38h elapsed build window.
 
-## Next Milestone Goals
+## Current Milestone: v1.1 Public-Launch-Ready Backbone
 
-TBD. Live status: post-hackathon, no committed v1.1 scope yet. Open candidates (not locked):
+**Goal:** Make Newz survivable in public — durable data, safe content, prod-grade observability — without breaking anonymity-by-default or upload UX.
 
-- Resolve open verification + UAT gaps (Phase 03/04) and the `montage-not-updating` debug session
-- Re-run calibration notebook against the post-pivot parent-clustered code path
-- Decide on productization vs. archiving — content moderation, accounts, and live streaming were all explicitly out-of-scope for the hackathon and would need re-evaluation
+**Target features:**
+- Migrate metadata from SQLite-on-volume to managed Postgres (Neon/Supabase). Schema migrations, ORM/driver swap, `CLUSTERS` rebuild on startup.
+- Migrate clip media from Railway volume to Vercel Blob. Signed URLs; ffmpeg stitch reads from Blob.
+- Pre-publish AI moderation gate, run **in parallel with Marengo embed** so upload latency does not regress; blocked clips never enter cluster/compile.
+- Reactive report — anonymous "Report" affordance on segments + admin review queue.
+- Full observability — structured JSON logs, request + pipeline metrics dashboard, Sentry, span-level tracing across multi-agent compile.
 
-Run `/gsd-new-milestone` to define v1.1.
+**Out of scope for v1.1 (deferred to v1.2 or beyond):**
+- Abuse controls (per-session/IP rate limits, bans) — deferred v1.2.
+- Accounts / login / profiles — anonymity-by-default remains load-bearing.
+- Live streaming, native iOS, map view, likes/comments — carried forward from v1.0 out-of-scope.
+
+**Inherited v1.0 gaps (not addressed in v1.1):**
+- Phase 03/04 verification + UAT gaps.
+- `montage-not-updating` debug session.
+- Calibration recalc against post-parent-flip clustering.
 
 <details>
 <summary>Pre-shipment context (preserved for history)</summary>
@@ -60,9 +71,15 @@ Run `/gsd-new-milestone` to define v1.1.
 - ✓ iOS Safari MediaRecorder MIME fallback ladder — v1.0
 - ✓ Vision-grounded captions (Gemini 2.5 Flash native video) — v1.0
 
-### Active
+### Active (v1.1 — Public-Launch-Ready Backbone)
 
-(None — post-hackathon, awaiting v1.1 scoping.)
+- ☐ Managed Postgres for metadata (Neon/Supabase); SQLite-on-volume retired
+- ☐ Vercel Blob for clip media; Railway volume retired for clips
+- ☐ Pre-publish AI moderation gate, parallel with Marengo embed (zero added upload latency in common case)
+- ☐ Anonymous reactive report flow + admin review queue
+- ☐ Structured JSON logs + request/pipeline metrics dashboard
+- ☐ Sentry error tracking
+- ☐ Span-level tracing across multi-agent compile pipeline
 
 ### Out of Scope (carried forward from v1.0; revisit before v1.1)
 
@@ -117,4 +134,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-28 after v1.0 milestone completion*
+*Last updated: 2026-04-27 — milestone v1.1 (Public-Launch-Ready Backbone) opened*
