@@ -15,6 +15,32 @@ log = logging.getLogger(__name__)
 DB_PATH = config.DATA_DIR / "newz.db"
 CLIPS_DIR = config.DATA_DIR / "clips"
 
+__all__ = [
+    # Constants
+    "DB_PATH", "CLIPS_DIR",
+    # Sync helpers
+    "ext_from_mime",
+    # Init
+    "init",
+    # Clips CRUD
+    "insert_clip", "get_clip", "fetch_recent_clips",
+    # Embeddings
+    "store_embedding", "get_embedding",
+    # Clusters
+    "get_all_clusters", "upsert_cluster", "assign_clip_to_cluster",
+    "get_cluster", "count_distinct_parents_in_cluster",
+    # Segments
+    "insert_segment", "fetch_recent_segments", "get_segment_for_cluster",
+    # Compile lock
+    "set_compile_in_flight", "is_compile_in_flight",
+    # Cluster clip queries
+    "fetch_cluster_clips", "fetch_cluster_clips_with_children",
+    # Children
+    "insert_child_clip", "get_children_by_parent",
+    # Admin
+    "reset_all", "delete_recent_clips",
+]
+
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS clips (
   id TEXT PRIMARY KEY,
