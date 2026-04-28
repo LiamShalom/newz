@@ -12,7 +12,10 @@ import {
   type ErrorKind,
 } from "../components/PermissionErrorScreen";
 import { pickMimeType } from "../lib/mimeLadder";
-import { getPositionWithTimeout } from "../lib/getPositionWithTimeout";
+import {
+  getPositionWithTimeout,
+  type PositionResult,
+} from "../lib/getPositionWithTimeout";
 import { postClip } from "../api";
 import { enqueue } from "../uploadQueue";
 
@@ -34,6 +37,11 @@ import { enqueue } from "../uploadQueue";
  *
  * D-07 conflict resolution: GPS lookup BLOCKS submit. CAP-07 ("never blocks") is
  * overridden in Phase 1 — null-GPS clips are not accepted.
+ *
+ * Location sample point: GPS is requested at record-tap (startRecording), not at
+ * submit. This pins the clip's location to where the user was when they pressed
+ * record, not where they happened to be when they tapped submit. The lookup runs
+ * in parallel with recording; submit awaits the in-flight result.
  */
 
 type Phase =
@@ -59,6 +67,9 @@ export function Recorder() {
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // GPS sampled at record-tap. Submit awaits this — by the time min-record
+  // (5s) elapses the 5s lookup is normally settled, so submit feels instant.
+  const gpsPromiseRef = useRef<Promise<PositionResult> | null>(null);
 
   // Cleanup helpers — called on every transition out of an active stream/recorder state
   // and on unmount. Without the stream cleanup, iOS keeps the camera indicator on after
@@ -125,6 +136,9 @@ export function Recorder() {
     };
     recorderRef.current = recorder;
     recorder.start();
+    // Sample GPS NOW — record-tap is the location of record. Runs in parallel
+    // with the recording; submit awaits the stored promise.
+    gpsPromiseRef.current = getPositionWithTimeout(5000);
     const startedAt = performance.now();
     setPhase({ kind: "recording", facing: phase.facing, startedAt });
 
@@ -156,7 +170,10 @@ export function Recorder() {
     });
 
     // D-07: GPS is BLOCKING. CAP-07 conflict resolved in favor of D-07.
-    const pos = await getPositionWithTimeout(5000);
+    // Lookup was kicked off at record-tap; await the in-flight promise here.
+    // Fallback to a fresh lookup only if the user somehow reached submit
+    // without going through startRecording (defensive — should not happen).
+    const pos = await (gpsPromiseRef.current ?? getPositionWithTimeout(5000));
     if (pos.kind === "denied") {
       setPhase({ kind: "error", error: "location-blocked" });
       return;
