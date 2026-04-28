@@ -1,3 +1,8 @@
+# Phase 8 (D-01..D-17): observability MUST be imported before any other backend
+# module that calls logging.getLogger(). Pitfall 6 — without this, pre-warm and
+# DB-init log lines emit as plain text instead of JSON.
+from . import observability  # noqa: F401  — runs configure_logging() + init_sentry() at import
+
 import asyncio
 import json
 import logging
@@ -15,8 +20,9 @@ from sse_starlette.sse import EventSourceResponse
 from . import config, db, events
 from .pipeline.run import run_pipeline
 from .models import IngestResponse
+from .observability.middleware import XFFStrip, RequestIDAndContextvarsBind
+from .observability.metrics import MetricsMiddleware, make_metrics_endpoint
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger(__name__)
 
 
@@ -78,6 +84,15 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Phase 8 (D-12): middleware registration order matters because FastAPI applies
+# middleware in REVERSE-add-order. Effective request flow:
+#   XFFStrip (outermost) -> RequestIDAndContextvarsBind -> MetricsMiddleware -> CORS -> routes
+# XFFStrip MUST run first so client-supplied IP-revealing headers are stripped
+# before any other middleware or route handler can log them (PRIV-01).
+app.add_middleware(MetricsMiddleware)
+app.add_middleware(RequestIDAndContextvarsBind)
+app.add_middleware(XFFStrip)
 
 config.DATA_DIR.mkdir(parents=True, exist_ok=True)
 (config.DATA_DIR / "clips").mkdir(parents=True, exist_ok=True)
@@ -408,3 +423,13 @@ async def admin_reset(
     return result
 
 
+# Phase 8 (D-09, D-10): /metrics endpoint mirrors /admin/reset auth verbatim.
+# Same env var (ADMIN_TOKEN), same header (X-Admin-Token), same status codes
+# (503 on empty token, 401 on mismatch). include_in_schema=False keeps it out
+# of the public OpenAPI spec.
+app.add_api_route(
+    "/metrics",
+    make_metrics_endpoint(config.ADMIN_TOKEN),
+    methods=["GET"],
+    include_in_schema=False,
+)
