@@ -76,9 +76,9 @@ Plans:
 Plans:
 - [x] 09-01-PLAN.md — deps + config env vars (asyncpg/alembic, DATABASE_URL/METADATA_BACKEND/KEEPALIVE_INTERVAL_S/OFFLINE_DEMO)
 - [x] 09-02-PLAN.md — git mv db.py to db_sqlite.py + add explicit __all__ list (lift-and-shift, D-07)
-- [ ] 09-03-PLAN.md — db_postgres.py asyncpg port with byte-identical signature parity to db_sqlite (largest plan; D-07 / DB-01 / DB-04 / DB-07)
+- [x] 09-03-PLAN.md — db_postgres.py asyncpg port with byte-identical signature parity to db_sqlite (largest plan; D-07 / DB-01 / DB-04 / DB-07)
 - [ ] 09-04-PLAN.md — thin db.py METADATA_BACKEND dispatcher + /debug/dbstate guard (D-08, D-11, DB-06)
-- [ ] 09-05-PLAN.md — Alembic-async scaffolding (alembic.ini, env.py, script.py.mako) + initial migration (7 tables, FK graph, MOD-09 reported_csam) (DB-02, MOD-09)
+- [x] 09-05-PLAN.md — Alembic-async scaffolding (alembic.ini, env.py, script.py.mako) + initial migration (7 tables, FK graph, MOD-09 reported_csam) (DB-02, MOD-09)
 - [x] 09-06-PLAN.md — railway.toml + railway.json preDeployCommand for alembic upgrade head (D-13 corrected, DB-02)
 - [ ] 09-07-PLAN.md — app.py lifespan: asyncpg pool init + Neon keepalive task + ordered startup (D-16, D-17, Pitfall 7; DB-04, DB-05, DEMO-03)
 - [ ] 09-08-PLAN.md — backend/scripts/sqlite_to_postgres.py one-shot dump-and-load with SC-2 row-count parity gate (DB-03)
