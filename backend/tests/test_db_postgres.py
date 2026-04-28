@@ -184,3 +184,151 @@ def test_async_def_count_at_least_24():
     src = _read_source()
     n = len(re.findall(r"^async def ", src, re.MULTILINE))
     assert n >= 24, f"only {n} async defs found"
+
+
+# ===========================================================================
+# Phase 9 (09-09): basic CRUD + embedding round-trip parity tests via fresh_db.
+#
+# These tests use the `fresh_db` fixture from conftest.py (D-10 parametrize) —
+# each runs once against sqlite, once against postgres (postgres skipped when
+# DATABASE_URL is unset). They are the DB-01 unit gate. The signature parity
+# contract from D-07 means the same test body works against either backend.
+# ===========================================================================
+
+import io
+import types
+import uuid
+
+import numpy as np
+from fastapi import UploadFile
+
+
+def _make_upload_file(content: bytes = b"FAKE_VIDEO_BYTES", mime: str = "video/mp4") -> UploadFile:
+    return UploadFile(
+        filename="t.mp4",
+        file=io.BytesIO(content),
+        headers={"content-type": mime},
+    )
+
+
+def _make_cluster(cluster_id: str | None = None, vec: np.ndarray | None = None):
+    cid = cluster_id or uuid.uuid4().hex
+    if vec is None:
+        rng = np.random.default_rng(42)
+        vec = rng.standard_normal(512).astype(np.float32)
+    return types.SimpleNamespace(
+        id=cid,
+        centroid=vec,
+        centroid_lat=37.0,
+        centroid_lng=-122.0,
+        median_ts=1700000000.0,
+        member_count=1,
+    )
+
+
+@pytest.mark.asyncio
+async def test_insert_and_get_clip(fresh_db):
+    """DB-01: insert_clip + get_clip round-trip parity."""
+    db = fresh_db
+    f = _make_upload_file()
+    clip_id = await db.insert_clip(f, lat=37.0, lng=-122.0, ts=1700000000.0, session_id="s1")
+    assert clip_id
+    clip = await db.get_clip(clip_id)
+    assert clip is not None
+    assert clip["id"] == clip_id
+    assert clip["lat"] == 37.0
+    assert clip["session_id"] == "s1"
+
+
+@pytest.mark.asyncio
+async def test_store_and_get_embedding_round_trip(fresh_db):
+    """DB-01 / RESEARCH Pitfall 5: embedding bytes round-trip is byte-identical.
+
+    This is the cluster-cosine correctness contract. If get_embedding returns
+    bytes that differ from what store_embedding wrote, the entire clustering
+    pipeline silently mis-scores.
+    """
+    db = fresh_db
+    f = _make_upload_file()
+    clip_id = await db.insert_clip(f, lat=37.0, lng=-122.0, ts=1700000000.0, session_id="s1")
+    rng = np.random.default_rng(42)
+    vec = rng.standard_normal(512).astype(np.float32)
+    await db.store_embedding(clip_id, vec, latency_ms=1234)
+    got = await db.get_embedding(clip_id)
+    assert got is not None
+    assert got.shape == (512,)
+    assert np.array_equal(got, vec), "BYTEA/BLOB round-trip must be byte-identical"
+
+
+@pytest.mark.asyncio
+async def test_upsert_and_fetch_cluster_with_centroid(fresh_db):
+    """DB-04: cluster centroid BYTEA round-trip + member_ids JOIN.
+
+    Mirrors the rebuild_cache() startup path (DB-04 — CLUSTERS in-memory cache
+    must rebuild from whichever backend is active).
+    """
+    db = fresh_db
+    rng = np.random.default_rng(7)
+    vec = rng.standard_normal(512).astype(np.float32)
+    cluster = _make_cluster(vec=vec)
+    await db.upsert_cluster(cluster)
+
+    # Insert a clip and assign it to the cluster — exercises the JOIN in get_all_clusters
+    f = _make_upload_file()
+    clip_id = await db.insert_clip(f, lat=37.0, lng=-122.0, ts=1700000000.0, session_id="s1")
+    await db.assign_clip_to_cluster(clip_id, cluster.id)
+
+    rows = await db.get_all_clusters()
+    matching = [c for c in rows if c["id"] == cluster.id]
+    assert len(matching) == 1
+    c = matching[0]
+    # Centroid bytes must round-trip byte-identical (Pitfall 5).
+    centroid_round_trip = np.frombuffer(bytes(c["centroid"]), dtype=np.float32)
+    assert np.array_equal(centroid_round_trip, vec)
+    # member_ids JOIN populated correctly
+    assert clip_id in c["member_ids"]
+
+
+@pytest.mark.asyncio
+async def test_compile_in_flight_cas_lock(fresh_db):
+    """DB-01: set_compile_in_flight CAS semantics — first acquire returns True,
+    second returns False without releasing.
+
+    asyncpg returns the command tag string ("UPDATE 1") which db_postgres parses
+    via tag.endswith(' 1'). This test gates that parsing matches v1.0 sqlite
+    cursor.rowcount semantics.
+    """
+    db = fresh_db
+    rng = np.random.default_rng(3)
+    cluster = _make_cluster(vec=rng.standard_normal(512).astype(np.float32))
+    await db.upsert_cluster(cluster)
+
+    acquired_first = await db.set_compile_in_flight(cluster.id, True)
+    assert acquired_first is True, "first CAS acquire must succeed"
+    acquired_second = await db.set_compile_in_flight(cluster.id, True)
+    assert acquired_second is False, "second CAS acquire must fail (lock held)"
+
+    # Release explicitly
+    released = await db.set_compile_in_flight(cluster.id, False)
+    assert released is True
+
+    # Now another acquire should succeed
+    re_acquired = await db.set_compile_in_flight(cluster.id, True)
+    assert re_acquired is True
+
+
+@pytest.mark.asyncio
+async def test_reset_all_returns_counts_and_wipes(fresh_db):
+    """DB-01: reset_all returns counts dict {clips, clip_embeddings, clusters, segments}
+    and wipes all 4 tables."""
+    db = fresh_db
+    f = _make_upload_file()
+    await db.insert_clip(f, lat=37.0, lng=-122.0, ts=1700000000.0, session_id="s1")
+
+    counts = await db.reset_all()
+    assert isinstance(counts, dict)
+    assert set(counts.keys()) >= {"clips", "clip_embeddings", "clusters", "segments"}
+    assert counts["clips"] >= 1
+
+    # After reset, fetch_recent_clips returns empty
+    assert await db.fetch_recent_clips() == []
