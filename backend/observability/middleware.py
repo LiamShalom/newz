@@ -59,7 +59,9 @@ class RequestIDAndContextvarsBind:
     structlog contextvars (request_id, session_hash) for the duration of the request.
 
     PRIV-02 whitelist: only request_id, session_hash, clip_id ever bind.
-    clip_id is bound later by the route handler (it doesn't exist yet at this layer).
+    clip_id is bound by the route handler (POST /clips after db.insert_clip)
+    and re-bound by run_pipeline in its own asyncio task — it doesn't exist
+    at this middleware layer yet.
     """
 
     def __init__(self, app):

@@ -2,6 +2,8 @@ import asyncio
 import logging
 import os
 
+from structlog.contextvars import bind_contextvars, unbind_contextvars
+
 from .. import config, db, events
 from ..observability.metrics import STAGE_DURATION
 from .embed import embed_worker
@@ -62,13 +64,22 @@ async def run_pipeline(clip_id: str) -> None:
     `compile` and `stitch` wraps deferred to Plan 13 (those wraps live inside
     backend/pipeline/compile.py and backend/pipeline/stitch.py, which Phase 11
     moderation-gate work also touches — defer to minimize merge friction).
+
+    WR-01: bind `clip_id` into structlog contextvars at entry so every log
+    line emitted from this task (including bridged stdlib logs from
+    embed_worker / cluster_worker / compile_segment) carries clip_id as a
+    top-level structured JSON field, satisfying the PRIV-02 whitelist
+    (request_id, session_hash, clip_id) and the contract documented in
+    RequestIDAndContextvarsBind. Unbind in finally so the structlog
+    contextvars don't leak across asyncio tasks.
     """
+    bind_contextvars(clip_id=clip_id)
     try:
         with STAGE_DURATION.labels(stage="embed").time():
             parent_clip_id, parent_vec = await embed_worker(clip_id)
         log.info(
-            "pipeline embed done clip_id=%s parent_dims=%d",
-            clip_id, len(parent_vec),
+            "pipeline embed done parent_dims=%d",
+            len(parent_vec),
         )
         await events.broadcast({
             "type": "pipeline_progress",
@@ -79,8 +90,8 @@ async def run_pipeline(clip_id: str) -> None:
         with STAGE_DURATION.labels(stage="cluster").time():
             cluster_id = await cluster_worker(parent_clip_id, parent_vec)
         log.info(
-            "pipeline cluster done clip_id=%s cluster_id=%s",
-            clip_id, cluster_id,
+            "pipeline cluster done cluster_id=%s",
+            cluster_id,
         )
 
         await events.broadcast({
@@ -91,8 +102,10 @@ async def run_pipeline(clip_id: str) -> None:
 
         if await _should_compile(cluster_id):
             asyncio.create_task(compile_segment(cluster_id))
-            log.info("compile triggered cluster_id=%s parent=%s", cluster_id, clip_id)
+            log.info("compile triggered cluster_id=%s", cluster_id)
 
     except Exception as exc:
-        log.exception("pipeline failed clip_id=%s", clip_id)
+        log.exception("pipeline failed")
         await events.broadcast({"type": "pipeline_error", "clip_id": clip_id, "error": _scrub(str(exc))})
+    finally:
+        unbind_contextvars("clip_id")

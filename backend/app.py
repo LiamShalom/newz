@@ -18,6 +18,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sse_starlette.sse import EventSourceResponse
 
+from structlog.contextvars import bind_contextvars
+
 from . import config, db, events
 from .pipeline.run import run_pipeline
 from .models import IngestResponse
@@ -131,6 +133,13 @@ async def ingest_clip(
     # Full request latency captured separately by REQUEST_DURATION{route="/clips"}.
     with STAGE_DURATION.labels(stage="ingest").time():
         clip_id = await db.insert_clip(file, lat, lng, ts, session_id=x_session_id)
+    # WR-01: bind clip_id into structlog contextvars now that it exists, so any
+    # subsequent log line in this request (including the broadcast below) carries
+    # clip_id as a structured field. PRIV-02 whitelist allows clip_id.
+    # The contextvar is request-scoped — RequestIDAndContextvarsBind clears
+    # contextvars at request end, and run_pipeline (spawned below) re-binds in
+    # its own task context.
+    bind_contextvars(clip_id=clip_id)
     await events.broadcast({"type": "clip_added", "clip_id": clip_id})
     asyncio.create_task(run_pipeline(clip_id))
     return IngestResponse(clip_id=clip_id, status="processing")
