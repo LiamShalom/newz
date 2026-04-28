@@ -64,18 +64,67 @@ async def _pre_warm_sdk() -> None:
         log.warning("Claude SDK pre-warm failed (non-fatal): %s", exc)
 
 
+async def _neon_keepalive(pool) -> None:
+    """DEMO-03: SELECT 1 every config.KEEPALIVE_INTERVAL_S seconds (default 240)
+    to defeat Neon's scale-to-zero idle threshold (5 min). Logs one INFO line per
+    successful ping, one WARNING per failure. Cancelled cleanly on shutdown.
+
+    Runs outside any request scope — no contextvars (request_id absent on purpose).
+    structlog stdlib bridge from Phase 8 routes the log line through JSON automatically.
+    """
+    keepalive_log = logging.getLogger("backend.keepalive")
+    while True:
+        try:
+            await pool.fetchval("SELECT 1")
+            keepalive_log.info("neon_keepalive ok")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            keepalive_log.warning("neon_keepalive failed (non-fatal): %s", exc)
+        await asyncio.sleep(config.KEEPALIVE_INTERVAL_S)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Phase 9 (D-16, D-17, RESEARCH Pitfall 7): asyncpg pool init + Neon keepalive task.
+    # Order: init_pool → db.init (postgres no-op / sqlite schema) → cluster rebuild
+    #        → keepalive task → pre-warm tasks → yield. Shutdown reverses with cancel + close.
+    keepalive_task: asyncio.Task | None = None
+
+    # 1. asyncpg pool (postgres branch only). hasattr() is the dispatcher contract:
+    #    db.init_pool exists iff METADATA_BACKEND=postgres AND OFFLINE_DEMO=false.
+    if hasattr(db, "init_pool"):
+        await db.init_pool()
+
+    # 2. db.init() — no-op for postgres (schema owned by Alembic); creates schema for sqlite.
     await db.init()
-    # Phase 3: rebuild in-memory cluster cache from sqlite (CLU-10).
-    # Must complete before pre-warm task is scheduled so the first clip ingest
-    # sees a populated cache.
+
+    # 3. CLUSTERS rebuild — must complete before pre-warm so first ingest sees populated cache.
+    #    Reads from whichever backend is active (DB-04 across both branches).
     from .pipeline import cluster as cluster_mod
     await cluster_mod.rebuild_cache()
-    # Fire pre-warms in parallel (Marengo + Claude SDK) — fire-and-forget; never blocks startup
+
+    # 4. Neon keepalive (postgres branch only). Started AFTER rebuild so the rebuild
+    #    gets a clean pool slot first (Pitfall 7).
+    if hasattr(db, "get_pool"):
+        keepalive_task = asyncio.create_task(_neon_keepalive(db.get_pool()))
+
+    # 5. Existing pre-warms (unchanged) — fire-and-forget.
     asyncio.create_task(_pre_warm_marengo())
     asyncio.create_task(_pre_warm_sdk())
-    yield
+
+    try:
+        yield
+    finally:
+        # Shutdown: cancel keepalive, then close the pool.
+        if keepalive_task is not None:
+            keepalive_task.cancel()
+            try:
+                await keepalive_task
+            except asyncio.CancelledError:
+                pass
+        if hasattr(db, "close_pool"):
+            await db.close_pool()
 
 
 app = FastAPI(title="Newz API", lifespan=lifespan)
