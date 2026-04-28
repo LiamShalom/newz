@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Public-Launch-Ready Backbone
-status: executing
+status: ready_to_plan
 stopped_at: "Phase 8 context locked (4 gray areas decided: bridge-only logger migration, LOG_FORMAT env var, constant sha256 session_hash, ADMIN_TOKEN-guarded /metrics)"
 last_updated: "2026-04-28T16:13:09.611Z"
 last_activity: 2026-04-28 -- Phase 08 execution started
 progress:
   total_phases: 6
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 3
   completed_plans: 0
-  percent: 0
+  percent: 17
 ---
 
 # Project State: Newz
@@ -25,10 +25,10 @@ See: `.planning/PROJECT.md` (updated 2026-04-27)
 
 ## Current Position
 
-Phase: 08 (observability-scaffolding) — EXECUTING
-Plan: 1 of 3
-Status: Executing Phase 08
-Last activity: 2026-04-28 -- Phase 08 execution started
+Phase: 9
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-04-28
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -50,6 +50,7 @@ Progress: [░░░░░░░░░░] 0%
 | 11. Moderation Gate | 0/TBD | — | — |
 | 12. Reactive Reporting + Admin Queue | 0/TBD | — | — |
 | 13. Observability Deepening + OFFLINE_DEMO Audit | 0/TBD | — | — |
+| 08 | 3 | - | - |
 
 *Updated after each plan completion.*
 
