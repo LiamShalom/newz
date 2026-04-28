@@ -21,7 +21,7 @@ from . import config, db, events
 from .pipeline.run import run_pipeline
 from .models import IngestResponse
 from .observability.middleware import XFFStrip, RequestIDAndContextvarsBind
-from .observability.metrics import MetricsMiddleware, make_metrics_endpoint
+from .observability.metrics import MetricsMiddleware, make_metrics_endpoint, STAGE_DURATION
 
 log = logging.getLogger(__name__)
 
@@ -126,7 +126,10 @@ async def ingest_clip(
         raise HTTPException(status_code=413, detail="clip too large")
     await file.seek(0)
 
-    clip_id = await db.insert_clip(file, lat, lng, ts, session_id=x_session_id)
+    # Phase 8 (D-17): ingest stage timing covers file-write + DB-insert latency.
+    # Full request latency captured separately by REQUEST_DURATION{route="/clips"}.
+    with STAGE_DURATION.labels(stage="ingest").time():
+        clip_id = await db.insert_clip(file, lat, lng, ts, session_id=x_session_id)
     await events.broadcast({"type": "clip_added", "clip_id": clip_id})
     asyncio.create_task(run_pipeline(clip_id))
     return IngestResponse(clip_id=clip_id, status="processing")

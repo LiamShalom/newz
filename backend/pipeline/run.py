@@ -2,6 +2,7 @@ import asyncio
 import logging
 
 from .. import config, db, events
+from ..observability.metrics import STAGE_DURATION
 from .embed import embed_worker
 from .cluster import cluster_worker
 from .compile import compile_segment
@@ -37,9 +38,16 @@ async def run_pipeline(clip_id: str) -> None:
     Phase 4.6: embed_worker returns exactly one (parent_clip_id, parent_vec) pair.
     cluster_worker is called once per upload using the parent's asset-scope vector.
     Compile fires only when the cluster has >=2 distinct parent uploads (Pivot 2).
+
+    Phase 8 (D-17): stage timing via STAGE_DURATION.labels(stage=...).time().
+    Stage enum: ingest|embed|cluster|compile|stitch.
+    `compile` and `stitch` wraps deferred to Plan 13 (those wraps live inside
+    backend/pipeline/compile.py and backend/pipeline/stitch.py, which Phase 11
+    moderation-gate work also touches — defer to minimize merge friction).
     """
     try:
-        parent_clip_id, parent_vec = await embed_worker(clip_id)
+        with STAGE_DURATION.labels(stage="embed").time():
+            parent_clip_id, parent_vec = await embed_worker(clip_id)
         log.info(
             "pipeline embed done clip_id=%s parent_dims=%d",
             clip_id, len(parent_vec),
@@ -50,7 +58,8 @@ async def run_pipeline(clip_id: str) -> None:
             "stage": "embedded",
         })
 
-        cluster_id = await cluster_worker(parent_clip_id, parent_vec)
+        with STAGE_DURATION.labels(stage="cluster").time():
+            cluster_id = await cluster_worker(parent_clip_id, parent_vec)
         log.info(
             "pipeline cluster done clip_id=%s cluster_id=%s",
             clip_id, cluster_id,
