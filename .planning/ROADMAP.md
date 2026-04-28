@@ -54,7 +54,12 @@ Full archive: [milestones/v1.0-ROADMAP.md](./milestones/v1.0-ROADMAP.md)
   3. `curl https://<railway>/metrics` returns Prometheus-format counters and histograms for request and pipeline-stage activity, with no high-cardinality labels (no clip_id, no session_uuid).
   4. `X-Forwarded-For` header on inbound requests is stripped before any log line is emitted (verified by sending a request with a forged XFF header and grepping logs).
   5. structlog contextvars carry `session_hash`, `clip_id`, `request_id` only — never raw session UUID, IP, or GPS (verified by inspecting a request log line end-to-end).
-**Plans**: TBD
+**Plans:** 3 plans
+
+Plans:
+- [ ] 08-01-PLAN.md — observability module skeleton (anonymity, logging_config, sentry, middleware, metrics) + config + deps + scrubber/logging unit tests
+- [ ] 08-02-PLAN.md — wire observability into backend/app.py (first-import, middleware order, /metrics route) + XFF/contextvars/auth integration tests
+- [ ] 08-03-PLAN.md — pipeline stage timing (ingest/embed/cluster) + Sentry OFFLINE_DEMO smoke + before_send round-trip + stage label enum guard
 
 ### Phase 9: Postgres Migration (Neon + asyncpg + Alembic)
 **Goal**: Retire SQLite-on-volume; metadata lives in managed Postgres with the full v1.1 schema (moderation columns, blob_url, is_hidden, reports, moderation_decisions, reported_csam) baked into the initial migration.
