@@ -67,8 +67,8 @@ export function AddToHomeScreenHint({ dismiss }: Props) {
 
   return (
     <div
-      className="fixed left-1/2 -translate-x-1/2 z-40 px-3 w-full max-w-sm pointer-events-none"
-      style={{ bottom: "calc(168px + env(safe-area-inset-bottom))" }}
+      className="fixed left-1/2 -translate-x-1/2 z-40 px-3 w-full max-w-[320px] pointer-events-none"
+      style={{ top: "calc(16px + env(safe-area-inset-top))" }}
     >
       <div className="pointer-events-auto bg-[#1A1A1A]/95 backdrop-blur rounded-2xl px-4 py-3 border border-[#262626] flex items-center gap-3 shadow-xl">
         <svg
