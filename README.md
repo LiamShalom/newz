@@ -42,7 +42,6 @@ Frontend on Vercel (HTTPS, FND-05). Backend on Railway with a persistent volume 
 3. Set environment variables:
    - `DATA_DIR=/data`
    - `FRONTEND_URL=<vercel url from step 1>`
-   - `OFFLINE_DEMO=false`
 4. Wait for the first deploy. Railway picks up `backend/Dockerfile` (python:3.11-slim) and `backend/railway.toml` (healthcheck `/health`). Copy the public URL (e.g. `https://newz-api.up.railway.app`).
 
 ### 3. Wire Vercel -> Railway

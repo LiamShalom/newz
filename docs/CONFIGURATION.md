@@ -15,10 +15,8 @@ Local dev: copy `backend/.env.example` -> `backend/.env`. `python-dotenv` loads 
 | --- | --- | --- | --- | --- |
 | `FRONTEND_URL` | string (URL) | `http://localhost:5173` | CORS allow-origin for the Vercel frontend. Required in production or browser fetches fail. | `backend/config.py:7`, `backend/app.py:85` |
 | `DATA_DIR` | path | `./data` (resolved) | Root directory for SQLite db (`newz.db`) and clip filesystem (`clips/`). On Railway must point at the mounted volume (`/data`) or redeploys wipe uploads. | `backend/config.py:8`, `backend/db.py:15-16`, `backend/app.py:91-93` |
-| `OFFLINE_DEMO` | bool (`true`/`false`) | `false` | When `true`, skips Claude SDK pre-warm and downstream live API calls so the demo runs without network. See **Tunables** below. | `backend/config.py:9`, `backend/app.py:46` |
-| `TWELVELABS_API_KEY` | string (secret) | `""` (empty) | API key for Twelve Labs Marengo 3.0 embeddings. If empty, real embedding fails — pair with `USE_MOCK_EMBEDDINGS=true` for offline dev. | `backend/config.py:12`, `backend/pipeline/run.py:14`, `backend/pipeline/embed.py:64` |
-| `USE_MOCK_EMBEDDINGS` | bool (`true`/`false`) | `false` | When `true`, embed pipeline returns a deterministic unit vector instead of calling Marengo. Skips pre-warm. Used by tests and offline mode. | `backend/config.py:13`, `backend/app.py:26`, `backend/pipeline/embed.py:118`, `backend/pipeline/caption_pipeline.py:100` |
-| `PRE_WARM_CLIP_PATH` | path | `backend/seed/prewarm.mp4` | Path to a throwaway clip Marengo embeds at startup to pay cold-start latency before the first judge clip. Skipped silently if file is missing. | `backend/config.py:14-16`, `backend/app.py:29-31` |
+| `TWELVELABS_API_KEY` | string (secret) | `""` (empty) | API key for Twelve Labs Marengo 3.0 embeddings. Required for production. | `backend/config.py:11`, `backend/pipeline/run.py:14`, `backend/pipeline/embed.py:55` |
+| `PRE_WARM_CLIP_PATH` | path | `backend/seed/prewarm.mp4` | Path to a throwaway clip Marengo embeds at startup to pay cold-start latency before the first real clip. Skipped silently if file is missing. | `backend/config.py:12-14`, `backend/app.py:23-31` |
 | `CLUSTER_THRESHOLD` | float | `0.55` | Composite-score cutoff above which a clip joins an existing cluster. See **Tunables**. | `backend/config.py:19`, `backend/pipeline/cluster.py:148`, `backend/app.py:222` |
 | `VISUAL_FLOOR` | float | `0.80` | Marengo cosine floor a clip must clear vs. cluster centroid before composite is even considered. Prevents GPS+time-only fusion (CLU-08). See **Tunables**. | `backend/config.py:23`, `backend/pipeline/cluster.py:143`, `backend/app.py:223` |
 | `ANTHROPIC_API_KEY` | string (secret) | unset | Anthropic key for Claude Agent SDK compile pipeline. If unset, compile is disabled (logged as warning); ingest + clustering still work. Not declared in `config.py` — read directly via `os.environ`. | `backend/app.py:49`, `backend/pipeline/caption_pipeline.py:107` |
@@ -28,9 +26,8 @@ Local dev: copy `backend/.env.example` -> `backend/.env`. `python-dotenv` loads 
 
 The container will start with no env vars set, but the demo will be broken in specific ways:
 
-- **Required for any production deploy:** `FRONTEND_URL` (CORS), `DATA_DIR=/data` (volume persistence).
-- **Required for live AI:** `TWELVELABS_API_KEY`, `ANTHROPIC_API_KEY`. Either one missing degrades to a documented fallback (mock embeddings, fallback caption). Neither raises on startup.
-- **Optional everywhere else:** `OFFLINE_DEMO`, `USE_MOCK_EMBEDDINGS`, `PRE_WARM_CLIP_PATH`, `CLUSTER_THRESHOLD`, `VISUAL_FLOOR` — all have sensible defaults.
+- **Required for any production deploy:** `FRONTEND_URL` (CORS), `DATA_DIR=/data` (volume persistence), `TWELVELABS_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`.
+- **Optional everywhere else:** `PRE_WARM_CLIP_PATH`, `CLUSTER_THRESHOLD`, `VISUAL_FLOOR`, `RUN_THRESHOLD`, `MAX_RUN_MEMBERS` — all have sensible defaults.
 
 ## Frontend env vars
 
@@ -69,16 +66,7 @@ Composite-score threshold. Composite is `0.55 x Marengo cosine + 0.30 x GPS prox
 
 Hard floor on Marengo visual cosine. Even if GPS + time push composite over `CLUSTER_THRESHOLD`, the clip must agree visually with the cluster centroid (>= 0.80) to fuse. Prevents the adversarial case where two unrelated clips at the same intersection get merged because GPS+time alone clear the threshold (CLU-08).
 
-Don't lower this below `0.70` without re-running the calibration notebook against the staged dataset — it's the main defense against bad clusters during the live demo.
-
-### `OFFLINE_DEMO` (default `false`)
-
-The Tier-5 fallback toggle. When `true`:
-
-- Claude SDK pre-warm is skipped (`backend/app.py:46`).
-- Downstream `OFFLINE_DEMO`-aware code paths must serve cached embeddings + cached compile output without external API calls (per project hard constraint).
-
-Pair with `USE_MOCK_EMBEDDINGS=true` for a fully offline demo path. The hackathon WiFi is the documented KILL-DEMO pitfall #6 — `OFFLINE_DEMO=true` plus a 90s screencast is the documented fallback.
+Don't lower this below `0.70` without re-running the calibration notebook against the staged dataset.
 
 ## Per-environment overrides
 

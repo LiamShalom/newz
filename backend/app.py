@@ -21,11 +21,8 @@ log = logging.getLogger(__name__)
 
 
 async def _pre_warm_marengo() -> None:
-    """Fire-and-forget Marengo pre-warm. Pays cold-start cost before first judge clip.
-    Skipped when USE_MOCK_EMBEDDINGS=true. Failure is non-fatal."""
-    if config.USE_MOCK_EMBEDDINGS:
-        log.info("pre-warm skipped (USE_MOCK_EMBEDDINGS=true)")
-        return
+    """Fire-and-forget Marengo pre-warm. Pays cold-start cost before first clip.
+    Failure is non-fatal."""
     pre_warm_path = config.PRE_WARM_CLIP_PATH
     if not pre_warm_path or not Path(pre_warm_path).exists():
         log.warning("pre-warm skipped: PRE_WARM_CLIP_PATH=%r not found", pre_warm_path)
@@ -41,11 +38,8 @@ async def _pre_warm_marengo() -> None:
 
 async def _pre_warm_sdk() -> None:
     """Pre-warm Claude Agent SDK connection. Parallel with Marengo pre-warm.
-    Skipped when OFFLINE_DEMO=true or ANTHROPIC_API_KEY not set (log + degrade gracefully).
+    Skipped when ANTHROPIC_API_KEY not set (log + degrade gracefully).
     """
-    if os.environ.get("OFFLINE_DEMO", "").lower() == "true":
-        log.info("sdk pre-warm skipped (OFFLINE_DEMO=true)")
-        return
     if not os.environ.get("ANTHROPIC_API_KEY"):
         log.warning(
             "ANTHROPIC_API_KEY not set — compile pipeline will be unavailable. "
@@ -69,9 +63,6 @@ async def lifespan(app: FastAPI):
     # sees a populated cache.
     from .pipeline import cluster as cluster_mod
     await cluster_mod.rebuild_cache()
-    # FED-05: insert staged demo segment if segments table is empty
-    from .seed.demo_segment import seed_demo_segment
-    await seed_demo_segment()
     # Fire pre-warms in parallel (Marengo + Claude SDK) — fire-and-forget; never blocks startup
     asyncio.create_task(_pre_warm_marengo())
     asyncio.create_task(_pre_warm_sdk())

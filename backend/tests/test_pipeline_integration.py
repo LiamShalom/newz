@@ -8,7 +8,7 @@ import asyncio
 import io
 import types
 import uuid
-from unittest.mock import AsyncMock, call, patch
+from unittest.mock import patch
 
 import aiosqlite
 import numpy as np
@@ -18,7 +18,44 @@ from fastapi import UploadFile
 
 from backend import config, db
 from backend.pipeline import cluster as cluster_mod
+from backend.pipeline import embed as embed_mod
 from backend.pipeline.run import run_pipeline
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _deterministic_unit_vec(key: str) -> np.ndarray:
+    seed = int.from_bytes(key.encode("utf-8")[:8], "big") % (2**32)
+    rng = np.random.default_rng(seed)
+    v = rng.random(512).astype(np.float32)
+    v /= np.linalg.norm(v) + 1e-12
+    return v
+
+
+def _stub_call_marengo(parent_vec_override: np.ndarray | None = None):
+    """Drop-in replacement for embed._call_marengo. Returns a deterministic
+    parent + 3 children at 0-3s, 3-6s, 6-9s without hitting Twelve Labs.
+
+    parent_vec_override forces the same parent vector across calls so two clips
+    can be coerced into one cluster (used by the multi-parent compile gate test).
+    """
+    def _stub(clip_path: str, clip_id: str):
+        if parent_vec_override is not None and clip_id != "__prewarm__":
+            parent_vec = parent_vec_override.copy()
+        else:
+            parent_vec = _deterministic_unit_vec(clip_id)
+        children: list[dict] = []
+        for i in range(3):
+            cv = _deterministic_unit_vec(f"{clip_id}_child_{i * 3}")
+            children.append({
+                "start_offset_sec": float(i * 3),
+                "end_offset_sec": float(i * 3 + 3),
+                "vec": cv,
+            })
+        return parent_vec, children, 0
+    return _stub
 
 
 # ---------------------------------------------------------------------------
@@ -60,7 +97,7 @@ async def _insert_fake_clip(tmp_path, lat=34.1377, lng=-118.1253, ts=1_000_000.0
 @pytest.mark.asyncio
 async def test_run_pipeline_creates_cluster_for_first_clip(tmp_db, monkeypatch):
     """run_pipeline embeds clip then clusters it; cluster is persisted in DB."""
-    monkeypatch.setattr(config, "USE_MOCK_EMBEDDINGS", True)
+    monkeypatch.setattr(embed_mod, "_call_marengo", _stub_call_marengo())
     clip_id = await _insert_fake_clip(tmp_db)
 
     broadcasts = []
@@ -93,7 +130,7 @@ async def test_run_pipeline_creates_cluster_for_first_clip(tmp_db, monkeypatch):
 @pytest.mark.asyncio
 async def test_run_pipeline_chains_embed_then_cluster_in_order(tmp_db, monkeypatch):
     """Broadcast order: pipeline_progress(embedded) -> cluster_assigned -> pipeline_progress(clustered)."""
-    monkeypatch.setattr(config, "USE_MOCK_EMBEDDINGS", True)
+    monkeypatch.setattr(embed_mod, "_call_marengo", _stub_call_marengo())
     clip_id = await _insert_fake_clip(tmp_db)
 
     event_types = []
@@ -173,7 +210,7 @@ async def test_solo_parent_cluster_does_not_trigger_compile(tmp_db, monkeypatch)
 
     Also asserts Pivot 1: child rows have cluster_id=NULL after run_pipeline.
     """
-    monkeypatch.setattr(config, "USE_MOCK_EMBEDDINGS", True)
+    monkeypatch.setattr(embed_mod, "_call_marengo", _stub_call_marengo())
 
     compile_calls: list[str] = []
 
@@ -225,24 +262,14 @@ async def test_solo_parent_cluster_does_not_trigger_compile(tmp_db, monkeypatch)
 @pytest.mark.asyncio
 async def test_two_parents_triggers_compile(tmp_db, monkeypatch):
     """Pivot 2 gate (positive): two parent uploads in same cluster -> compile fires exactly once."""
-    monkeypatch.setattr(config, "USE_MOCK_EMBEDDINGS", True)
-
-    # Force both uploads into the same cluster by stubbing _mock_embedding to return
-    # the SAME parent vector for both clips (mock children are randomized via
-    # int.from_bytes so they would naturally diverge — only the parent must match).
-    from backend.pipeline import embed as embed_mod
+    # Force both uploads into the same cluster by stubbing _call_marengo to return
+    # the SAME parent vector for both clips. Children remain deterministic per
+    # child_id so they don't collide — only the parent must match for clustering.
     fixed_parent = np.ones(512, dtype=np.float32)
     fixed_parent /= np.linalg.norm(fixed_parent)
-    real_mock = embed_mod._mock_embedding
-
-    def stub_mock(clip_id: str) -> np.ndarray:
-        # Parent ids look like uuid4().hex (32 chars no underscore); children look
-        # like "<parent>_child_<offset>". Detect parent by absence of "_child_".
-        if "_child_" in clip_id or clip_id == "__prewarm__":
-            return real_mock(clip_id)
-        return fixed_parent.copy()
-
-    monkeypatch.setattr(embed_mod, "_mock_embedding", stub_mock)
+    monkeypatch.setattr(
+        embed_mod, "_call_marengo", _stub_call_marengo(parent_vec_override=fixed_parent)
+    )
 
     compile_calls: list[str] = []
 
