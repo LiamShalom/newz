@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 
 from .. import config, db, events
 from ..observability.metrics import STAGE_DURATION
@@ -11,10 +12,27 @@ log = logging.getLogger(__name__)
 
 
 def _scrub(msg: str) -> str:
-    """Redact secrets from error strings broadcast over the public /events SSE."""
-    key = config.TWELVELABS_API_KEY
-    if key and key in msg:
-        msg = msg.replace(key, "***REDACTED***")
+    """Redact secrets from error strings broadcast over the public /events SSE.
+
+    WR-02 — scrub ALL configured secrets, not just TWELVELABS_API_KEY. A stack
+    trace string serialized to anonymous SSE subscribers may plausibly contain
+    any of:
+      - TWELVELABS_API_KEY (Marengo)
+      - GEMINI_API_KEY (caption pipeline)
+      - ADMIN_TOKEN (/admin/reset, /metrics)
+      - SENTRY_DSN (also writeable target — DSN is a credential)
+      - ANTHROPIC_API_KEY (Claude Agent SDK; not centralized in config — read env)
+    """
+    secrets = (
+        config.TWELVELABS_API_KEY,
+        config.GEMINI_API_KEY,
+        config.ADMIN_TOKEN,
+        config.SENTRY_DSN,
+        os.environ.get("ANTHROPIC_API_KEY", "").strip(),
+    )
+    for s in secrets:
+        if s and s in msg:
+            msg = msg.replace(s, "***REDACTED***")
     return msg
 
 
