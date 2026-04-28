@@ -33,3 +33,8 @@ MAX_RUN_MEMBERS: int = int(os.environ.get("MAX_RUN_MEMBERS", "2"))
 # Admin: shared secret guarding /admin/* destructive endpoints.
 # Empty value disables the endpoint (returns 503).
 ADMIN_TOKEN: str = os.environ.get("ADMIN_TOKEN", "").strip()
+
+# Phase 8: Observability
+LOG_FORMAT: str = os.environ.get("LOG_FORMAT", "json").strip().lower()
+SENTRY_DSN: str = os.environ.get("SENTRY_DSN", "").strip()
+SENTRY_ENVIRONMENT: str = os.environ.get("SENTRY_ENVIRONMENT", "").strip() or "production"
