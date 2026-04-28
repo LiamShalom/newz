@@ -28,7 +28,7 @@ progress:
 | Active Milestone | v1.1 Pilot MVP for funding |
 | Active Phase | Phase 01 — Anonymous comments + shares |
 | Active Plan | 01-01 — drafted, awaiting execution |
-| Status | Planning complete, ready for build (UI work; backend stubbed/mocked first) |
+| Status | Planning complete, ready for build (Roan owns full vertical slice — backend + UI) |
 | Workflow | Per-feature GSD — each backlog item is its own phase, no master sequence |
 
 ```
@@ -67,7 +67,7 @@ progress:
 
 ### Active Blockers
 
-None for Phase 01 (comments + shares). Phase 01 backend work depends on Liam having capacity once UI is mocked.
+None for Phase 01.
 
 ### Risks Being Tracked
 
@@ -88,7 +88,7 @@ None for Phase 01 (comments + shares). Phase 01 backend work depends on Liam hav
 
 **Last session ended:** 2026-04-27 — opened v1.1 Pilot milestone, scaffolded comments-and-sharing phase.
 
-**Next action:** Execute `phases/01-comments-and-sharing/01-PLAN.md` — UI build of comments bottom-sheet (mobile) / popup (desktop) + Web Share API integration. Backend endpoints stubbed/mocked until Liam picks them up.
+**Next action:** Execute `phases/01-comments-and-sharing/01-PLAN.md` — Wave 1 backend skeleton (DB migration, POST/GET endpoints, SSE event, rate limiter), then Wave 2 comment UI (bottom-sheet mobile / popup desktop), then Wave 3 share + public montage route with OG tags. Roan owns all waves.
 
 **Key files to load on resume:**
 

@@ -2,9 +2,9 @@
 
 **Milestone:** v1.1 Pilot MVP for funding
 **Branch:** `feature/comments-and-sharing`
-**Owner:** Roan (UI) + Liam (backend handoff)
+**Owner:** Roan (full feature — UI + backend)
 **Backlog ref:** ROADMAP.md Mando #5
-**Status:** Planning complete; ready to build (UI-first, backend stubbed)
+**Status:** Planning complete; ready to build
 
 ## Problem
 
@@ -22,11 +22,11 @@ These need to work **without breaking the anonymity premise** that carried the v
    - **Desktop (wider viewport):** Modal popup with video on the left, comments panel on the right (Instagram desktop pattern).
 5. **Share = Web Share API only** (no copy-link fallback in v1, per user call). On platforms without `navigator.share`, the share button is hidden — accept the gap. Re-evaluate after pilot if support gaps cause real problems.
 6. **Each share needs a public per-montage URL with Open Graph tags** so previews render in iMessage/Twitter/etc. Backend work.
-7. **Comments are display-only in v1 — they do NOT feed the caption agent.** Caption-curation-from-comments is deferred (would require re-running compile pipeline on new comments; meaningful backend scope crossing into Liam's territory).
+7. **Comments are display-only in v1 — they do NOT feed the caption agent.** Caption-curation-from-comments is deferred (would require re-running compile pipeline on new comments; out of scope for this feature).
 8. **Threading: flat list.** No nested replies in v1. AI Comment Replies (non-mando #6) can revisit threading if/when it ships.
 9. **Ordering: newest first.** Standard chronological reverse.
 10. **Length cap: 300 characters** per comment. Server-side enforced; client-side counter.
-11. **Rate limiting:** server-side, keyed off the anonymous session UUID. Specifics (X comments per Y minutes) are a Liam call when he picks up the backend work — placeholder: 5 comments per 5 minutes, 10 per hour.
+11. **Rate limiting:** server-side, keyed off the anonymous session UUID. Initial values: 5 comments per 5 minutes + 10 per hour. Tune after a week of real traffic.
 12. **New comments propagate via SSE** — same channel pattern as the feed auto-refresh in v1.0.
 
 ## Scope
@@ -65,13 +65,12 @@ These need to work **without breaking the anonymity premise** that carried the v
 - Anonymity is load-bearing — applies fully to comments and shares.
 - iOS Safari is the primary surface — bottom-sheet UX must work with iOS keyboard.
 - Reliability over polish — ship working comments before polishing animations.
-- Roan = UI, Liam = backend — UI build proceeds against mocked backend; Liam handoff required to ship.
+- This feature is a Roan-owned exception to the usual UI/backend split: Roan ships the full vertical slice (FastAPI routes, SQLite migration, frontend components, route shell, OG tags).
 
 ## Dependencies / Sequence
 
-- UI build CAN proceed independently against a mocked comments API.
-- Public per-montage URL + OG tags requires backend route work → blocks share button being demo-able end-to-end.
-- Real backend (DB schema, endpoints, SSE event, rate limiter) is a Liam pickup. Flag in PR.
+- Build order is a choice, not a constraint. Recommended: backend skeleton (DB + endpoints) → frontend wired against real API → polish. Mocking-first is also fine if it accelerates UI iteration.
+- Public per-montage URL + OG tags is part of this phase (server-side render of OG meta tags from the FastAPI montage route, or a small SSR shim).
 - Liam's `demo/home-screen-app-hint` branch (PWA Add-to-Home-Screen) is independent; testing it does not interfere with this phase.
 
 ---
