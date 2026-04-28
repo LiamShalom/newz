@@ -1,6 +1,10 @@
 ---
 slug: compile-timeout-300s
-status: root_cause_found
+status: resolved
+fix_applied: 2026-04-27
+files_changed:
+  - backend/pipeline/caption_pipeline.py
+  - backend/pipeline/compile.py
 trigger: |
   DATA_START
   Sometimes when attempting to create segments the backend will timeout, this is the error we get in railway:
