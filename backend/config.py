@@ -38,3 +38,19 @@ ADMIN_TOKEN: str = os.environ.get("ADMIN_TOKEN", "").strip()
 LOG_FORMAT: str = os.environ.get("LOG_FORMAT", "json").strip().lower()
 SENTRY_DSN: str = os.environ.get("SENTRY_DSN", "").strip()
 SENTRY_ENVIRONMENT: str = os.environ.get("SENTRY_ENVIRONMENT", "").strip() or "production"
+
+# Phase 9: Postgres migration (D-06, D-08, D-11, D-17)
+# DATABASE_URL: Neon DIRECT endpoint connection string (NOT -pooler — RESEARCH Pitfall 1).
+#   Stock Neon URL works as-is; asyncpg parses sslmode=require natively (RESEARCH D-18 resolution).
+#   Empty when METADATA_BACKEND=postgres + OFFLINE_DEMO=false should fail-loud at pool init.
+DATABASE_URL: str = os.environ.get("DATABASE_URL", "").strip()
+# METADATA_BACKEND: 'sqlite' (default — v1.0 path) or 'postgres' (v1.1 cutover).
+#   D-06 rollback flag. OFFLINE_DEMO=true hard-overrides to sqlite regardless of this value (D-11).
+METADATA_BACKEND: str = os.environ.get("METADATA_BACKEND", "sqlite").strip().lower()
+# KEEPALIVE_INTERVAL_S: Neon SELECT 1 ping interval (DEMO-03 / SC-5).
+#   240s = 4min, well under Neon's 5min scale-to-zero idle threshold (RESEARCH Pattern 5).
+KEEPALIVE_INTERVAL_S: int = int(os.environ.get("KEEPALIVE_INTERVAL_S", "240"))
+# OFFLINE_DEMO: when true, all v1.1 external dependencies are bypassed (D-11).
+#   Phase 9 effect: hard-overrides METADATA_BACKEND to sqlite, skips Neon pool init + keepalive.
+#   Mirrors Phase 8 D-16 graceful-degrade pattern (empty SENTRY_DSN → skip Sentry).
+OFFLINE_DEMO: bool = os.environ.get("OFFLINE_DEMO", "false").strip().lower() == "true"
