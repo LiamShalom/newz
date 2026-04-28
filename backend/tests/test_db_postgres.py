@@ -166,15 +166,21 @@ def test_no_pgbouncer_hint():
 
 
 def test_bytea_defensive_cast():
-    """Pitfall 5: every BYTEA read must defensive-cast to bytes() before numpy."""
+    """Pitfall 5: every BYTEA read must defensive-cast to bytes() before numpy.
+
+    Two use-sites: get_embedding (vector column) and get_all_clusters (centroid column).
+    Match `bytes(<ident>[...]` rather than locking on `row` since we sometimes loop
+    over a list of dicts where the variable is named `c` instead of `row`.
+    """
     src = _read_source()
-    # Expect bytes(row[...]) for at minimum get_embedding + get_all_clusters centroid.
-    n = len(re.findall(r"bytes\(row", src))
-    assert n >= 2, f"expected ≥2 `bytes(row...)` casts, found {n}"
+    n = len(re.findall(r"bytes\([a-zA-Z_][a-zA-Z0-9_]*\[", src))
+    assert n >= 2, f"expected ≥2 `bytes(<ident>[...])` casts, found {n}"
 
 
-def test_async_def_count_at_least_25():
-    """22 db functions + init + init_pool + close_pool = 25 minimum async defs."""
+def test_async_def_count_at_least_24():
+    """db_sqlite has 22 async defs (21 functions + init). db_postgres adds init_pool +
+    close_pool = 24 minimum. (get_pool is sync.)
+    """
     src = _read_source()
     n = len(re.findall(r"^async def ", src, re.MULTILINE))
-    assert n >= 25, f"only {n} async defs found"
+    assert n >= 24, f"only {n} async defs found"
