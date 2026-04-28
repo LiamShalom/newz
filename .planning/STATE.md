@@ -3,13 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: ready_to_execute
-last_updated: "2026-04-25T10:00:00.000Z"
+last_updated: "2026-04-28T04:01:11.519Z"
+last_activity: 2026-04-28
 progress:
-  total_phases: 5
-  completed_phases: 3
-  total_plans: 11
-  completed_plans: 7
-  percent: 64
+  total_phases: 7
+  completed_phases: 4
+  total_plans: 12
+  completed_plans: 13
+  percent: 100
 ---
 
 # Project State: Newz
@@ -90,15 +91,28 @@ None.
 
 ### Risks Being Tracked
 
-- Hour-12 clustering calibration is non-negotiable; if Phase 3 slips past hour 12 the pitch loses its load-bearing demo
-- iOS Safari hardware verification (Phase 1) is a gate, not a checkbox — emulators lie
-- Marengo same-event cosine similarity range is empirically unverified; W_VISUAL=0.55 may need tuning
-- Compile pipeline wall-clock with parallel subagents must be measured with real API latency; 30s cap may force cached fallback as primary
+(Hackathon shipped — risks resolved or no longer load-bearing.)
+
+## Deferred Items
+
+Items acknowledged and deferred at v1.0 milestone close on 2026-04-27:
+
+| Category | Item | Status |
+|----------|------|--------|
+| debug | montage-not-updating | investigating |
+| uat_gap | Phase 04 — 04-HUMAN-UAT.md | partial (3 pending scenarios) |
+| verification_gap | Phase 03 — 03-VERIFICATION.md | human_needed |
+| verification_gap | Phase 04 — 04-VERIFICATION.md | human_needed |
+| quick_task | 260425-pw1-add-anthropic-dependency-to-backend-requ | done in code, status file missing |
+| quick_task | 260425-pyj-clustering-parent-scope-clusters-2-paren | done in code, status file missing |
+| quick_task | 260425-q06-gate-seed-demo-segment-on-offline-demo-s | done in code, status file missing |
+| todo | recalibrate-post-parent-flip.md | medium priority |
+| roadmap | Phases 4.5, 4.6, 5 | planned but never executed; superseded by what shipped |
 
 ## Session Continuity
 
 **Last session ended:** 2026-04-25, after completing Phase 3 (clustering engine + debug overlay + calibration notebook)
-**Last activity:** 2026-04-26 - Completed quick task 260425-pyj: Clustering parent-scope clusters + 2-parent compile gate (architectural pivot)
+**Last activity:** 2026-04-28
 **Next action:** Push to Railway (redeploy) to restore vision-grounded captions in prod; then resume `/gsd-execute-phase 4` — Wave 1 (backend compile pipeline + SSE bus) then Wave 2 (frontend Segment feed)
 
 **Key files to load on resume:**
