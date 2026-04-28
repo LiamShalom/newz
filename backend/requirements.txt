@@ -18,3 +18,5 @@ imageio-ffmpeg>=0.5.1
 structlog==25.5.0
 sentry-sdk[fastapi]==2.53.0
 prometheus-client==0.25.0
+asyncpg==0.31.0
+alembic==1.18.4
