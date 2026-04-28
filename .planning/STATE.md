@@ -2,121 +2,103 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Public-Launch-Ready Backbone
-status: planning
-last_updated: "2026-04-28T05:35:27.007Z"
-last_activity: 2026-04-28
+status: ready_to_plan
+last_updated: "2026-04-27T00:00:00.000Z"
+last_activity: 2026-04-27
 progress:
-  total_phases: 0
+  total_phases: 6
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
   percent: 0
+current_phase: 8
 ---
 
 # Project State: Newz
 
 ## Project Reference
 
-**Core Value:** Multi-angle event clustering must work — show the same event captured by different people, automatically grouped and compiled into one coherent segment.
+See: `.planning/PROJECT.md` (updated 2026-04-27)
 
-**Current Focus:** Phase --phase — 03
-
-**Build Window:** 24-48 hour hackathon (HackTech @ Caltech, April 24-26 2026).
+**Core value:** Multi-angle event clustering must work — show the same event captured by different people, automatically grouped and compiled into one coherent segment.
+**Current focus:** Phase 8 — Observability Scaffolding (first phase of v1.1)
 
 ## Current Position
 
-Phase: Not started (defining requirements)
-Plan: —
-Status: Defining requirements
-Last activity: 2026-04-28 — Milestone v1.1 started
+Phase: 8 of 13 (Observability Scaffolding) — first v1.1 phase
+Plan: — (not yet planned)
+Status: Ready to plan
+Last activity: 2026-04-27 — v1.1 roadmap approved, Phases 8-13 mapped to 51 REQ-IDs
+
+Progress: [░░░░░░░░░░] 0%
 
 ## Performance Metrics
 
-**Build pace targets** (per research SUMMARY.md, optimistic):
+**Velocity:**
+- Total plans completed (v1.1): 0
+- Average duration: —
+- Total execution time: 0h
 
-| Phase | Target Hours | Cumulative |
-|-------|--------------|------------|
-| 1. Foundation + Capture + Ingest | 5-7hr | 7hr |
-| 2. Marengo Embedding | 3-4hr | 11hr |
-| 3. Clustering + Debug Overlay | 4-5hr | 16hr |
-| 4. Multi-Agent Compile + Real-Time Feed | 5-7hr | 23hr |
-| 5. Demo Hardening | remaining | 24-48hr |
+**By Phase:**
 
-**Hour-12 checkpoint:** Phase 3 calibration notebook MUST be done. If clustering thresholds are not validated against the real demo dataset by hour 12, the pitch is at risk.
-| Phase 02-marengo-embedding P01 | 15min | 2 tasks | 2 files |
+| Phase | Plans | Total | Avg/Plan |
+|-------|-------|-------|----------|
+| 8. Observability Scaffolding | 0/TBD | — | — |
+| 9. Postgres Migration | 0/TBD | — | — |
+| 10. Vercel Blob Migration | 0/TBD | — | — |
+| 11. Moderation Gate | 0/TBD | — | — |
+| 12. Reactive Reporting + Admin Queue | 0/TBD | — | — |
+| 13. Observability Deepening + OFFLINE_DEMO Audit | 0/TBD | — | — |
+
+*Updated after each plan completion.*
 
 ## Accumulated Context
 
-### Locked Decisions
+### Locked Decisions (v1.1 — see PROJECT.md Key Decisions for full list)
 
-- React + Vite + TS + Tailwind frontend; FastAPI + Uvicorn + Python 3.11 backend
-- Twelve Labs Marengo 3.0 (`marengo3.0` lowercase, no hyphen) for video embeddings — non-negotiable
-- Claude Agent SDK 0.1.68 for multi-agent compile (Sonnet for subagents, Haiku for Publisher)
-- NumPy in-memory cosine for vector search; SQLite for metadata; local FS for clip storage
-- Vercel for FE; Railway for BE with persistent volume at `/data`
-- Anonymous-by-default — no accounts, no auth, ever
-- Pre-recorded staged dataset (3-4 clips of one event) over live-capture-only demo
-- Live-first demo with staged-clip fallback (Liam's locked decision)
-- Hyperlocal-only (no national/regional escalation)
-- SDK v1.2.3: VideoInputRequest and MediaSource import from `twelvelabs.types`, not `twelvelabs.models.embed`
-- embed_worker uses `loop.run_in_executor(None, _sync_embed, ...)` — sync SDK never blocks FastAPI event loop
-- _mock_embedding uses `int.from_bytes` seed for PYTHONHASHSEED-stable deterministic vectors
-- Clustering unit is the parent (asset-scope) Marengo embedding — children stay in DB as compile-time slicing metadata only; child rows never carry a `cluster_id` (locked 2026-04-26 via /gsd-quick 260425-pyj)
-- compile_segment dispatches only when a cluster has ≥2 distinct parent uploads — solo-parent clusters never compile, regardless of child count (locked 2026-04-26 via /gsd-quick 260425-pyj)
+- Neon Postgres over Supabase (avoid Supabase Auth pressure on anonymity-by-default)
+- asyncpg + Alembic; **no SQLAlchemy ORM** during migration
+- Vercel Blob (committed in PROJECT.md); **no direct browser PUT** — server-mediated only
+- Gemini 2.5 Flash-Lite for inline moderation classifier (same google-genai SDK already in stack)
+- Cloudflare CSAM Scanning Tool for hash check (statutory 18 U.S.C. § 2258A)
+- Logfire owns span tracing; Sentry `traces_sample_rate=0` to prevent double-instrumented spans
+- Single Uvicorn worker locked (`--workers 1`); asyncpg pool max_size=10
+- BYTEA for centroid storage (identical bytes round-trip as v1.0 BLOB) — **no pgvector** at v1.1
+- `METADATA_BACKEND` and `STORAGE_BACKEND` feature flags for migration-window rollback
+- `OFFLINE_DEMO=true` must work end-to-end across all v1.1 deps (firewalled CI smoke test gates)
 
-### Open Todos
+### Pending Todos
 
-- [ ] Pass `/gsd-plan-phase 1` to decompose Phase 1 into executable plans
-- [ ] Verify `pip show twelvelabs` and `dir(client.embed)` in 30s REPL on day 1 before writing embed.py
-- [ ] Verify Claude Agent SDK 0.1.68 parallel subagent execution syntax before writing compile.py (Phase 4 prep)
+- [ ] Run Vercel Blob AsyncBlobClient (vercel 0.5.8) spike before Phase 10 planning — bleeding-edge SDK
+- [ ] Benchmark Gemini 2.5 Flash-Lite latency on actual v1.0 staged demo dataset before Phase 11 planning
+- [ ] Start Cloudflare CSAM Scanning Tool / NCMEC approval application (unknown lead time) before Phase 11 scheduling
+- [ ] Confirm asyncpg + Neon TLS / sslmode=require interaction before Phase 9 cutover
 
-### Active Blockers
+### Blockers/Concerns
 
 None.
 
-### Quick Tasks Completed
+### v1.0 Risks Resolved
 
-| # | Description | Date | Commit | Directory |
-|---|-------------|------|--------|-----------|
-| 260425-pw1 | Add anthropic dependency to backend requirements | 2026-04-26 | e2236fe | [260425-pw1-add-anthropic-dependency-to-backend-requ](./quick/260425-pw1-add-anthropic-dependency-to-backend-requ/) |
-| 260425-q06 | Gate seed_demo_segment on OFFLINE_DEMO so prod doesn't ship a broken demo card | 2026-04-26 | 74a4861 | [260425-q06-gate-seed-demo-segment-on-offline-demo-s](./quick/260425-q06-gate-seed-demo-segment-on-offline-demo-s/) |
-| 260425-pyj | Clustering: parent-scope clusters + 2-parent compile gate | 2026-04-26 | 3be41dc | [260425-pyj-clustering-parent-scope-clusters-2-paren](./quick/260425-pyj-clustering-parent-scope-clusters-2-paren/) |
-
-### Risks Being Tracked
-
-(Hackathon shipped — risks resolved or no longer load-bearing.)
+(Hackathon shipped — v1.0 risks resolved or no longer load-bearing.)
 
 ## Deferred Items
 
-Items acknowledged and deferred at v1.0 milestone close on 2026-04-27:
+Items acknowledged and carried forward from v1.0 milestone close on 2026-04-27:
 
-| Category | Item | Status |
-|----------|------|--------|
-| debug | montage-not-updating | investigating |
-| uat_gap | Phase 04 — 04-HUMAN-UAT.md | partial (3 pending scenarios) |
-| verification_gap | Phase 03 — 03-VERIFICATION.md | human_needed |
-| verification_gap | Phase 04 — 04-VERIFICATION.md | human_needed |
-| quick_task | 260425-pw1-add-anthropic-dependency-to-backend-requ | done in code, status file missing |
-| quick_task | 260425-pyj-clustering-parent-scope-clusters-2-paren | done in code, status file missing |
-| quick_task | 260425-q06-gate-seed-demo-segment-on-offline-demo-s | done in code, status file missing |
-| todo | recalibrate-post-parent-flip.md | medium priority |
-| roadmap | Phases 4.5, 4.6, 5 | planned but never executed; superseded by what shipped |
+| Category | Item | Status | Deferred At |
+|----------|------|--------|-------------|
+| debug | montage-not-updating | investigating | 2026-04-27 |
+| uat_gap | Phase 04 — 04-HUMAN-UAT.md | partial (3 pending scenarios) | 2026-04-27 |
+| verification_gap | Phase 03 — 03-VERIFICATION.md | human_needed | 2026-04-27 |
+| verification_gap | Phase 04 — 04-VERIFICATION.md | human_needed | 2026-04-27 |
+| todo | recalibrate-post-parent-flip.md | medium priority | 2026-04-27 |
 
 ## Session Continuity
 
-**Last session ended:** 2026-04-25, after completing Phase 3 (clustering engine + debug overlay + calibration notebook)
-**Last activity:** 2026-04-28
-**Next action:** Push to Railway (redeploy) to restore vision-grounded captions in prod; then resume `/gsd-execute-phase 4` — Wave 1 (backend compile pipeline + SSE bus) then Wave 2 (frontend Segment feed)
-
-**Key files to load on resume:**
-
-- `.planning/phases/04-multi-agent-compile-real-time-feed/04-01-PLAN.md` — Wave 1 backend plan
-- `.planning/phases/04-multi-agent-compile-real-time-feed/04-02-PLAN.md` — Wave 2 frontend plan
-- `.planning/phases/04-multi-agent-compile-real-time-feed/04-RESEARCH.md` — SDK patterns, SSE patterns, compile trigger CAS
-- `.planning/phases/04-multi-agent-compile-real-time-feed/04-SUMMARY.md` — one-page phase overview
+Last session: 2026-04-27 — v1.1 roadmap approved
+Stopped at: Roadmap created, 51 REQ-IDs mapped to Phases 8-13, ready to plan Phase 8
+Resume file: None — run `/gsd-plan-phase 8` to start
 
 ---
-*Last updated: 2026-04-25 after Phase 4 planning*
-
-**Planned Phase:** 4 (Multi-Agent Compile + Real-Time Feed) — 2 plans — 2026-04-25T10:00:00.000Z
-| 2026-04-27 | fast | Add iOS Add-to-Home-Screen hint on recorder (auto-dismiss 15s/X/record) | ✅ |
+*Last updated: 2026-04-27 — v1.1 roadmap created*

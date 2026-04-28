@@ -1,7 +1,7 @@
 # Newz v1.1 — Public-Launch-Ready Backbone — Requirements
 
 **Milestone:** v1.1
-**Status:** Defining (this file is locked once the roadmap is approved)
+**Status:** Locked (roadmap approved 2026-04-27)
 **Last updated:** 2026-04-27
 
 ---
@@ -114,4 +114,70 @@
 
 ## Traceability
 
-(Filled in by `/gsd-roadmapper` after roadmap approval. Each REQ-ID maps to exactly one phase.)
+Each REQ-ID maps to exactly one phase. 51 of 51 v1.1 requirements mapped. No orphans.
+
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| OBS-01 | Phase 8 | Pending |
+| OBS-02 | Phase 8 | Pending |
+| OBS-03 | Phase 8 | Pending |
+| OBS-04 | Phase 8 | Pending |
+| PRIV-01 | Phase 8 | Pending |
+| PRIV-02 | Phase 8 | Pending |
+| DB-01 | Phase 9 | Pending |
+| DB-02 | Phase 9 | Pending |
+| DB-03 | Phase 9 | Pending |
+| DB-04 | Phase 9 | Pending |
+| DB-05 | Phase 9 | Pending |
+| DB-06 | Phase 9 | Pending |
+| DB-07 | Phase 9 | Pending |
+| MOD-09 | Phase 9 | Pending |
+| DEMO-03 | Phase 9 | Pending |
+| BLOB-01 | Phase 10 | Pending |
+| BLOB-02 | Phase 10 | Pending |
+| BLOB-03 | Phase 10 | Pending |
+| BLOB-04 | Phase 10 | Pending |
+| BLOB-05 | Phase 10 | Pending |
+| BLOB-06 | Phase 10 | Pending |
+| BLOB-07 | Phase 10 | Pending |
+| BLOB-08 | Phase 10 | Pending |
+| MOD-01 | Phase 11 | Pending |
+| MOD-02 | Phase 11 | Pending |
+| MOD-03 | Phase 11 | Pending |
+| MOD-04 | Phase 11 | Pending |
+| MOD-05 | Phase 11 | Pending |
+| MOD-06 | Phase 11 | Pending |
+| MOD-07 | Phase 11 | Pending |
+| MOD-08 | Phase 11 | Pending |
+| MOD-10 | Phase 11 | Pending |
+| PRIV-03 | Phase 11 | Pending |
+| REPORT-01 | Phase 12 | Pending |
+| REPORT-02 | Phase 12 | Pending |
+| REPORT-03 | Phase 12 | Pending |
+| REPORT-04 | Phase 12 | Pending |
+| REPORT-05 | Phase 12 | Pending |
+| REPORT-06 | Phase 12 | Pending |
+| REPORT-07 | Phase 12 | Pending |
+| REPORT-08 | Phase 12 | Pending |
+| REPORT-09 | Phase 12 | Pending |
+| REPORT-10 | Phase 12 | Pending |
+| PRIV-04 | Phase 12 | Pending |
+| OBS-05 | Phase 13 | Pending |
+| OBS-06 | Phase 13 | Pending |
+| OBS-07 | Phase 13 | Pending |
+| OBS-08 | Phase 13 | Pending |
+| OBS-09 | Phase 13 | Pending |
+| DEMO-01 | Phase 13 | Pending |
+| DEMO-02 | Phase 13 | Pending |
+
+**Coverage by phase:**
+
+| Phase | REQ count | REQ-IDs |
+|-------|-----------|---------|
+| Phase 8: Observability Scaffolding | 6 | OBS-01..04, PRIV-01..02 |
+| Phase 9: Postgres Migration | 9 | DB-01..07, MOD-09, DEMO-03 |
+| Phase 10: Vercel Blob Migration | 8 | BLOB-01..08 |
+| Phase 11: Moderation Gate | 10 | MOD-01..08, MOD-10, PRIV-03 |
+| Phase 12: Reactive Reporting + Admin Queue | 11 | REPORT-01..10, PRIV-04 |
+| Phase 13: Observability Deepening + OFFLINE_DEMO Audit | 7 | OBS-05..09, DEMO-01..02 |
+| **Total** | **51** | (no orphans, no duplicates) |
