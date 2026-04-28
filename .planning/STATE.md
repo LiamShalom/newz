@@ -1,101 +1,80 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: milestone
-status: ready_to_execute
-last_updated: "2026-04-28T04:01:11.519Z"
-last_activity: 2026-04-28
+milestone: v1.1
+milestone_name: Pilot MVP for funding
+status: in_progress
+last_updated: "2026-04-27T00:00:00.000Z"
+last_activity: 2026-04-27
 progress:
-  total_phases: 7
-  completed_phases: 4
-  total_plans: 12
-  completed_plans: 13
-  percent: 100
+  total_phases: 9
+  completed_phases: 2
+  total_plans: 9
+  completed_plans: 2
+  percent: 22
 ---
 
 # Project State: Newz
 
 ## Project Reference
 
-**Core Value:** Multi-angle event clustering must work — show the same event captured by different people, automatically grouped and compiled into one coherent segment.
+**Core Value:** Multi-angle event clustering must work — show the same event captured by different people, automatically grouped and compiled into one coherent montage.
 
-**Current Focus:** Phase --phase — 03
-
-**Build Window:** 24-48 hour hackathon (HackTech @ Caltech, April 24-26 2026).
+**Current Focus:** v1.1 Pilot MVP for funding — Phase 01: Anonymous comments + shares (planning)
 
 ## Current Position
 
 | Field | Value |
 |-------|-------|
-| Active Milestone | v1 (hackathon MVP) |
-| Active Phase | Phase 4 — Multi-Agent Compile + Real-Time Feed |
-| Active Plan | 04-01 — ready to execute |
-| Status | Phase 1 complete (Liam). Phase 2 complete. Phase 3 complete. Phase 4 planned (2 plans). |
-| Phase Progress | 3/5 phases complete |
+| Active Milestone | v1.1 Pilot MVP for funding |
+| Active Phase | Phase 01 — Anonymous comments + shares |
+| Active Plan | 01-01 — drafted, awaiting execution |
+| Status | Planning complete, ready for build (UI work; backend stubbed/mocked first) |
+| Workflow | Per-feature GSD — each backlog item is its own phase, no master sequence |
 
 ```
-[██████░░░░] 60% — Phase 1 + 2 + 3 complete
+[██░░░░░░░░] 22% — 2/9 mando shipped (timeout #1, location #3); 1 in planning (#5)
 ```
-
-## Performance Metrics
-
-**Build pace targets** (per research SUMMARY.md, optimistic):
-
-| Phase | Target Hours | Cumulative |
-|-------|--------------|------------|
-| 1. Foundation + Capture + Ingest | 5-7hr | 7hr |
-| 2. Marengo Embedding | 3-4hr | 11hr |
-| 3. Clustering + Debug Overlay | 4-5hr | 16hr |
-| 4. Multi-Agent Compile + Real-Time Feed | 5-7hr | 23hr |
-| 5. Demo Hardening | remaining | 24-48hr |
-
-**Hour-12 checkpoint:** Phase 3 calibration notebook MUST be done. If clustering thresholds are not validated against the real demo dataset by hour 12, the pitch is at risk.
-| Phase 02-marengo-embedding P01 | 15min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
-### Locked Decisions
+### Locked Decisions (carried forward from v1.0)
 
-- React + Vite + TS + Tailwind frontend; FastAPI + Uvicorn + Python 3.11 backend
-- Twelve Labs Marengo 3.0 (`marengo3.0` lowercase, no hyphen) for video embeddings — non-negotiable
+- React + Vite + TS + Tailwind 4 frontend; FastAPI + Uvicorn + Python 3.11 backend
+- Twelve Labs Marengo 3.0 (`marengo3.0` lowercase) for video embeddings — non-negotiable
 - Claude Agent SDK 0.1.68 for multi-agent compile (Sonnet for subagents, Haiku for Publisher)
-- NumPy in-memory cosine for vector search; SQLite for metadata; local FS for clip storage
+- NumPy in-memory cosine; SQLite metadata; local FS for clip storage
 - Vercel for FE; Railway for BE with persistent volume at `/data`
-- Anonymous-by-default — no accounts, no auth, ever
-- Pre-recorded staged dataset (3-4 clips of one event) over live-capture-only demo
-- Live-first demo with staged-clip fallback (Liam's locked decision)
-- Hyperlocal-only (no national/regional escalation)
-- SDK v1.2.3: VideoInputRequest and MediaSource import from `twelvelabs.types`, not `twelvelabs.models.embed`
-- embed_worker uses `loop.run_in_executor(None, _sync_embed, ...)` — sync SDK never blocks FastAPI event loop
-- _mock_embedding uses `int.from_bytes` seed for PYTHONHASHSEED-stable deterministic vectors
-- Clustering unit is the parent (asset-scope) Marengo embedding — children stay in DB as compile-time slicing metadata only; child rows never carry a `cluster_id` (locked 2026-04-26 via /gsd-quick 260425-pyj)
-- compile_segment dispatches only when a cluster has ≥2 distinct parent uploads — solo-parent clusters never compile, regardless of child count (locked 2026-04-26 via /gsd-quick 260425-pyj)
+- Clustering unit = parent (asset-scope) Marengo embedding; children are compile-time slicing metadata
+- compile_segment dispatches only when cluster has ≥2 distinct parent uploads
+- ffmpeg libx264 ultrafast normalize-and-concat for stitching
+- Gemini 2.5 Flash for vision-grounded captions
+
+### Locked Decisions (new in v1.1)
+
+- **Anonymous everywhere — including comments.** No accounts, no display names, ever. Anonymous session UUID may be used server-side for rate limiting only.
+- **Per-feature GSD.** Each backlog item gets its own phase. No master sequenced roadmap.
+- **Nomenclature:** videorecording (raw upload) / clip (Marengo embedding-space slice) / montage (final compiled output). Don't mix them up in code or docs.
+- **Comments attach per-montage**, not per-clip or per-videorecording.
+- **Roan = UI, Liam = backend.** Cross-domain features need explicit handoffs.
 
 ### Open Todos
 
-- [ ] Pass `/gsd-plan-phase 1` to decompose Phase 1 into executable plans
-- [ ] Verify `pip show twelvelabs` and `dir(client.embed)` in 30s REPL on day 1 before writing embed.py
-- [ ] Verify Claude Agent SDK 0.1.68 parallel subagent execution syntax before writing compile.py (Phase 4 prep)
+- [ ] Decision: censoring approach (automated / human / hybrid) — blocks Mando #6
+- [ ] Decision: permissions gate flow (require all permissions vs. allow no-location with reduced clustering weight) — blocks Mando #4 + #7
+- [ ] Decision: custom engagement signal design — blocks Non-mando #3
+- [ ] Carry-over: re-run calibration notebook against parent-clustered code path (from v1.0 deferred)
+- [ ] Carry-over: resolve `montage-not-updating` debug session (from v1.0 deferred)
 
 ### Active Blockers
 
-None.
-
-### Quick Tasks Completed
-
-| # | Description | Date | Commit | Directory |
-|---|-------------|------|--------|-----------|
-| 260425-pw1 | Add anthropic dependency to backend requirements | 2026-04-26 | e2236fe | [260425-pw1-add-anthropic-dependency-to-backend-requ](./quick/260425-pw1-add-anthropic-dependency-to-backend-requ/) |
-| 260425-q06 | Gate seed_demo_segment on OFFLINE_DEMO so prod doesn't ship a broken demo card | 2026-04-26 | 74a4861 | [260425-q06-gate-seed-demo-segment-on-offline-demo-s](./quick/260425-q06-gate-seed-demo-segment-on-offline-demo-s/) |
-| 260425-pyj | Clustering: parent-scope clusters + 2-parent compile gate | 2026-04-26 | 3be41dc | [260425-pyj-clustering-parent-scope-clusters-2-paren](./quick/260425-pyj-clustering-parent-scope-clusters-2-paren/) |
+None for Phase 01 (comments + shares). Phase 01 backend work depends on Liam having capacity once UI is mocked.
 
 ### Risks Being Tracked
 
-(Hackathon shipped — risks resolved or no longer load-bearing.)
+- **Anonymous comments → spam/harassment with no identity lever.** Mitigation: rate limits via session UUID + content filter. Real risk; surface in pitch.
+- **Web Share API support quirks on desktop.** May need fallback for non-supporting browsers (we picked Web Share only — re-evaluate if support gaps bite).
 
-## Deferred Items
-
-Items acknowledged and deferred at v1.0 milestone close on 2026-04-27:
+## Deferred Items (from v1.0 — still open)
 
 | Category | Item | Status |
 |----------|------|--------|
@@ -103,26 +82,20 @@ Items acknowledged and deferred at v1.0 milestone close on 2026-04-27:
 | uat_gap | Phase 04 — 04-HUMAN-UAT.md | partial (3 pending scenarios) |
 | verification_gap | Phase 03 — 03-VERIFICATION.md | human_needed |
 | verification_gap | Phase 04 — 04-VERIFICATION.md | human_needed |
-| quick_task | 260425-pw1-add-anthropic-dependency-to-backend-requ | done in code, status file missing |
-| quick_task | 260425-pyj-clustering-parent-scope-clusters-2-paren | done in code, status file missing |
-| quick_task | 260425-q06-gate-seed-demo-segment-on-offline-demo-s | done in code, status file missing |
 | todo | recalibrate-post-parent-flip.md | medium priority |
-| roadmap | Phases 4.5, 4.6, 5 | planned but never executed; superseded by what shipped |
 
 ## Session Continuity
 
-**Last session ended:** 2026-04-25, after completing Phase 3 (clustering engine + debug overlay + calibration notebook)
-**Last activity:** 2026-04-28
-**Next action:** Push to Railway (redeploy) to restore vision-grounded captions in prod; then resume `/gsd-execute-phase 4` — Wave 1 (backend compile pipeline + SSE bus) then Wave 2 (frontend Segment feed)
+**Last session ended:** 2026-04-27 — opened v1.1 Pilot milestone, scaffolded comments-and-sharing phase.
+
+**Next action:** Execute `phases/01-comments-and-sharing/01-PLAN.md` — UI build of comments bottom-sheet (mobile) / popup (desktop) + Web Share API integration. Backend endpoints stubbed/mocked until Liam picks them up.
 
 **Key files to load on resume:**
 
-- `.planning/phases/04-multi-agent-compile-real-time-feed/04-01-PLAN.md` — Wave 1 backend plan
-- `.planning/phases/04-multi-agent-compile-real-time-feed/04-02-PLAN.md` — Wave 2 frontend plan
-- `.planning/phases/04-multi-agent-compile-real-time-feed/04-RESEARCH.md` — SDK patterns, SSE patterns, compile trigger CAS
-- `.planning/phases/04-multi-agent-compile-real-time-feed/04-SUMMARY.md` — one-page phase overview
+- `.planning/phases/01-comments-and-sharing/01-CONTEXT.md` — feature scope, decisions, open questions
+- `.planning/phases/01-comments-and-sharing/01-PLAN.md` — task breakdown
+- `.planning/PROJECT.md` — v1.1 active scope, anonymity constraint, nomenclature
+- `.planning/ROADMAP.md` — full v1.1 backlog
 
 ---
-*Last updated: 2026-04-25 after Phase 4 planning*
-
-**Planned Phase:** 4 (Multi-Agent Compile + Real-Time Feed) — 2 plans — 2026-04-25T10:00:00.000Z
+*Last updated: 2026-04-27 after opening v1.1 milestone*
