@@ -4,6 +4,7 @@
 from . import observability  # noqa: F401  — runs configure_logging() + init_sentry() at import
 
 import asyncio
+import hmac
 import json
 import logging
 import math
@@ -382,7 +383,8 @@ async def admin_reset(
     expected = config.ADMIN_TOKEN
     if not expected:
         raise HTTPException(status_code=503, detail="ADMIN_TOKEN not configured")
-    if not x_admin_token or x_admin_token != expected:
+    # CR-01 — constant-time compare. Mirrors /metrics auth verbatim.
+    if not x_admin_token or not hmac.compare_digest(x_admin_token, expected):
         raise HTTPException(status_code=401, detail="invalid admin token")
 
     if mode == "all":
@@ -430,9 +432,11 @@ async def admin_reset(
 # Same env var (ADMIN_TOKEN), same header (X-Admin-Token), same status codes
 # (503 on empty token, 401 on mismatch). include_in_schema=False keeps it out
 # of the public OpenAPI spec.
+# WR-03: factory takes no argument; the route handler reads config.ADMIN_TOKEN
+# per-request (mirrors /admin/reset behavior, survives in-process config reload).
 app.add_api_route(
     "/metrics",
-    make_metrics_endpoint(config.ADMIN_TOKEN),
+    make_metrics_endpoint(),
     methods=["GET"],
     include_in_schema=False,
 )

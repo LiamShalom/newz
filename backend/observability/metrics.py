@@ -11,6 +11,7 @@ Pitfall 4: route label reads request.scope["route"].path (templated form),
 NOT request.url.path (raw — would explode cardinality with IDs).
 """
 
+import hmac
 import time
 
 from prometheus_client import (
@@ -20,6 +21,8 @@ from prometheus_client import (
     REGISTRY,
     generate_latest,
 )
+
+from .. import config
 
 
 # D-17 — bounded labels only. NO clip_id, NO session_hash, NO raw paths.
@@ -86,21 +89,31 @@ class MetricsMiddleware:
             ).observe(elapsed)
 
 
-def make_metrics_endpoint(admin_token: str):
+def make_metrics_endpoint():
     """D-09/D-10: returns a FastAPI route handler that mirrors /admin/reset auth.
 
-    503 if admin_token == "" (endpoint disabled).
+    503 if config.ADMIN_TOKEN == "" (endpoint disabled).
     401 if X-Admin-Token header missing or mismatched.
     200 with Prometheus text format otherwise.
+
+    WR-03: reads `config.ADMIN_TOKEN` per-request (NOT captured at factory call
+    time). This mirrors /admin/reset behavior verbatim and survives in-process
+    config reload (tests monkeypatching config.ADMIN_TOKEN, live-reload dev loops).
+
+    CR-01: uses hmac.compare_digest for constant-time equality — defends the
+    admin token against timing-side-channel attacks.
     """
     from fastapi import Header, HTTPException, Response
 
     async def metrics(
         x_admin_token: str | None = Header(None, alias="X-Admin-Token"),
     ) -> Response:
+        admin_token = config.ADMIN_TOKEN  # WR-03 — read per-request
         if not admin_token:
             raise HTTPException(status_code=503, detail="ADMIN_TOKEN not configured")
-        if not x_admin_token or x_admin_token != admin_token:
+        # CR-01 — constant-time compare. `not x_admin_token` short-circuit is
+        # safe because the token presence (not its value) is not a secret.
+        if not x_admin_token or not hmac.compare_digest(x_admin_token, admin_token):
             raise HTTPException(status_code=401, detail="invalid admin token")
         return Response(
             content=generate_latest(REGISTRY), media_type=CONTENT_TYPE_LATEST
