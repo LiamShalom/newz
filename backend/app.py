@@ -326,7 +326,16 @@ async def debug_trigger_compile(cluster_id: str):
 
 @app.get("/debug/dbstate")
 async def debug_dbstate():
-    """Dev-only: counts and sample IDs straight from sqlite, no in-memory."""
+    """Dev-only: counts and sample IDs straight from sqlite, no in-memory.
+
+    Phase 9: this endpoint is sqlite-only — postgres branch returns 503.
+    db.DB_PATH is None in the postgres branch (db_postgres.py stub).
+    """
+    if db.DB_PATH is None:
+        raise HTTPException(
+            status_code=503,
+            detail=f"debug/dbstate is sqlite-only; current backend is {config.METADATA_BACKEND}",
+        )
     import aiosqlite as _aios
     async with _aios.connect(db.DB_PATH) as conn:
         conn.row_factory = _aios.Row
