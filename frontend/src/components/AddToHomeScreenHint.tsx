@@ -1,7 +1,5 @@
 import { useEffect, useState } from "react";
 
-const STORAGE_KEY = "newz:a2hs-dismissed-at";
-const DISMISS_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 const AUTO_DISMISS_MS = 15_000;
 const APPEAR_DELAY_MS = 1500;
 
@@ -13,45 +11,26 @@ function isInstalled(): boolean {
   return false;
 }
 
-function recentlyDismissed(): boolean {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return false;
-    const at = Number(raw);
-    if (!Number.isFinite(at)) return false;
-    return Date.now() - at < DISMISS_TTL_MS;
-  } catch {
-    return false;
-  }
-}
-
 interface Props {
-  /** When flips true, the hint dismisses itself and persists the dismissal (e.g. user started recording). */
+  /** When flips true, the hint dismisses itself for this session (e.g. user started recording). */
   dismiss: boolean;
 }
 
 /**
  * iOS Add-to-Home-Screen suggestion. Auto-dismisses after 15s, on X tap, or
- * when `dismiss` flips true. Skipped entirely if the page was launched from
- * the home screen or the user dismissed within the last 14 days.
+ * when `dismiss` flips true. Shown on every app open unless the page was
+ * launched from the home screen.
  */
 export function AddToHomeScreenHint({ dismiss }: Props) {
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
-    if (isInstalled() || recentlyDismissed()) return;
+    if (isInstalled()) return;
     const t = setTimeout(() => setVisible(true), APPEAR_DELAY_MS);
     return () => clearTimeout(t);
   }, []);
 
-  const close = () => {
-    try {
-      localStorage.setItem(STORAGE_KEY, String(Date.now()));
-    } catch {
-      // localStorage unavailable — popup will reappear next mount, acceptable.
-    }
-    setVisible(false);
-  };
+  const close = () => setVisible(false);
 
   useEffect(() => {
     if (!visible) return;
