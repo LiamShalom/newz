@@ -65,18 +65,18 @@ Replace SQLite-on-volume with managed Postgres (Neon) for all backend metadata. 
 - **D-12:** Firewalled CI smoke test (DEMO-02, owned by Phase 13) sets `OFFLINE_DEMO=true` only — Phase 9 must guarantee that startup never opens a Neon connection under that flag.
 
 ### Alembic upgrade timing
-- **D-13:** **Procfile `release:` phase** runs `alembic upgrade head` exactly once per deploy in a separate container before web start. Procfile becomes:
+- **D-13:** **`preDeployCommand` in `railway.toml` / `railway.json`** runs `alembic upgrade head` exactly once per deploy in a separate ephemeral container before web start. (CORRECTED 2026-04-28 by RESEARCH.md: Railway does NOT honor Procfile `release:` phase — their migration-from-Heroku doc explicitly states only one process is supported. `preDeployCommand` is the first-class equivalent: blocks deploy on failure, has DATABASE_URL access, runs in separate container.) Config addition:
+  ```toml
+  [deploy]
+  preDeployCommand = ["alembic", "upgrade", "head"]
   ```
-  release: alembic upgrade head
-  web: uvicorn backend.app:app --host 0.0.0.0 --port $PORT --app-dir ..
-  ```
-- **D-14:** **Verify Railway honors the `release:` phase** — current `backend/Procfile` only declares `web:`. Planner must confirm `release:` phase fires on Railway (Heroku-compatible Procfile spec); if not supported, fallback is FastAPI lifespan with `pg_advisory_lock(deploy_lock_id)` (Option B from discuss). Document the verification step in PLAN.md as a pre-implementation check.
+- **D-14:** **Pre-planning smoke owed:** Add a 5-minute Railway smoke deploy with `preDeployCommand: ["echo PROBE"]` early in plan execution to confirm Dockerfile-builder honors the field. RESEARCH §A6 documents this as the only residual risk after the D-13 correction. If smoke fails, fallback is FastAPI lifespan + `pg_advisory_lock(deploy_lock_id)`.
 - **D-15:** No automatic rollback on migration failure — failed `alembic upgrade head` fails the deploy; web container never starts. Acceptable for hackathon-grade.
 
 ### Connection pool & Neon keepalive
 - **D-16:** asyncpg pool initialized in FastAPI `lifespan()` startup hook (eager, fail-loud). Closed in `lifespan()` shutdown. Single module-level pool, `max_size=10` per L-02.
 - **D-17:** Neon keepalive (DEMO-03 / SC-5): `asyncio.create_task` in `lifespan()` startup that loops `await pool.fetchval("SELECT 1")` every 240 seconds. Cancelled cleanly on shutdown. Logger emits one INFO line per ping (request_id absent — keepalive runs outside any request scope).
-- **D-18:** TLS: asyncpg uses `ssl='require'` (not libpq-style `sslmode=require`). Connection string from `DATABASE_URL` env var (Neon-provided). **Pre-planning verification owed**: STATE.md "Pending Todos" → "Confirm asyncpg + Neon TLS / `sslmode=require` interaction before Phase 9 cutover." Planner should run a one-line connection probe before locking the connection-string format.
+- **D-18:** TLS: **asyncpg natively understands `sslmode=require` in URL params.** (RESOLVED 2026-04-28 by RESEARCH.md: asyncpg parses libpq-style URL params including `sslmode=require`. Both URL-param `sslmode=require` and the kwarg `ssl='require'` work; pick one for code consistency. Neon's stock `DATABASE_URL` works as-is with `asyncpg.create_pool(dsn=DATABASE_URL)`.) **Use Neon's DIRECT endpoint, not the `-pooler` (PgBouncer) endpoint** — RESEARCH Pitfall 1 documents that PgBouncer transaction-mode breaks asyncpg's prepared-statement cache. With `--workers 1` + process-singleton asyncpg pool, no extra pooling is needed.
 
 ### Claude's Discretion (locked-in defaults the planner can act on)
 - **D-19:** Alembic env.py async config is implementation detail (planner choice). Standard pattern: `async_engine_from_config` + `connection.run_sync(do_run_migrations)`. No need to discuss with user.
@@ -154,7 +154,11 @@ Replace SQLite-on-volume with managed Postgres (Neon) for all backend metadata. 
 - **Hybrid schema is *softer* than the phase goal language but pragmatically right.** Baking 100% of v1.1 columns into the initial migration would mean Phase 9 commits to column shapes for moderation/reporting features it hasn't built. The Hybrid path keeps FK graph stable but lets Phase 11's planner choose Phase 11's columns.
 - **Module split (D-07) keeps the SQLite branch testable and demo-able forever.** It also means D-09 explicitly does NOT delete `db_sqlite.py` at end of v1.1 — that question lives in v1.2.
 - **Test fixture parametrizing METADATA_BACKEND (D-10) is the single most important regression guard.** Without it, Phase 9 ships and SQLite silently rots. With it, OFFLINE_DEMO=true CI run validates the SQLite path on every commit.
-- **Procfile `release:` phase verification (D-14) is the only real risk in this plan.** If Railway doesn't honor it, fallback is FastAPI-lifespan with `pg_advisory_lock` — workable, just less clean. Planner runs the verification first.
+- **Procfile `release:` phase verification (D-14) is the only real risk in this plan.** ~~If Railway doesn't honor it, fallback is FastAPI-lifespan with `pg_advisory_lock`~~ **(SUPERSEDED by RESEARCH.md 2026-04-28: Railway uses `preDeployCommand` in railway.toml, not Procfile `release:`. D-13 corrected. Residual risk is Dockerfile-builder compat with `preDeployCommand` — wave-0 smoke deploy mitigates.)**
+
+### Research-Resolved Verifications (RESEARCH.md, 2026-04-28)
+- **D-14 (Railway release phase):** RESOLVED. Use `preDeployCommand` in `railway.toml`/`railway.json`, NOT Procfile `release:`. D-13 has been updated to reflect the correct mechanism. RESEARCH §A6 flags wave-0 smoke deploy as the only residual risk.
+- **D-18 (asyncpg TLS):** RESOLVED. asyncpg natively parses libpq-style `sslmode=require` URL params; Neon's stock `DATABASE_URL` works as-is. D-18 has been updated. Pitfall 1: use Neon DIRECT endpoint, not the `-pooler` PgBouncer endpoint.
 
 </specifics>
 
@@ -169,6 +173,9 @@ Replace SQLite-on-volume with managed Postgres (Neon) for all backend metadata. 
 - **`db_sqlite.py` deletion** — v1.2+ scope (D-09 keeps it indefinitely through v1.1).
 - **Dual-write window cutover** — Explicitly rejected (D-02). One-shot script per SC-2 only.
 - **Automatic migration rollback on failure** — Out of scope (D-15). Failed deploy = manual investigation.
+
+### Reconciliations Owed (Research-Surfaced)
+- **MOD-09 retention period — STALE.** REQUIREMENTS.md and PROJECT.md state "90 days per 18 U.S.C. § 2258A". The 2024 REPORT Act (S.474) amended § 2258A — minimum retention is now **1 year**. Research source: REPORT Act 2024 + current statute text. **Phase 9 impact: NONE.** Phase 9 creates the `reported_csam.content_preserved_until TIMESTAMPTZ` column without an encoded duration; Phase 11 (the writer) must use the corrected 1-year minimum. **User reconciliation owed before Phase 11 planning:** update REQUIREMENTS.md MOD-09 + STATE.md "Locked Decisions" to reflect 1-year minimum.
 
 </deferred>
 
