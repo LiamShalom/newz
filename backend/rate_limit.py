@@ -19,7 +19,7 @@ _lock = asyncio.Lock()
 _LARGEST_WINDOW = max(w for _, w in COMMENT_LIMITS)
 
 
-async def check_and_record(session_uuid: str) -> tuple[bool, int]:
+async def check_and_record(session_id: str) -> tuple[bool, int]:
     """Returns (allowed, retry_after_seconds).
 
     On allow, records the attempt timestamp (so subsequent calls see it).
@@ -27,7 +27,7 @@ async def check_and_record(session_uuid: str) -> tuple[bool, int]:
     """
     now = time.time()
     async with _lock:
-        bucket = _attempts[session_uuid]
+        bucket = _attempts[session_id]
         cutoff = now - _LARGEST_WINDOW
         while bucket and bucket[0] < cutoff:
             bucket.popleft()

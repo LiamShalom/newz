@@ -4,7 +4,7 @@ Revision ID: 0002_comments
 Revises: 0001_initial_v1_1_schema
 Create Date: 2026-04-28
 
-Anonymous comments per montage (segment). session_uuid is server-side only —
+Anonymous comments per montage (segment). session_id is server-side only —
 used for rate limiting; never returned to clients (PRIV invariant).
 
 created_at uses DOUBLE PRECISION (Unix seconds) to match the v1.0 tables and
@@ -27,7 +27,7 @@ def upgrade() -> None:
         CREATE TABLE comments (
           id BIGSERIAL PRIMARY KEY,
           segment_id TEXT NOT NULL REFERENCES segments(id),
-          session_uuid TEXT NOT NULL,
+          session_id TEXT NOT NULL,
           text TEXT NOT NULL CHECK (length(text) >= 1 AND length(text) <= 300),
           created_at DOUBLE PRECISION NOT NULL
         )

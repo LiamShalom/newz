@@ -245,8 +245,8 @@ async def sse_events(request: Request):
 
 # ---------------------------------------------------------------------------
 # Phase 01 (feature track): anonymous comments on segments (montages)
-#   POST /segments/{id}/comments — body { text }; X-Session-UUID header (server-side only)
-#   GET  /segments/{id}/comments — public-safe list, no session_uuid leakage
+#   POST /segments/{id}/comments — body { text }; X-Session-Id header (server-side only)
+#   GET  /segments/{id}/comments — public-safe list, no session_id leakage
 # ---------------------------------------------------------------------------
 
 async def _segment_exists(segment_id: str) -> bool:
@@ -269,16 +269,16 @@ async def _segment_exists(segment_id: str) -> bool:
 async def post_comment(
     segment_id: str,
     payload: CommentCreateRequest,
-    x_session_uuid: str | None = Header(default=None, alias="X-Session-UUID"),
+    x_session_id: str | None = Header(default=None, alias="X-Session-Id"),
 ):
-    if not x_session_uuid:
-        raise HTTPException(status_code=400, detail="X-Session-UUID header required")
+    if not x_session_id:
+        raise HTTPException(status_code=400, detail="X-Session-Id header required")
     if not await _segment_exists(segment_id):
         raise HTTPException(status_code=404, detail="segment not found")
     text = payload.text.strip()
     if not (1 <= len(text) <= 300):
         raise HTTPException(status_code=400, detail="text must be 1-300 chars after trim")
-    allowed, retry_after = await rate_limit.check_and_record(x_session_uuid)
+    allowed, retry_after = await rate_limit.check_and_record(x_session_id)
     if not allowed:
         raise HTTPException(
             status_code=429,
@@ -288,7 +288,7 @@ async def post_comment(
     filter_result = content_filter.check(text)
     if filter_result.blocked:
         raise HTTPException(status_code=400, detail=f"comment rejected: {filter_result.reason}")
-    comment = await db.insert_comment(segment_id, x_session_uuid, text)
+    comment = await db.insert_comment(segment_id, x_session_id, text)
     await events.broadcast({
         "type": "comment_added",
         "segment_id": segment_id,
