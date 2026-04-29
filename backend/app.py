@@ -20,7 +20,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from structlog.contextvars import bind_contextvars
 
-from . import config, db, events
+from . import config, db, events, rate_limit
 from .pipeline.run import run_pipeline
 from .models import IngestResponse, CommentCreateRequest
 from .observability.middleware import XFFStrip, RequestIDAndContextvarsBind
@@ -278,6 +278,13 @@ async def post_comment(
     text = payload.text.strip()
     if not (1 <= len(text) <= 300):
         raise HTTPException(status_code=400, detail="text must be 1-300 chars after trim")
+    allowed, retry_after = await rate_limit.check_and_record(x_session_uuid)
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="too many comments — slow down",
+            headers={"Retry-After": str(retry_after)},
+        )
     comment = await db.insert_comment(segment_id, x_session_uuid, text)
     await events.broadcast({
         "type": "comment_added",
