@@ -123,12 +123,14 @@ Selection criteria — within the parent-diversity constraint, rank by:
 
 Order the selected runs chronologically (earliest parent ts first).
 
-Use mcp__newz_tools__get_cluster_runs to list candidates, then
-mcp__newz_tools__get_clip_metadata for any parent-clip details.
+Make ONE call to mcp__newz_tools__get_cluster_runs — the result already
+includes lat, lng, ts, parent_id, and duration_sec for every run. Do NOT
+call get_clip_metadata; the cluster_runs payload has everything you need.
 
-Return ONLY a single JSON object on the LAST line of your response:
+After that single tool call, return ONLY a JSON object as your final
+message. Format (a one-line markdown fence is fine):
 {{"run_ids": ["...", "..."], "rationale": "..."}}
-Do not include any text after the JSON. Markdown code fences are allowed.
+Do not call any more tools after returning the JSON.
 """
 
 
@@ -188,7 +190,10 @@ async def _run_orchestrator_chain(cluster_id: str) -> str:
             "mcp__newz_tools__get_clip_metadata",
         ],
         mcp_servers={"newz_tools": newz_tools_server},
-        max_turns=10,
+        # 10 turns wasn't enough — Sonnet was burning turns on multiple
+        # get_clip_metadata lookups before producing JSON. With the prompt
+        # tightened to a single tool call, 20 is generous headroom.
+        max_turns=20,
         model="sonnet",
     )
     prompt = ANGLE_SELECTOR_PROMPT_TEMPLATE.format(cluster_id=cluster_id)
@@ -298,32 +303,64 @@ async def _resolve_run_ids_to_stitch_refs(
     return refs
 
 
-async def _save_fallback_segment(cluster_id: str, video_url: str | None = None) -> str:
-    """CMP-06: idempotent fallback. Chronological order, generic AP-wire caption.
+async def _deterministic_run_pick(cluster_id: str, max_runs: int = 4) -> list[str]:
+    """First run from each parent in chronological order. No LLM.
 
-    Leaves video_url=None on failure paths intentionally. In blob mode the
-    parent clips live at uploads/* (private) and can't be browser-fetched;
-    fetch_recent_segments returns None for those rows so the feed renders
-    "Compiling…" instead of a black <video>.
+    Used as the fallback when angle-selector raises (timeout, max_turns, bad
+    JSON). Picks proper run IDs so the stitch path can produce playable
+    runs/{run_id}.mp4 URLs — without this, fallback segments stored parent
+    IDs and the frontend showed "Compiling…" forever in blob mode.
+    """
+    runs = await compute_runs_for_cluster(cluster_id)
+    if not runs:
+        return []
+    by_parent: dict[str, list] = {}
+    for r in runs:
+        by_parent.setdefault(r.parent_id, []).append(r)
+    # Sort parents by earliest run start_offset_sec to keep timeline order.
+    parent_order = sorted(
+        by_parent.keys(),
+        key=lambda pid: min(r.start_offset_sec for r in by_parent[pid]),
+    )
+    picked: list[str] = []
+    for pid in parent_order:
+        first = sorted(by_parent[pid], key=lambda r: r.start_offset_sec)[0]
+        picked.append(first.id)
+        if len(picked) >= max_runs:
+            break
+    return picked
+
+
+async def _save_fallback_segment(cluster_id: str, video_url: str | None = None) -> str:
+    """CMP-06: idempotent fallback. Picks first run per parent so the stitch
+    path can still produce a playable video, then writes a generic caption.
     """
     existing = await db.get_segment_for_cluster(cluster_id)
     if existing:
         return existing["id"]
     clips = await db.fetch_cluster_clips(cluster_id)
-    clip_ids = [c["id"] for c in clips]
+    run_ids = await _deterministic_run_pick(cluster_id)
+    # Childless-parent clusters yield no runs; fall back to parent IDs so the
+    # row at least exists. In blob mode this still renders "Compiling…", but
+    # the row anchors the cluster for any future recompile.
+    ordered_ids = run_ids if run_ids else [c["id"] for c in clips]
+    distinct_parents = (
+        len({rid.rsplit("_run_", 1)[0] for rid in run_ids})
+        if run_ids else len(clips)
+    )
     if clips:
         when = datetime.fromtimestamp(clips[0]["ts"], tz=timezone.utc).strftime("%b %-d, %Y")
     else:
         when = datetime.now(tz=timezone.utc).strftime("%b %-d, %Y")
     location_str = "Pasadena, CA"  # default; cluster centroid reverse-geocode is a Phase 5 follow-up
-    caption = f"{when} — {location_str}. Submitted footage from {len(clip_ids)} contributor(s)."
+    caption = f"{when} — {location_str}. Submitted footage from {distinct_parents} contributor(s)."
     return await db.insert_segment(
         cluster_id=cluster_id,
-        ordered_clip_ids=clip_ids,
+        ordered_clip_ids=ordered_ids,
         title="",
         caption=caption,
         location=location_str,
-        source_count=len(clip_ids),
+        source_count=distinct_parents or len(clips),
         video_url=video_url,
     )
 
@@ -536,20 +573,21 @@ async def compile_segment(cluster_id: str) -> None:
             except Exception as exc:
                 log.warning("parent diversity guard failed cluster_id=%s: %s", cluster_id, exc)
 
-        # Phase 2: stitch each chosen run separately (only if orchestrator succeeded).
+        # Phase 2: stitch each chosen run separately. Always runs — the
+        # fallback now writes deterministic run IDs (first run per parent),
+        # so even when the LLM call failed there's something to stitch.
         # Separate 30s budget so a slow ffmpeg encode doesn't bleed into LLM
-        # phase failures. Returns ordered list of /media URLs (one per run).
+        # phase failures. Returns ordered list of run video URLs.
         run_video_urls: list[str] = []
-        if not isinstance(a_result, Exception):
-            try:
-                run_video_urls = await asyncio.wait_for(
-                    _stitch_segment_runs(cluster_id),
-                    timeout=30.0,
-                )
-            except asyncio.TimeoutError:
-                log.warning("stitch TIMEOUT cluster_id=%s after 30s", cluster_id)
-            except Exception as exc:
-                log.warning("stitch failed cluster_id=%s: %s", cluster_id, exc)
+        try:
+            run_video_urls = await asyncio.wait_for(
+                _stitch_segment_runs(cluster_id),
+                timeout=30.0,
+            )
+        except asyncio.TimeoutError:
+            log.warning("stitch TIMEOUT cluster_id=%s after 30s", cluster_id)
+        except Exception as exc:
+            log.warning("stitch failed cluster_id=%s: %s", cluster_id, exc)
         # First run's video doubles as the segment's headline video_url for
         # frontends that don't iterate video_urls.
         video_url = run_video_urls[0] if run_video_urls else None
