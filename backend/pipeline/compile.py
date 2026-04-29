@@ -495,12 +495,20 @@ async def _stitch_segment_runs(cluster_id: str) -> list[str]:
             return run_id, None
         log.info("trim ok run_id=%s elapsed_ms=%d", run_id, elapsed_ms)
         if blob_mode:
-            # trim_window returns absolute Blob URL on upload success, or the
-            # local tempfile path on upload failure. We can no longer serve
-            # the tempfile (it's already been deleted above) — let the caller
-            # see whatever URL trim_window returned; if it's a path, frontend
-            # 404s the segment until next recompile (acceptable failure-fallback).
-            return run_id, result
+            # trim_window returns the absolute Blob URL on upload success and
+            # the LOCAL tempfile path on upload failure. The tempfile has
+            # already been deleted above; surfacing it as a video_url leaks an
+            # unservable `/tmp/...` string into the segment row (frontend
+            # tries `${API_BASE}/tmp/...` → 404). Treat anything that isn't an
+            # absolute http URL as a failure and emit None — the feed then
+            # renders "Compiling…" cleanly via fetch_recent_segments fallback.
+            if isinstance(result, str) and result.startswith("http"):
+                return run_id, result
+            log.warning(
+                "trim+upload result not a URL run_id=%s result_prefix=%r — emitting None",
+                run_id, (result or "")[:40],
+            )
+            return run_id, None
         # local mode: result is the local FS path. Surface as /media URL.
         if Path(result).exists() and result == output_path:
             return run_id, f"/media/{run_id}.mp4"

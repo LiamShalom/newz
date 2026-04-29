@@ -133,7 +133,14 @@ def _classify_response(resp: httpx.Response, *, pathname: str | None = None) -> 
     if status == 429 or status >= 500:
         raise _RetryableHTTPError(f"status={status} body={resp.text[:200]}")
     if status >= 400:
-        # 401/403/4xx-other: fail-fast (D-24).
+        # 401/403/4xx-other: fail-fast (D-24). Surface the response body so
+        # 400 Bad Request from the Vercel Blob control plane carries an
+        # actionable error message into the log instead of just the URL.
+        body = resp.text[:500] if resp.text else "<empty>"
+        log.error(
+            "blob 4xx response status=%d pathname=%s body=%s",
+            status, pathname, body,
+        )
         resp.raise_for_status()
 
 
