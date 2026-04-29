@@ -2,7 +2,9 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { MessageCircle } from "lucide-react";
 
 /** iOS-style filled corner-arrow share icon. Lucide ships only an outlined
- *  variant; this matches the screenshot Roan referenced — solid, no stroke. */
+ *  variant; this matches the screenshot Roan referenced — solid, no stroke.
+ *  Path fills the 24x24 viewBox edge-to-edge so the visual weight matches
+ *  Lucide's stroked MessageCircle in the same container. */
 function ShareArrowIcon({ className }: { className?: string }) {
   return (
     <svg
@@ -12,7 +14,7 @@ function ShareArrowIcon({ className }: { className?: string }) {
       aria-hidden
       className={className}
     >
-      <path d="M14 3l7 6-7 6v-3.6c-3.6 0-6.4 1-8.6 3.6 0-5 3-9 8.6-9V3z" />
+      <path d="M14 5l7 7-7 7v-4c-5 0-9 1.5-12 5v-1c0-7 4-12 12-13V5z" />
     </svg>
   );
 }
