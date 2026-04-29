@@ -84,6 +84,18 @@ export interface Segment {
 }
 
 /**
+ * Anonymous comment on a montage (segment). Server never returns session_id —
+ * if you ever see one client-side, that's an anonymity bug.
+ */
+export interface Comment {
+  id: number;
+  segment_id: string;
+  text: string;
+  /** POSIX seconds, server-side timestamp. */
+  created_at: number;
+}
+
+/**
  * Discriminated union of all events emitted by GET /events (RTM-01).
  * Consumed by useEventSource hook in Feed.tsx.
  */
@@ -100,4 +112,5 @@ export type ServerEvent =
     }
   | { type: "compile_started"; cluster_id: string; started_at: number }
   | { type: "segment_published"; cluster_id: string; segment_id: string }
-  | { type: "pipeline_error"; clip_id: string; error: string };
+  | { type: "pipeline_error"; clip_id: string; error: string }
+  | { type: "comment_added"; segment_id: string; comment: Comment };

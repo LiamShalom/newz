@@ -1,8 +1,15 @@
 import { useState, useCallback, useEffect, useRef } from "react";
+import { MessageCircle, Share } from "lucide-react";
 import type { Segment } from "../types";
 import { relativeTime } from "../timeFormat";
 import { distanceLabel } from "../distance";
 import { LivePill } from "./LivePill";
+import { Comments } from "./Comments";
+import { API_BASE, fetchComments } from "../api";
+import { subscribeToCommentsFor } from "../commentsBus";
+
+const CAN_SHARE =
+  typeof navigator !== "undefined" && typeof navigator.share === "function";
 
 function deriveSummary(s: Segment, locationStr: string | null): string {
   const angles = s.source_count > 1 ? `Captured from ${s.source_count} angles` : "Single-angle footage";
@@ -55,6 +62,50 @@ export function SegmentCard({
       : segment.location;
 
   const summary = deriveSummary(segment, locationStr ?? null);
+
+  const [commentsOpen, setCommentsOpen] = useState(false);
+  const [commentCount, setCommentCount] = useState<number | undefined>(undefined);
+
+  const handleShare = useCallback(async () => {
+    // Backend /m/<id> serves OG tags + redirects browsers to FRONTEND_URL/m/<id>.
+    // We share the backend URL so iMessage/Twitter unfurlers see the meta tags;
+    // humans following the link land on the SPA route via the JS redirect.
+    const url = `${API_BASE}/m/${encodeURIComponent(segment.id)}`;
+    const title = segment.title || "Newz montage";
+    const text = segment.caption || "";
+    try {
+      await navigator.share({ title, text, url });
+    } catch (err) {
+      // User cancelled — AbortError is expected, swallow it. Other errors are
+      // rare (permissions denied) and we have no error UI for them at pilot.
+      if ((err as DOMException)?.name !== "AbortError") {
+        // eslint-disable-next-line no-console
+        console.warn("share failed:", err);
+      }
+    }
+  }, [segment.id, segment.title, segment.caption]);
+
+  // Lazy: fetch the count once per card. Pilot scale; revisit if N gets large.
+  useEffect(() => {
+    let cancelled = false;
+    fetchComments(segment.id)
+      .then((cs) => {
+        if (!cancelled) setCommentCount(cs.length);
+      })
+      .catch(() => {
+        // Network blip — leave undefined so the badge stays hidden, no error UI.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [segment.id]);
+
+  // Live SSE increments — works whether the sheet is open or not.
+  useEffect(() => {
+    return subscribeToCommentsFor(segment.id, () => {
+      setCommentCount((c) => (c ?? 0) + 1);
+    });
+  }, [segment.id]);
 
   return (
     <article className="relative">
@@ -139,6 +190,36 @@ export function SegmentCard({
       <p className="mt-3 px-4 text-[13px] leading-[1.5] text-ink-primary">
         {segment.caption}
       </p>
+
+      <div className="mt-4 px-4 flex items-center gap-3">
+        <button
+          type="button"
+          onClick={() => setCommentsOpen(true)}
+          aria-label="open comments"
+          className="inline-flex items-center gap-1.5 rounded-full border border-hairline px-3 py-1.5 text-[13px] text-ink-primary hover:bg-surface-elevated"
+        >
+          <MessageCircle className="h-4 w-4" />
+          <span>{commentCount ?? "comment"}</span>
+        </button>
+        {CAN_SHARE && (
+          <button
+            type="button"
+            onClick={handleShare}
+            aria-label="share"
+            className="inline-flex items-center gap-1.5 rounded-full border border-hairline px-3 py-1.5 text-[13px] text-ink-primary hover:bg-surface-elevated"
+          >
+            <Share className="h-4 w-4" />
+            <span>share</span>
+          </button>
+        )}
+      </div>
+
+      <Comments
+        segmentId={segment.id}
+        videoUrls={segment.video_urls ?? (currentUrl ? [currentUrl] : null)}
+        open={commentsOpen}
+        onClose={() => setCommentsOpen(false)}
+      />
     </article>
   );
 }

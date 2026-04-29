@@ -1,67 +1,68 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.1
-milestone_name: Public-Launch-Ready Backbone
-status: planned
-stopped_at: Phase 10 plan written + verified — paused before execute (Wave 0 needs Vercel Blob env setup)
-last_updated: "2026-04-29T02:30:00.000Z"
-last_activity: 2026-04-29
+milestone_name: Pilot MVP for funding (Public-Launch-Ready Backbone)
+status: in_progress
+last_updated: "2026-04-29T20:30:00.000Z"
+last_activity: 2026-04-29 -- shipped Phase 10 (Vercel Blob migration); 4 SC passed, 3 deferred to Phase 11
 progress:
-  total_phases: 6
-  completed_phases: 2
-  total_plans: 12
-  completed_plans: 12
-  percent: 100
+  total_phases: 8
+  completed_phases: 6
+  total_plans: 20
+  completed_plans: 16
+  percent: 75
 ---
 
 # Project State: Newz
 
 ## Project Reference
 
-See: `.planning/PROJECT.md` (updated 2026-04-27)
+**Core Value:** Multi-angle event clustering must work — show the same event captured by different people, automatically grouped and compiled into one coherent montage.
 
-**Core value:** Multi-angle event clustering must work — show the same event captured by different people, automatically grouped and compiled into one coherent segment.
-**Current focus:** Phase 09 — postgres-migration-neon-asyncpg-alembic
+**Current Focus:** v1.1 Pilot MVP for funding — two parallel tracks:
+- **Backbone (Liam):** Phase 9 (Postgres) shipped; Phase 10 (Vercel Blob) up next.
+- **Feature (Roan):** Phase `01-comments-and-sharing` shipped 2026-04-28 (pending real-iPhone UAT — T4.1–T4.4).
 
 ## Current Position
 
-Phase: 10
-Plan: 10-01-PLAN.md (verified PASS by plan-checker)
-Status: Ready to execute — paused at Wave 0 human-action checkpoint (user setting up Vercel Blob)
-Last activity: 2026-04-29
+| Field | Value |
+|-------|-------|
+| Active Milestone | v1.1 Pilot MVP for funding (Public-Launch-Ready Backbone) |
+| Active Phases | Backbone: 11 next (Moderation Gate) · Feature: `01-comments-and-sharing` (shipped, pending iPhone UAT) |
+| Status | Backbone phases 8 + 9 + 10 shipped; feature track Phase 01 shipped |
+| Workflow | Two tracks: backbone uses sequenced phases (8-13); feature track uses per-feature GSD |
 
-Progress: [░░░░░░░░░░] 0%
-
-## Performance Metrics
-
-**Velocity:**
-
-- Total plans completed (v1.1): 0
-- Average duration: —
-- Total execution time: 0h
-
-**By Phase:**
-
-| Phase | Plans | Total | Avg/Plan |
-|-------|-------|-------|----------|
-| 8. Observability Scaffolding | 0/TBD | — | — |
-| 9. Postgres Migration | 0/TBD | — | — |
-| 10. Vercel Blob Migration | 0/TBD | — | — |
-| 11. Moderation Gate | 0/TBD | — | — |
-| 12. Reactive Reporting + Admin Queue | 0/TBD | — | — |
-| 13. Observability Deepening + OFFLINE_DEMO Audit | 0/TBD | — | — |
-| 08 | 3 | - | - |
-| 09 | 9 | - | - |
-
-*Updated after each plan completion.*
+```
+[███████░░░░] ~75% — backbone 3/6 (8, 9, 10 shipped); feature 0/N (01 ready)
+```
 
 ## Accumulated Context
 
-### Locked Decisions (v1.1 — see PROJECT.md Key Decisions for full list)
+### Locked Decisions (carried forward from v1.0)
+
+- React + Vite + TS + Tailwind 4 frontend; FastAPI + Uvicorn + Python 3.11 backend
+- Twelve Labs Marengo 3.0 (`marengo3.0` lowercase) for video embeddings — non-negotiable
+- Claude Agent SDK 0.1.68 for multi-agent compile (Sonnet for subagents, Haiku for Publisher)
+- NumPy in-memory cosine; local FS for clip storage (Phase 10 will move clip media to Vercel Blob)
+- Vercel for FE; Railway for BE
+- Clustering unit = parent (asset-scope) Marengo embedding; children are compile-time slicing metadata
+- compile_segment dispatches only when cluster has ≥2 distinct parent uploads
+- ffmpeg libx264 ultrafast normalize-and-concat for stitching
+- Gemini 2.5 Flash for vision-grounded captions
+
+### Locked Decisions (new in v1.1)
+
+- **Anonymous everywhere — including comments.** No accounts, no display names, ever. Anonymous session UUID may be used server-side for rate limiting only.
+- **Two parallel tracks under one milestone.** Backbone (sequenced phases 8-13, Liam) + feature track (per-feature phases, Roan). Both share anonymity, OFFLINE_DEMO survivability, reliability bias.
+- **Nomenclature:** videorecording (raw upload) / clip (Marengo embedding-space slice) / montage (final compiled output). Don't mix them up in code or docs.
+- **Comments attach per-montage**, not per-clip or per-videorecording.
+- **Roan = UI, Liam = backend.** Cross-domain features need explicit handoffs.
+
+### Locked Decisions (backbone, Phase 9 + planning context)
 
 - Neon Postgres over Supabase (avoid Supabase Auth pressure on anonymity-by-default)
 - asyncpg + Alembic; **no SQLAlchemy ORM** during migration
-- Vercel Blob (committed in PROJECT.md); **no direct browser PUT** — server-mediated only
+- Vercel Blob for clip media; **no direct browser PUT** — server-mediated only
 - Gemini 2.5 Flash-Lite for inline moderation classifier (same google-genai SDK already in stack)
 - Cloudflare CSAM Scanning Tool for hash check (statutory 18 U.S.C. § 2258A)
 - Logfire owns span tracing; Sentry `traces_sample_rate=0` to prevent double-instrumented spans
@@ -72,22 +73,32 @@ Progress: [░░░░░░░░░░] 0%
 
 ### Pending Todos
 
+**Feature track decisions:**
+- [ ] Decision: censoring approach (automated / human / hybrid) — blocks feature-track censoring
+- [ ] Decision: permissions gate flow (require all permissions vs. allow no-location with reduced clustering weight) — blocks location/permissions feature
+- [ ] Decision: custom engagement signal design — blocks non-mando custom signal
+
+**Backbone track pre-flight:**
 - [ ] Run Vercel Blob AsyncBlobClient (vercel 0.5.8) spike before Phase 10 planning — bleeding-edge SDK
 - [ ] Benchmark Gemini 2.5 Flash-Lite latency on actual v1.0 staged demo dataset before Phase 11 planning
 - [ ] Start Cloudflare CSAM Scanning Tool / NCMEC approval application (unknown lead time) before Phase 11 scheduling
-- [ ] Confirm asyncpg + Neon TLS / sslmode=require interaction before Phase 9 cutover
+- [ ] Retire SQLite (`db_sqlite.py`) once Neon cutover stabilizes. Mechanical: delete file, simplify `backend/db.py` to direct Postgres import, drop `aiosqlite` from requirements. Strategic: decide what `OFFLINE_DEMO=true` does without SQLite — in-memory stub vs. retire the flag entirely. Owner: Liam. Phase 01 (comments) added parallel SQLite + Postgres CRUD per current dispatcher contract; both go away together.
+
+**Carry-overs:**
+- [ ] Re-run calibration notebook against parent-clustered code path (from v1.0 deferred)
+- [ ] Resolve `montage-not-updating` debug session (from v1.0 deferred)
 
 ### Blockers/Concerns
 
-None.
+None blocking the active phase (`01-comments-and-sharing` ready to execute; Phase 10 backbone awaiting spike).
 
-### v1.0 Risks Resolved
+### Risks Being Tracked
 
-(Hackathon shipped — v1.0 risks resolved or no longer load-bearing.)
+- **Anonymous comments → spam/harassment with no identity lever.** Mitigation: rate limits via session UUID + content filter. Real risk; surface in pitch.
+- **Web Share API support quirks on desktop.** May need fallback for non-supporting browsers (we picked Web Share only — re-evaluate if support gaps bite).
+- **Phase numbering inconsistency.** Backbone uses 8-13; feature track restarted at 01. Reconcile during a planning cleanup pass.
 
-## Deferred Items
-
-Items acknowledged and carried forward from v1.0 milestone close on 2026-04-27:
+## Deferred Items (from v1.0 — still open)
 
 | Category | Item | Status | Deferred At |
 |----------|------|--------|-------------|
@@ -99,9 +110,18 @@ Items acknowledged and carried forward from v1.0 milestone close on 2026-04-27:
 
 ## Session Continuity
 
-Last session: 2026-04-29T01:48:24.003Z
-Stopped at: Phase 10 context gathered
-Resume file: .planning/phases/10-vercel-blob-migration/10-CONTEXT.md
+**Last session ended:** 2026-04-29 — Phase 10 (Vercel Blob migration) shipped. SC-1, SC-2, SC-3, SC-4 passed in live HUMAN-UAT against the Railway preview backend. Task 5.5 / SC-5 (cleanup_blocked_clip) and SC-6 (env-flip rollback) deferred to Phase 11 (cleanup hook lacks production caller until moderation gate; rollback is theoretical now that `clips.path` is nullable). Spec amendment captured in `10-HUMAN-UAT.md`: provisioned Vercel Blob store is private-only, so `runs/*` reads route through a backend proxy (`GET /runs/{run_id}.mp4`) instead of CDN-direct.
+
+**Next action (backbone track):** Plan Phase 11 (Moderation Gate — Gemini Flash-Lite + Cloudflare CSAM hash). Pre-flight TODOs from Pending Todos still apply (Gemini latency benchmark, Cloudflare CSAM tool / NCMEC application lead time).
+
+**Next action (feature track):** Run Wave 4 verification (T4.1–T4.4) on a real iPhone + desktop browser for Phase 01 (comments + shares). See `phases/01-comments-and-sharing/01-SUMMARY.md`.
+
+**Key files to load on resume:**
+
+- `.planning/phases/10-vercel-blob-migration/10-HUMAN-UAT.md` — Phase 10 UAT outcomes + spec amendments (private-store proxy)
+- `.planning/phases/01-comments-and-sharing/01-SUMMARY.md` — feature track Phase 01 status
+- `.planning/PROJECT.md` — v1.1 active scope (both tracks), anonymity constraint, nomenclature
+- `.planning/ROADMAP.md` — full v1.1 backlog
 
 ---
-*Last updated: 2026-04-28 — Phase 8 context gathered*
+*Last updated: 2026-04-28 — Phase 01 (comments + shares) shipped, pending Wave 4 iPhone UAT*
