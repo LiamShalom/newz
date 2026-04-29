@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import { fetchComments } from "../api";
@@ -10,24 +10,44 @@ import { CommentComposer } from "./CommentComposer";
 /**
  * Desktop modal variant of the comment UI.
  *
- * Two-column layout: video left (~60%), comment panel right (~40%). The video
- * is a plain controlled <video> — no autoplay-on-scroll multi-angle stack
- * (this is a deliberate user-opened dialog, not the feed). Same CommentList +
- * CommentComposer internals as the mobile sheet.
+ * Instagram-style: portrait video left at full popup height, comments column
+ * right at a fixed width. Video reuses the feed card's chrome — no controls,
+ * no duration bar, autoplay+muted, multi-angle bars on top, tap-left/right
+ * to nav angles, auto-advance on `ended`.
  */
 export function CommentPopup({
   segmentId,
-  videoUrl,
+  videoUrls,
   open,
   onClose,
 }: {
   segmentId: string;
-  videoUrl: string | null;
+  videoUrls: (string | null)[] | null;
   open: boolean;
   onClose: () => void;
 }) {
   const [comments, setComments] = useState<Comment[]>([]);
   const [loaded, setLoaded] = useState(false);
+
+  const urls = (videoUrls?.filter(Boolean) as string[] | undefined) ?? [];
+  const hasMultiple = urls.length > 1;
+  const [angleIdx, setAngleIdx] = useState(0);
+  const currentUrl = urls[angleIdx] ?? null;
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+
+  const handleEnded = useCallback(() => {
+    if (!hasMultiple) return;
+    setAngleIdx((i) => (i + 1) % urls.length);
+  }, [hasMultiple, urls.length]);
+
+  // Autoplay the active angle. Swallow rejected play() promises (some browsers
+  // block without a gesture even when muted).
+  useEffect(() => {
+    const el = videoRef.current;
+    if (!el || !currentUrl || !open) return;
+    const p = el.play();
+    if (p && typeof p.catch === "function") p.catch(() => {});
+  }, [currentUrl, open]);
 
   useEffect(() => {
     if (!open) return;
@@ -79,31 +99,71 @@ export function CommentPopup({
       role="dialog"
       aria-modal="true"
       aria-label="comments"
-      className="fixed inset-0 z-50 grid place-items-center p-6"
+      className="fixed inset-0 z-50 grid place-items-center p-3 sm:p-6"
     >
       <button
         type="button"
         aria-label="close comments"
         onClick={onClose}
-        className="absolute inset-0 bg-black/60"
+        className="absolute inset-0 bg-black/70"
       />
-      <div className="relative grid w-full max-w-[960px] grid-cols-[3fr_2fr] overflow-hidden rounded-2xl bg-surface shadow-2xl">
-        <div className="relative aspect-video bg-black">
-          {videoUrl ? (
+      <div
+        className="relative flex overflow-hidden rounded-2xl bg-surface shadow-2xl"
+        style={{
+          height: "min(92dvh, 900px)",
+          maxWidth: "min(96vw, 1200px)",
+        }}
+      >
+        <div className="relative h-full aspect-[4/5] flex-shrink-0 bg-black">
+          {currentUrl ? (
             <video
-              src={videoUrl}
-              controls
+              ref={videoRef}
+              key={currentUrl}
+              src={currentUrl}
+              muted
               playsInline
-              className="absolute inset-0 h-full w-full object-contain"
+              preload="auto"
+              onEnded={handleEnded}
+              className="absolute inset-0 h-full w-full object-cover"
             />
           ) : (
             <div className="absolute inset-0 grid place-items-center text-sm text-ink-secondary">
               video unavailable
             </div>
           )}
+
+          {hasMultiple && (
+            <>
+              <button
+                type="button"
+                onClick={() =>
+                  setAngleIdx((i) => (i - 1 + urls.length) % urls.length)
+                }
+                aria-label="Previous angle"
+                className="absolute top-0 bottom-0 left-0 w-1/2 z-[5]"
+              />
+              <button
+                type="button"
+                onClick={() => setAngleIdx((i) => (i + 1) % urls.length)}
+                aria-label="Next angle"
+                className="absolute top-0 bottom-0 right-0 w-1/2 z-[5]"
+              />
+
+              <div className="absolute top-3 left-3 right-3 z-10 flex gap-1.5 pointer-events-none">
+                {urls.map((_, i) => (
+                  <span
+                    key={i}
+                    className={`flex-1 h-[3px] rounded-full transition-colors ${
+                      i === angleIdx ? "bg-white/75" : "bg-white/30"
+                    }`}
+                  />
+                ))}
+              </div>
+            </>
+          )}
         </div>
 
-        <div className="flex flex-col" style={{ maxHeight: "min(80dvh, 720px)" }}>
+        <div className="flex w-[380px] min-w-[320px] flex-col">
           <header className="flex items-center justify-between border-b border-hairline px-4 py-3">
             <h2 className="text-[15px] font-semibold text-ink-primary">
               {loaded

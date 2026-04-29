@@ -216,7 +216,7 @@ export function SegmentCard({
 
       <Comments
         segmentId={segment.id}
-        videoUrl={currentUrl ?? null}
+        videoUrls={segment.video_urls ?? (currentUrl ? [currentUrl] : null)}
         open={commentsOpen}
         onClose={() => setCommentsOpen(false)}
       />

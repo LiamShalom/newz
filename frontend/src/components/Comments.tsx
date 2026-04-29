@@ -10,12 +10,14 @@ import { CommentPopup } from "./CommentPopup";
  */
 export function Comments({
   segmentId,
-  videoUrl,
+  videoUrls,
   open,
   onClose,
 }: {
   segmentId: string;
-  videoUrl: string | null;
+  /** All angle URLs for the montage. Popup re-uses the feed card's
+   *  multi-angle treatment (auto-advance + bars + tap-to-nav). */
+  videoUrls: (string | null)[] | null;
   open: boolean;
   onClose: () => void;
 }) {
@@ -24,7 +26,7 @@ export function Comments({
     return (
       <CommentPopup
         segmentId={segmentId}
-        videoUrl={videoUrl}
+        videoUrls={videoUrls}
         open={open}
         onClose={onClose}
       />
