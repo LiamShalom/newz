@@ -97,10 +97,10 @@ def authorized_blob_input(pathname: str) -> tuple[str, dict[str, str]]:
 
 
 def runs_public_url(run_id: str) -> str:
-    # Mirror of trim_window's upload pathname (`runs/{run_id}.mp4`, public access).
-    # Used by feed serializers to reconstruct the browser-playable URL for each
-    # angle in a multi-angle segment — without this, video_urls falls back to
-    # `/media/{run_id}.mp4` which 404s in blob mode (no /media mount).
-    token = config.BLOB_READ_WRITE_TOKEN
-    store_id = blob_client._store_id_from_token(token)
-    return f"https://{store_id}.public.blob.vercel-storage.com/runs/{run_id}.mp4"
+    # The provisioned Vercel Blob store is private-only — runs/* uploads land
+    # at a private domain that requires the bearer token. We can't expose the
+    # token to the browser, so we return a relative path that hits the backend
+    # proxy at `GET /runs/{run_id}.mp4`. Frontend's `_abs()` prefixes with
+    # API_BASE so requests go back to the FastAPI app, which streams the
+    # private blob through with the Authorization header attached.
+    return f"/runs/{run_id}.mp4"

@@ -118,15 +118,16 @@ async def stitch_clips(
     try:
         with open(local_out, "rb") as f:
             body = f.read()
-        from ..storage import blob_client
-        obj = await blob_client.upload(
+        from ..storage import blob_client, runs_public_url
+        # Private-only store — see trim_window note. Backend proxies reads.
+        await blob_client.upload(
             pathname=f"runs/{run_id}.mp4",
             body=body,
             content_type="video/mp4",
-            access="public",
+            access="private",
         )
-        log.info("stitch+upload ok run_id=%s pathname=runs/%s.mp4", run_id, run_id)
-        return obj["url"]
+        log.info("stitch+upload ok run_id=%s pathname=runs/%s.mp4 access=private", run_id, run_id)
+        return runs_public_url(run_id)
     except Exception as exc:
         log.warning("runs/ upload FAILED for run_id=%s — returning local path: %s", run_id, exc)
         return local_out
@@ -214,15 +215,18 @@ async def trim_window(ref: dict, output_path: str, *, run_id: str | None = None)
     try:
         with open(local_out, "rb") as f:
             body = f.read()
-        from ..storage import blob_client
-        obj = await blob_client.upload(
+        from ..storage import blob_client, runs_public_url
+        # The provisioned Vercel Blob store is private-only — `access="public"`
+        # gets rejected with 400. Upload as private; the backend proxies reads
+        # at GET /runs/{run_id}.mp4 with the bearer token attached.
+        await blob_client.upload(
             pathname=f"runs/{run_id}.mp4",
             body=body,
             content_type="video/mp4",
-            access="public",
+            access="private",
         )
-        log.info("trim+upload ok run_id=%s pathname=runs/%s.mp4", run_id, run_id)
-        return obj["url"]
+        log.info("trim+upload ok run_id=%s pathname=runs/%s.mp4 access=private", run_id, run_id)
+        return runs_public_url(run_id)
     except Exception as exc:
         log.warning("runs/ upload FAILED for run_id=%s — returning local path: %s", run_id, exc)
         return local_out

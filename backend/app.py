@@ -9,12 +9,14 @@ import json
 import logging
 import math
 import os
+import re
 import time as _time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, UploadFile, Form, Header, File, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from sse_starlette.sse import EventSourceResponse
 
@@ -167,6 +169,62 @@ if config.STORAGE_BACKEND == "local" or config.OFFLINE_DEMO:
 @app.get("/health")
 async def health():
     return {"ok": True}
+
+
+_RUN_ID_RE = re.compile(r"^[a-f0-9_]+$")
+
+
+@app.get("/runs/{run_id}.mp4", include_in_schema=False)
+async def runs_proxy(run_id: str, request: Request):
+    """Phase 10 proxy for runs/{run_id}.mp4 stored on a private-only Blob store.
+
+    The provisioned Vercel Blob store rejects `access="public"` uploads, so
+    runs/* land at the private domain and require the bearer token. We can't
+    leak that token to the browser, so the backend streams the bytes through
+    with the Authorization header attached. Forwards the client's Range header
+    so iOS Safari's media element can seek without buffering the whole file.
+    """
+    if config.STORAGE_BACKEND != "blob" or config.OFFLINE_DEMO:
+        raise HTTPException(status_code=404, detail="not found")
+    if not _RUN_ID_RE.match(run_id) or len(run_id) > 128:
+        raise HTTPException(status_code=400, detail="invalid run_id")
+
+    from .storage import blob_client
+    token = config.BLOB_READ_WRITE_TOKEN
+    store_id = blob_client._store_id_from_token(token)
+    upstream = f"https://{store_id}.private.blob.vercel-storage.com/runs/{run_id}.mp4"
+    headers = {"Authorization": f"Bearer {token}"}
+    rng = request.headers.get("range")
+    if rng:
+        headers["Range"] = rng
+
+    client = blob_client.get_client()
+    req = client.build_request("GET", upstream, headers=headers)
+    upstream_resp = await client.send(req, stream=True)
+
+    if upstream_resp.status_code in (404, 410):
+        await upstream_resp.aclose()
+        raise HTTPException(status_code=404, detail="not found")
+    if upstream_resp.status_code >= 400:
+        body = (await upstream_resp.aread())[:500]
+        await upstream_resp.aclose()
+        log.warning("runs proxy upstream %d run_id=%s body=%s", upstream_resp.status_code, run_id, body)
+        raise HTTPException(status_code=502, detail="upstream error")
+
+    passthrough = {"content-type", "content-length", "content-range", "accept-ranges", "etag", "last-modified"}
+    out_headers = {k: v for k, v in upstream_resp.headers.items() if k.lower() in passthrough}
+    out_headers.setdefault("content-type", "video/mp4")
+    out_headers.setdefault("accept-ranges", "bytes")
+    out_headers["cache-control"] = "private, max-age=60"
+
+    async def _body():
+        try:
+            async for chunk in upstream_resp.aiter_bytes(chunk_size=64 * 1024):
+                yield chunk
+        finally:
+            await upstream_resp.aclose()
+
+    return StreamingResponse(_body(), status_code=upstream_resp.status_code, headers=out_headers)
 
 
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024  # 100 MiB
