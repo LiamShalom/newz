@@ -498,7 +498,7 @@ async def fetch_cluster_clips_with_children(cluster_id: str) -> list[dict]:
         conn.row_factory = aiosqlite.Row
         # Step A: parent rows in this cluster
         parent_cur = await conn.execute(
-            """SELECT id, path, lat, lng, ts
+            """SELECT id, path, blob_url, lat, lng, ts
                FROM clips
                WHERE cluster_id = ? AND parent_id IS NULL
                ORDER BY ts ASC""",
@@ -507,6 +507,7 @@ async def fetch_cluster_clips_with_children(cluster_id: str) -> list[dict]:
         parent_rows = [dict(r) for r in await parent_cur.fetchall()]
         parent_ids = [p["id"] for p in parent_rows]
         parent_path_map: dict[str, str] = {p["id"]: p["path"] for p in parent_rows}
+        parent_blob_url_map: dict[str, str | None] = {p["id"]: p.get("blob_url") for p in parent_rows}
 
         if not parent_ids:
             return []
@@ -514,7 +515,7 @@ async def fetch_cluster_clips_with_children(cluster_id: str) -> list[dict]:
         # Step B: parents themselves + any child of those parents.
         placeholders = ",".join("?" * len(parent_ids))
         rows_cur = await conn.execute(
-            f"""SELECT id, path, lat, lng, ts, parent_id,
+            f"""SELECT id, path, blob_url, lat, lng, ts, parent_id,
                        start_offset_sec, end_offset_sec
                 FROM clips
                 WHERE id IN ({placeholders})
@@ -531,10 +532,16 @@ async def fetch_cluster_clips_with_children(cluster_id: str) -> list[dict]:
             if r.get("parent_id")
             else r["path"]
         )
+        parent_blob_url = (
+            parent_blob_url_map.get(r["parent_id"])
+            if r.get("parent_id")
+            else r.get("blob_url")
+        )
         out.append({
             "id": r["id"],
             "path": r["path"] or parent_path,
             "parent_path": parent_path,
+            "parent_blob_url": parent_blob_url,
             "lat": r["lat"],
             "lng": r["lng"],
             "ts": r["ts"],

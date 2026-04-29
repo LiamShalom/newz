@@ -20,6 +20,7 @@ MCP tools (subagents only): get_cluster_clips, get_clip_metadata, save_segment.
 import asyncio
 import json
 import logging
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,6 +37,62 @@ from .compile_tools import newz_tools_server
 from .stitch import stitch_clips, trim_window
 from .caption_pipeline import generate_caption
 from .runs import compute_runs_for_cluster
+
+
+async def _download_refs_to_tempdir(refs: list[dict], tmpdir: str) -> list[dict]:
+    """Phase 10 (BLOB-04 / D-09): pre-download HTTP-URL refs into a tempdir.
+
+    Returns refs with `path` rewritten to local file paths and `headers` cleared.
+    Local-mode refs (path doesn't start with http) pass through unchanged.
+
+    Uses httpx.stream + aiter_bytes to avoid loading entire source clips into
+    memory (some are up to MAX_UPLOAD_BYTES = 100 MiB).
+    """
+    from ..storage import blob_client
+
+    async def _download_one(ref: dict, idx: int) -> dict:
+        src_url = ref["path"]
+        if not src_url.startswith("http"):
+            return ref
+        local_path = f"{tmpdir}/src-{idx}.mp4"
+        client = blob_client.get_client()
+        headers = ref.get("headers") or {}
+        async with client.stream("GET", src_url, headers=headers) as resp:
+            resp.raise_for_status()
+            with open(local_path, "wb") as f:
+                async for chunk in resp.aiter_bytes(chunk_size=64 * 1024):
+                    f.write(chunk)
+        return {**ref, "path": local_path, "headers": None}
+
+    return await asyncio.gather(*[_download_one(r, i) for i, r in enumerate(refs)])
+
+
+async def stitch_multi_source(refs: list[dict], run_id: str) -> str | None:
+    """Phase 10 (BLOB-04): tempdir-wrapped multi-source stitch.
+
+    Used when the caller needs the libx264 normalize-and-concat path
+    (multiple distinct sources). Single-parent trims go through trim_window
+    directly without this helper.
+    """
+    import tempfile
+    blob_mode = config.STORAGE_BACKEND == "blob" and not config.OFFLINE_DEMO
+    with tempfile.TemporaryDirectory() as tmpdir:
+        local_refs = await _download_refs_to_tempdir(refs, tmpdir)
+        if blob_mode:
+            tmp_out_handle = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+            tmp_output_path = tmp_out_handle.name
+            tmp_out_handle.close()
+        else:
+            tmp_output_path = str(config.DATA_DIR / "clips" / f"{run_id}.mp4")
+        try:
+            result = await stitch_clips(local_refs, tmp_output_path, run_id=run_id)
+        finally:
+            if blob_mode:
+                try:
+                    os.unlink(tmp_output_path)
+                except FileNotFoundError:
+                    pass
+        return result or None
 
 log = logging.getLogger(__name__)
 
@@ -199,7 +256,11 @@ async def _resolve_run_ids_to_stitch_refs(
     Childless-parent runs (member_child_ids == []) emit end_offset_sec=None
     so ffmpeg ingests the full parent file. Otherwise we use the run's
     [start, end] window. Unknown run_ids are dropped with a warning.
+
+    Phase 10 (D-08, D-11, amendment 1): storage.stitch_input_for returns the
+    (path_or_url, headers) tuple — pure function, no network call.
     """
+    from .. import storage  # local import — avoid circular at module load
     runs = await compute_runs_for_cluster(cluster_id)
     by_id = {r.id: r for r in runs}
     refs: list[dict] = []
@@ -209,10 +270,16 @@ async def _resolve_run_ids_to_stitch_refs(
             log.warning("resolve: unknown run_id=%s cluster_id=%s", rid, cluster_id)
             continue
         end = None if not r.member_child_ids else r.end_offset_sec
+        path_or_url, headers = storage.stitch_input_for({
+            "parent_path": r.parent_path,
+            "parent_blob_url": getattr(r, "parent_blob_url", None),
+        })
         refs.append({
-            "path": r.parent_path,
+            "path": path_or_url,
             "start_offset_sec": r.start_offset_sec,
             "end_offset_sec": end,
+            "headers": headers,
+            "run_id": rid,
         })
     return refs
 
@@ -310,16 +377,19 @@ async def _enforce_parent_diversity(cluster_id: str, min_parents: int = 2) -> No
 
 
 async def _stitch_segment_runs(cluster_id: str) -> list[str]:
-    """Stitch EACH chosen run into its own .mp4. Returns ordered list of /media URLs.
+    """Stitch EACH chosen run into its own .mp4. Returns ordered list of playable URLs.
 
     Per-run stitching (not cluster-wide concatenation) so the frontend can
     navigate between angles while still applying ffmpeg normalization within
     a run (start_offset → end_offset window from one parent file).
 
-    Output: data/clips/{run_id}.mp4 per run, in the same order as run_ids.
-    Runs OUTSIDE the LLM wall-clock budget — must not be cancelled by the
-    orchestrator-chain timeout.
+    Phase 10:
+      - Output goes to tempfile.NamedTemporaryFile, atomic-rename inside
+        _sync_trim, upload to runs/{run_id}.mp4 (public) inside trim_window.
+      - Returns absolute Blob URLs in blob mode, /media/{run_id}.mp4 in local.
     """
+    import tempfile
+    from .. import storage  # local import — avoid circular
     seg = await db.get_segment_for_cluster(cluster_id)
     if seg is None:
         return []
@@ -335,22 +405,48 @@ async def _stitch_segment_runs(cluster_id: str) -> list[str]:
     if not refs:
         return []
 
+    blob_mode = config.STORAGE_BACKEND == "blob" and not config.OFFLINE_DEMO
+
     # Trim each run's window in PARALLEL via -c copy stream-copy (no re-encode).
     # Runs are always contiguous within ONE parent file, so this is a fast
-    # ffmpeg trim, not a real concat. asyncio.gather lets ffmpeg processes
-    # share CPU instead of awaiting one-at-a-time.
+    # ffmpeg trim. In blob mode, ffmpeg uses HTTP Range requests via -headers
+    # bearer auth (BLOB-03); the resulting .mp4 lands in a tempfile, then is
+    # uploaded to runs/{run_id}.mp4 inside trim_window (D-10).
     async def _trim_one(run_id: str, ref: dict) -> tuple[str, str | None]:
-        output_path = str(config.DATA_DIR / "clips" / f"{run_id}.mp4")
+        if blob_mode:
+            tmp_handle = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+            output_path = tmp_handle.name
+            tmp_handle.close()
+        else:
+            output_path = str(config.DATA_DIR / "clips" / f"{run_id}.mp4")
         t0 = time.monotonic()
-        result = await trim_window(ref, output_path)
+        try:
+            result = await trim_window(ref, output_path, run_id=run_id)
+        finally:
+            if blob_mode:
+                # Best-effort tempfile cleanup; trim_window already uploaded.
+                try:
+                    os.unlink(output_path)
+                except FileNotFoundError:
+                    pass
         elapsed_ms = int((time.monotonic() - t0) * 1000)
-        if result and Path(result).exists() and result == output_path:
-            log.info("trim ok run_id=%s elapsed_ms=%d", run_id, elapsed_ms)
+        if not result:
+            log.warning(
+                "trim failed run_id=%s cluster_id=%s elapsed_ms=%d",
+                run_id, cluster_id, elapsed_ms,
+            )
+            return run_id, None
+        log.info("trim ok run_id=%s elapsed_ms=%d", run_id, elapsed_ms)
+        if blob_mode:
+            # trim_window returns absolute Blob URL on upload success, or the
+            # local tempfile path on upload failure. We can no longer serve
+            # the tempfile (it's already been deleted above) — let the caller
+            # see whatever URL trim_window returned; if it's a path, frontend
+            # 404s the segment until next recompile (acceptable failure-fallback).
+            return run_id, result
+        # local mode: result is the local FS path. Surface as /media URL.
+        if Path(result).exists() and result == output_path:
             return run_id, f"/media/{run_id}.mp4"
-        log.warning(
-            "trim failed run_id=%s cluster_id=%s elapsed_ms=%d",
-            run_id, cluster_id, elapsed_ms,
-        )
         return run_id, None
 
     results = await asyncio.gather(

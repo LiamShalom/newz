@@ -22,6 +22,7 @@ class Run:
     end_offset_sec: float
     member_child_ids: list[str]
     vec: np.ndarray  # float32, unit-length, mean of member child vecs
+    parent_blob_url: str | None = None
 
 
 def find_runs(
@@ -61,6 +62,7 @@ def find_runs(
                 run_groups.append([cur])
 
         parent_path = group[0].get("parent_path", "")
+        parent_blob_url = group[0].get("parent_blob_url")
         for idx, members in enumerate(run_groups):
             stack = np.stack([m["vec"].astype(np.float32) for m in members], axis=0)
             mean = stack.mean(axis=0)
@@ -69,6 +71,7 @@ def find_runs(
                 id=f"{parent_id}_run_{idx}",
                 parent_id=parent_id,
                 parent_path=parent_path,
+                parent_blob_url=parent_blob_url,
                 start_offset_sec=float(members[0]["start_offset_sec"]),
                 end_offset_sec=float(members[-1]["end_offset_sec"]),
                 member_child_ids=[m["id"] for m in members],
@@ -92,12 +95,14 @@ async def compute_runs_for_cluster(cluster_id: str) -> list[Run]:
         return []
 
     parent_paths: dict[str, str] = {}
+    parent_blob_urls: dict[str, str | None] = {}
     children: list[dict] = []
     parents_with_children: set[str] = set()
 
     for r in rows:
         if r.get("parent_id") is None:
             parent_paths[r["id"]] = r.get("path") or ""
+            parent_blob_urls[r["id"]] = r.get("parent_blob_url") or r.get("blob_url")
         else:
             vec = await db.get_embedding(r["id"])
             if vec is None:
@@ -107,6 +112,7 @@ async def compute_runs_for_cluster(cluster_id: str) -> list[Run]:
                 "id": r["id"],
                 "parent_id": r["parent_id"],
                 "parent_path": r.get("parent_path") or parent_paths.get(r["parent_id"], ""),
+                "parent_blob_url": r.get("parent_blob_url") or parent_blob_urls.get(r["parent_id"]),
                 "start_offset_sec": r.get("start_offset_sec") or 0.0,
                 "end_offset_sec": r.get("end_offset_sec") or 0.0,
                 "vec": vec,
@@ -130,6 +136,7 @@ async def compute_runs_for_cluster(cluster_id: str) -> list[Run]:
             id=f"{parent_id}_run_0",
             parent_id=parent_id,
             parent_path=parent_path,
+            parent_blob_url=parent_blob_urls.get(parent_id),
             start_offset_sec=0.0,
             end_offset_sec=0.0,
             member_child_ids=[],
