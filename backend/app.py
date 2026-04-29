@@ -104,6 +104,13 @@ async def lifespan(app: FastAPI):
     from .pipeline import cluster as cluster_mod
     await cluster_mod.rebuild_cache()
 
+    # 3.5. Phase 10 (D-02, D-19): httpx Blob client init — only when blob mode active.
+    # OFFLINE_DEMO=true short-circuits to local at the dispatcher (D-18), so this
+    # branch is unreachable under firewalled-CI; enforces D-19 fail-loud on missing token.
+    if config.STORAGE_BACKEND == "blob" and not config.OFFLINE_DEMO:
+        from .storage import blob_client
+        await blob_client.init_client()
+
     # 4. Neon keepalive (postgres branch only). Started AFTER rebuild so the rebuild
     #    gets a clean pool slot first (Pitfall 7).
     if hasattr(db, "get_pool"):
@@ -116,13 +123,16 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
-        # Shutdown: cancel keepalive, then close the pool.
+        # Shutdown: cancel keepalive, close blob client, then close the pool.
         if keepalive_task is not None:
             keepalive_task.cancel()
             try:
                 await keepalive_task
             except asyncio.CancelledError:
                 pass
+        if config.STORAGE_BACKEND == "blob" and not config.OFFLINE_DEMO:
+            from .storage import blob_client
+            await blob_client.close_client()
         if hasattr(db, "close_pool"):
             await db.close_pool()
 
@@ -148,7 +158,10 @@ app.add_middleware(XFFStrip)
 
 config.DATA_DIR.mkdir(parents=True, exist_ok=True)
 (config.DATA_DIR / "clips").mkdir(parents=True, exist_ok=True)
-app.mount("/media", StaticFiles(directory=str(config.DATA_DIR / "clips")), name="media")
+# Phase 10 (D-16): /media is only mounted in local mode or under OFFLINE_DEMO.
+# In blob mode the frontend renders absolute Vercel Blob URLs (BLOB-05).
+if config.STORAGE_BACKEND == "local" or config.OFFLINE_DEMO:
+    app.mount("/media", StaticFiles(directory=str(config.DATA_DIR / "clips")), name="media")
 
 
 @app.get("/health")
