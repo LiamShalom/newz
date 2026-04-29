@@ -20,6 +20,8 @@ MCP tools (subagents only): get_cluster_clips, get_clip_metadata, save_segment.
 import asyncio
 import json
 import logging
+import os
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,7 +29,6 @@ from pathlib import Path
 from claude_agent_sdk import (
     query,
     ClaudeAgentOptions,
-    AgentDefinition,
     ResultMessage,
 )
 
@@ -35,40 +36,73 @@ from .. import config, db, events
 from .compile_tools import newz_tools_server
 from .stitch import stitch_clips, trim_window
 from .caption_pipeline import generate_caption
+from .geocode import reverse_geocode
 from .runs import compute_runs_for_cluster
+
+
+async def _download_refs_to_tempdir(refs: list[dict], tmpdir: str) -> list[dict]:
+    """Phase 10 (BLOB-04 / D-09): pre-download HTTP-URL refs into a tempdir.
+
+    Returns refs with `path` rewritten to local file paths and `headers` cleared.
+    Local-mode refs (path doesn't start with http) pass through unchanged.
+
+    Uses httpx.stream + aiter_bytes to avoid loading entire source clips into
+    memory (some are up to MAX_UPLOAD_BYTES = 100 MiB).
+    """
+    from ..storage import blob_client
+
+    async def _download_one(ref: dict, idx: int) -> dict:
+        src_url = ref["path"]
+        if not src_url.startswith("http"):
+            return ref
+        local_path = f"{tmpdir}/src-{idx}.mp4"
+        client = blob_client.get_client()
+        headers = ref.get("headers") or {}
+        async with client.stream("GET", src_url, headers=headers) as resp:
+            resp.raise_for_status()
+            with open(local_path, "wb") as f:
+                async for chunk in resp.aiter_bytes(chunk_size=64 * 1024):
+                    f.write(chunk)
+        return {**ref, "path": local_path, "headers": None}
+
+    return await asyncio.gather(*[_download_one(r, i) for i, r in enumerate(refs)])
+
+
+async def stitch_multi_source(refs: list[dict], run_id: str) -> str | None:
+    """Phase 10 (BLOB-04): tempdir-wrapped multi-source stitch.
+
+    Used when the caller needs the libx264 normalize-and-concat path
+    (multiple distinct sources). Single-parent trims go through trim_window
+    directly without this helper.
+    """
+    import tempfile
+    blob_mode = config.STORAGE_BACKEND == "blob" and not config.OFFLINE_DEMO
+    with tempfile.TemporaryDirectory() as tmpdir:
+        local_refs = await _download_refs_to_tempdir(refs, tmpdir)
+        if blob_mode:
+            tmp_out_handle = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+            tmp_output_path = tmp_out_handle.name
+            tmp_out_handle.close()
+        else:
+            tmp_output_path = str(config.DATA_DIR / "clips" / f"{run_id}.mp4")
+        try:
+            result = await stitch_clips(local_refs, tmp_output_path, run_id=run_id)
+        finally:
+            if blob_mode:
+                try:
+                    os.unlink(tmp_output_path)
+                except FileNotFoundError:
+                    pass
+        return result or None
 
 log = logging.getLogger(__name__)
 
 
-ORCHESTRATOR_PROMPT_TEMPLATE = """Compile cluster {cluster_id} into a published news segment.
+ANGLE_SELECTOR_PROMPT_TEMPLATE = """You are picking the best 2-4 RUNS from cluster {cluster_id}.
 
-The title and caption will be filled in later by another worker. Pass empty
-strings ("") for both when calling save_segment. The orchestrator will
-overwrite them.
-
-Steps — use the named subagents in this order:
-1. Run angle-selector to pick the best 2-4 RUNS and order them.
-2. Run publisher with angle-selector's run_ids. Pass title="" and caption="".
-
-Pass angle-selector's JSON output verbatim into publisher's prompt.
-The cluster_id is: {cluster_id}
-"""
-
-_MCP = ["newz_tools"]
-
-AGENTS = {
-    "angle-selector": AgentDefinition(
-        description=(
-            "Picks 2-4 best RUNS from a cluster and orders them chronologically. "
-            "A run = one continuous camera angle within a single parent clip. "
-            "Run FIRST."
-        ),
-        prompt="""You are the Angle Selector for the Newz news compile pipeline.
-
-You select the best 2-4 RUNS from a cluster. A run = one continuous camera
-angle (a contiguous span of similar 3-second slices from the same source
-clip). Different runs from different parent clips give you different
-viewpoints of the same event.
+A run = one continuous camera angle (a contiguous span of similar 3-second
+slices from the same source clip). Different runs from different parent clips
+give different viewpoints of the same event.
 
 HARD CONSTRAINT — PARENT DIVERSITY:
   When the cluster contains 2 or more distinct parent clips, your selection
@@ -90,77 +124,125 @@ Selection criteria — within the parent-diversity constraint, rank by:
 
 Order the selected runs chronologically (earliest parent ts first).
 
-Use mcp__newz_tools__get_cluster_runs to list candidates, then
-mcp__newz_tools__get_clip_metadata for any parent-clip details.
-Return ONLY a single JSON object: {"run_ids": ["...", "..."], "rationale": "..."}.
-Do not include any text outside the JSON.""",
-        tools=["mcp__newz_tools__get_cluster_runs", "mcp__newz_tools__get_clip_metadata"],
-        mcpServers=_MCP,
-        model="sonnet",
-    ),
-    "publisher": AgentDefinition(
-        description=(
-            "Persists the finished segment via save_segment. Run AFTER angle-selector. "
-            "Only calls the save_segment tool — does not rewrite captions."
-        ),
-        prompt="""You are the Publisher for the Newz news compile pipeline.
+Make ONE call to mcp__newz_tools__get_cluster_runs — the result already
+includes lat, lng, ts, parent_id, and duration_sec for every run. Do NOT
+call get_clip_metadata; the cluster_runs payload has everything you need.
 
-Take the Angle Selector's run_ids and persist the segment. Title and caption
-are filled in later by another worker — pass empty strings for both here.
+After that single tool call, return ONLY a JSON object as your final
+message. Format (a one-line markdown fence is fine):
+{{"run_ids": ["...", "..."], "rationale": "..."}}
+Do not call any more tools after returning the JSON.
+"""
 
-Call mcp__newz_tools__save_segment EXACTLY ONCE with:
-  - cluster_id: provided by the orchestrator
-  - ordered_run_ids: from angle-selector's run_ids list
-  - title: ""
-  - caption: ""
-  - location: "Pasadena, CA"
-  - source_count: number of distinct parent_ids in ordered_run_ids
 
-Return ONLY the segment id string from the tool result.""",
-        tools=["mcp__newz_tools__save_segment"],
-        mcpServers=_MCP,
-        model="haiku",
-    ),
-}
+def _extract_run_ids(text: str) -> list[str]:
+    """Pull the {"run_ids":[...], ...} object out of a model response.
+
+    Tolerant of markdown fences and surrounding chatter — the SDK has been
+    inconsistent about whether the final assistant turn is pure JSON or
+    wrapped in ```json ... ```. Returns [] if no parseable JSON is found.
+    """
+    if not text:
+        return []
+    candidates: list[str] = []
+    # Pull anything inside ```...``` first (the longest fenced block wins).
+    fence_re = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
+    candidates.extend(fence_re.findall(text))
+    # Fall back to the last balanced top-level object in the raw text.
+    last_brace = text.rfind("}")
+    if last_brace != -1:
+        depth = 0
+        start = -1
+        for i in range(last_brace, -1, -1):
+            ch = text[i]
+            if ch == "}":
+                depth += 1
+            elif ch == "{":
+                depth -= 1
+                if depth == 0:
+                    start = i
+                    break
+        if start != -1:
+            candidates.append(text[start:last_brace + 1])
+    for raw in candidates:
+        try:
+            obj = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        run_ids = obj.get("run_ids")
+        if isinstance(run_ids, list) and all(isinstance(r, str) for r in run_ids):
+            return run_ids
+    return []
 
 
 async def _run_orchestrator_chain(cluster_id: str) -> str:
-    """Run angle-selector → editor → publisher. Caption/title are filled later
-    by Branch B's overwrite — publisher saves placeholder empty strings.
+    """Single-pass run selection: ask the model to return JSON, write the
+    segment row from Python.
+
+    Replaces the old orchestrator → angle-selector → publisher subagent chain.
+    The publisher subagent finished its turn without invoking save_segment
+    on roughly one of every two runs (both Haiku and Sonnet), leaving compile
+    to fall through to _save_fallback_segment with no playable video. Cutting
+    out the publisher hop entirely makes the persistence step deterministic.
     """
     options = ClaudeAgentOptions(
         allowed_tools=[
-            "Agent",
             "mcp__newz_tools__get_cluster_runs",
             "mcp__newz_tools__get_clip_metadata",
-            "mcp__newz_tools__save_segment",
         ],
-        agents=AGENTS,
         mcp_servers={"newz_tools": newz_tools_server},
+        # 10 turns wasn't enough — Sonnet was burning turns on multiple
+        # get_clip_metadata lookups before producing JSON. With the prompt
+        # tightened to a single tool call, 20 is generous headroom.
         max_turns=20,
         model="sonnet",
     )
-    prompt = ORCHESTRATOR_PROMPT_TEMPLATE.format(cluster_id=cluster_id)
+    prompt = ANGLE_SELECTOR_PROMPT_TEMPLATE.format(cluster_id=cluster_id)
+    final_text: str | None = None
     async for msg in query(prompt=prompt, options=options):
         if isinstance(msg, ResultMessage):
             if msg.is_error:
                 log.error(
-                    "compile orchestrator error cluster_id=%s turns=%s errors=%s result=%s",
+                    "compile angle-selector error cluster_id=%s turns=%s errors=%s result=%s",
                     cluster_id, msg.num_turns, msg.errors, msg.result,
                 )
-                raise RuntimeError(f"orchestrator returned is_error=True: {msg.errors}")
+                raise RuntimeError(f"angle-selector returned is_error=True: {msg.errors}")
             log.info(
-                "compile orchestrator done cluster_id=%s turns=%s duration_ms=%s",
+                "compile angle-selector done cluster_id=%s turns=%s duration_ms=%s",
                 cluster_id, msg.num_turns, msg.duration_ms,
             )
+            final_text = msg.result
             break
-    seg = await db.get_segment_for_cluster(cluster_id)
-    if seg is None:
-        raise RuntimeError(
-            f"compile finished but no segment row for cluster {cluster_id} — "
-            "Publisher may have failed to call save_segment"
+
+    run_ids = _extract_run_ids(final_text or "")
+    if not run_ids:
+        log.error(
+            "angle-selector returned no parseable run_ids cluster_id=%s text=%r",
+            cluster_id, (final_text or "")[:500],
         )
-    return seg["id"]
+        raise RuntimeError(
+            f"angle-selector returned no run_ids for cluster {cluster_id}"
+        )
+
+    distinct_parents = len({rid.rsplit("_run_", 1)[0] for rid in run_ids})
+    cluster = await db.get_cluster(cluster_id)
+    initial_location = await reverse_geocode(
+        (cluster or {}).get("centroid_lat"),
+        (cluster or {}).get("centroid_lng"),
+    )
+    seg_id = await db.insert_segment(
+        cluster_id=cluster_id,
+        ordered_clip_ids=run_ids,
+        title="",
+        caption="",
+        location=initial_location,
+        source_count=distinct_parents or len(run_ids),
+    )
+    log.info(
+        "save_segment cluster_id=%s seg_id=%s runs=%d distinct_parents=%d",
+        cluster_id, seg_id, len(run_ids), distinct_parents,
+    )
+    return seg_id
 
 
 async def _get_children_with_vecs(cluster_id: str) -> list[dict]:
@@ -199,7 +281,11 @@ async def _resolve_run_ids_to_stitch_refs(
     Childless-parent runs (member_child_ids == []) emit end_offset_sec=None
     so ffmpeg ingests the full parent file. Otherwise we use the run's
     [start, end] window. Unknown run_ids are dropped with a warning.
+
+    Phase 10 (D-08, D-11, amendment 1): storage.stitch_input_for returns the
+    (path_or_url, headers) tuple — pure function, no network call.
     """
+    from .. import storage  # local import — avoid circular at module load
     runs = await compute_runs_for_cluster(cluster_id)
     by_id = {r.id: r for r in runs}
     refs: list[dict] = []
@@ -209,34 +295,82 @@ async def _resolve_run_ids_to_stitch_refs(
             log.warning("resolve: unknown run_id=%s cluster_id=%s", rid, cluster_id)
             continue
         end = None if not r.member_child_ids else r.end_offset_sec
+        path_or_url, headers = storage.stitch_input_for({
+            "parent_path": r.parent_path,
+            "parent_blob_url": getattr(r, "parent_blob_url", None),
+        })
         refs.append({
-            "path": r.parent_path,
+            "path": path_or_url,
             "start_offset_sec": r.start_offset_sec,
             "end_offset_sec": end,
+            "headers": headers,
+            "run_id": rid,
         })
     return refs
 
 
+async def _deterministic_run_pick(cluster_id: str, max_runs: int = 4) -> list[str]:
+    """First run from each parent in chronological order. No LLM.
+
+    Used as the fallback when angle-selector raises (timeout, max_turns, bad
+    JSON). Picks proper run IDs so the stitch path can produce playable
+    runs/{run_id}.mp4 URLs — without this, fallback segments stored parent
+    IDs and the frontend showed "Compiling…" forever in blob mode.
+    """
+    runs = await compute_runs_for_cluster(cluster_id)
+    if not runs:
+        return []
+    by_parent: dict[str, list] = {}
+    for r in runs:
+        by_parent.setdefault(r.parent_id, []).append(r)
+    # Sort parents by earliest run start_offset_sec to keep timeline order.
+    parent_order = sorted(
+        by_parent.keys(),
+        key=lambda pid: min(r.start_offset_sec for r in by_parent[pid]),
+    )
+    picked: list[str] = []
+    for pid in parent_order:
+        first = sorted(by_parent[pid], key=lambda r: r.start_offset_sec)[0]
+        picked.append(first.id)
+        if len(picked) >= max_runs:
+            break
+    return picked
+
+
 async def _save_fallback_segment(cluster_id: str, video_url: str | None = None) -> str:
-    """CMP-06: idempotent fallback. Chronological order, generic AP-wire caption."""
+    """CMP-06: idempotent fallback. Picks first run per parent so the stitch
+    path can still produce a playable video, then writes a generic caption.
+    """
     existing = await db.get_segment_for_cluster(cluster_id)
     if existing:
         return existing["id"]
     clips = await db.fetch_cluster_clips(cluster_id)
-    clip_ids = [c["id"] for c in clips]
+    run_ids = await _deterministic_run_pick(cluster_id)
+    # Childless-parent clusters yield no runs; fall back to parent IDs so the
+    # row at least exists. In blob mode this still renders "Compiling…", but
+    # the row anchors the cluster for any future recompile.
+    ordered_ids = run_ids if run_ids else [c["id"] for c in clips]
+    distinct_parents = (
+        len({rid.rsplit("_run_", 1)[0] for rid in run_ids})
+        if run_ids else len(clips)
+    )
     if clips:
         when = datetime.fromtimestamp(clips[0]["ts"], tz=timezone.utc).strftime("%b %-d, %Y")
     else:
         when = datetime.now(tz=timezone.utc).strftime("%b %-d, %Y")
-    location_str = "Pasadena, CA"  # default; cluster centroid reverse-geocode is a Phase 5 follow-up
-    caption = f"{when} — {location_str}. Submitted footage from {len(clip_ids)} contributor(s)."
+    cluster = await db.get_cluster(cluster_id)
+    location_str = await reverse_geocode(
+        (cluster or {}).get("centroid_lat"),
+        (cluster or {}).get("centroid_lng"),
+    )
+    caption = f"{when} — {location_str}. Submitted footage from {distinct_parents} contributor(s)."
     return await db.insert_segment(
         cluster_id=cluster_id,
-        ordered_clip_ids=clip_ids,
+        ordered_clip_ids=ordered_ids,
         title="",
         caption=caption,
         location=location_str,
-        source_count=len(clip_ids),
+        source_count=distinct_parents or len(clips),
         video_url=video_url,
     )
 
@@ -310,16 +444,19 @@ async def _enforce_parent_diversity(cluster_id: str, min_parents: int = 2) -> No
 
 
 async def _stitch_segment_runs(cluster_id: str) -> list[str]:
-    """Stitch EACH chosen run into its own .mp4. Returns ordered list of /media URLs.
+    """Stitch EACH chosen run into its own .mp4. Returns ordered list of playable URLs.
 
     Per-run stitching (not cluster-wide concatenation) so the frontend can
     navigate between angles while still applying ffmpeg normalization within
     a run (start_offset → end_offset window from one parent file).
 
-    Output: data/clips/{run_id}.mp4 per run, in the same order as run_ids.
-    Runs OUTSIDE the LLM wall-clock budget — must not be cancelled by the
-    orchestrator-chain timeout.
+    Phase 10:
+      - Output goes to tempfile.NamedTemporaryFile, atomic-rename inside
+        _sync_trim, upload to runs/{run_id}.mp4 (public) inside trim_window.
+      - Returns absolute Blob URLs in blob mode, /media/{run_id}.mp4 in local.
     """
+    import tempfile
+    from .. import storage  # local import — avoid circular
     seg = await db.get_segment_for_cluster(cluster_id)
     if seg is None:
         return []
@@ -335,22 +472,60 @@ async def _stitch_segment_runs(cluster_id: str) -> list[str]:
     if not refs:
         return []
 
+    blob_mode = config.STORAGE_BACKEND == "blob" and not config.OFFLINE_DEMO
+
     # Trim each run's window in PARALLEL via -c copy stream-copy (no re-encode).
     # Runs are always contiguous within ONE parent file, so this is a fast
-    # ffmpeg trim, not a real concat. asyncio.gather lets ffmpeg processes
-    # share CPU instead of awaiting one-at-a-time.
+    # ffmpeg trim. In blob mode, ffmpeg uses HTTP Range requests via -headers
+    # bearer auth (BLOB-03); the resulting .mp4 lands in a tempfile, then is
+    # uploaded to runs/{run_id}.mp4 inside trim_window (D-10).
     async def _trim_one(run_id: str, ref: dict) -> tuple[str, str | None]:
-        output_path = str(config.DATA_DIR / "clips" / f"{run_id}.mp4")
+        if blob_mode:
+            tmp_handle = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+            output_path = tmp_handle.name
+            tmp_handle.close()
+        else:
+            output_path = str(config.DATA_DIR / "clips" / f"{run_id}.mp4")
         t0 = time.monotonic()
-        result = await trim_window(ref, output_path)
+        try:
+            result = await trim_window(ref, output_path, run_id=run_id)
+        finally:
+            if blob_mode:
+                # Best-effort tempfile cleanup; trim_window already uploaded.
+                try:
+                    os.unlink(output_path)
+                except FileNotFoundError:
+                    pass
         elapsed_ms = int((time.monotonic() - t0) * 1000)
-        if result and Path(result).exists() and result == output_path:
-            log.info("trim ok run_id=%s elapsed_ms=%d", run_id, elapsed_ms)
+        if not result:
+            log.warning(
+                "trim failed run_id=%s cluster_id=%s elapsed_ms=%d",
+                run_id, cluster_id, elapsed_ms,
+            )
+            return run_id, None
+        log.info("trim ok run_id=%s elapsed_ms=%d", run_id, elapsed_ms)
+        if blob_mode:
+            # trim_window returns either an absolute Blob URL (legacy) or the
+            # relative backend-proxy path `/runs/{run_id}.mp4` (current — the
+            # provisioned Vercel Blob store is private-only, so reads go
+            # through the FastAPI proxy). On upload failure it returns the
+            # local tempfile path (already unlinked above), which would leak
+            # `/tmp/...` into the segment row — frontend would request
+            # `${API_BASE}/tmp/...` and 404. Accept http URLs and `/runs/`
+            # paths; reject everything else and emit None so the feed renders
+            # "Compiling…" cleanly via fetch_recent_segments fallback.
+            if isinstance(result, str) and (
+                result.startswith("http") or result.startswith("/runs/")
+            ):
+                return run_id, result
+            log.warning(
+                "trim+upload result not a URL run_id=%s result_prefix=%r — emitting None",
+                run_id, (result or "")[:40],
+            )
+            return run_id, None
+        # local mode: result is the local FS path. Surface as /media URL.
+        if Path(result).exists() and result == output_path:
             return run_id, f"/media/{run_id}.mp4"
-        log.warning(
-            "trim failed run_id=%s cluster_id=%s elapsed_ms=%d",
-            run_id, cluster_id, elapsed_ms,
-        )
         return run_id, None
 
     results = await asyncio.gather(
@@ -420,20 +595,21 @@ async def compile_segment(cluster_id: str) -> None:
             except Exception as exc:
                 log.warning("parent diversity guard failed cluster_id=%s: %s", cluster_id, exc)
 
-        # Phase 2: stitch each chosen run separately (only if orchestrator succeeded).
+        # Phase 2: stitch each chosen run separately. Always runs — the
+        # fallback now writes deterministic run IDs (first run per parent),
+        # so even when the LLM call failed there's something to stitch.
         # Separate 30s budget so a slow ffmpeg encode doesn't bleed into LLM
-        # phase failures. Returns ordered list of /media URLs (one per run).
+        # phase failures. Returns ordered list of run video URLs.
         run_video_urls: list[str] = []
-        if not isinstance(a_result, Exception):
-            try:
-                run_video_urls = await asyncio.wait_for(
-                    _stitch_segment_runs(cluster_id),
-                    timeout=30.0,
-                )
-            except asyncio.TimeoutError:
-                log.warning("stitch TIMEOUT cluster_id=%s after 30s", cluster_id)
-            except Exception as exc:
-                log.warning("stitch failed cluster_id=%s: %s", cluster_id, exc)
+        try:
+            run_video_urls = await asyncio.wait_for(
+                _stitch_segment_runs(cluster_id),
+                timeout=30.0,
+            )
+        except asyncio.TimeoutError:
+            log.warning("stitch TIMEOUT cluster_id=%s after 30s", cluster_id)
+        except Exception as exc:
+            log.warning("stitch failed cluster_id=%s: %s", cluster_id, exc)
         # First run's video doubles as the segment's headline video_url for
         # frontends that don't iterate video_urls.
         video_url = run_video_urls[0] if run_video_urls else None

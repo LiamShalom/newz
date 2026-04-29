@@ -205,7 +205,11 @@ export function Recorder() {
         ts,
       });
       navigate("/feed");
-    } catch {
+    } catch (err) {
+      // Visibility for the silent-success class of bug (debug session
+      // phone-upload-no-railway-logs): without this log, a misconfigured
+      // VITE_API_BASE / down backend / CORS-block looks like success in the UI.
+      console.error("[recorder] postClip failed; enqueuing locally:", err);
       // Network / 5xx — CAP-09 enqueue. 4xx would also land here; uploadQueue.flush
       // drops 4xx as permanent on the next visit, so this is safe.
       await enqueue({

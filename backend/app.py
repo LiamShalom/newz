@@ -9,13 +9,14 @@ import json
 import logging
 import math
 import os
+import re
 import time as _time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, UploadFile, Form, Header, File, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from html import escape as _html_escape
 from sse_starlette.sse import EventSourceResponse
@@ -106,6 +107,13 @@ async def lifespan(app: FastAPI):
     from .pipeline import cluster as cluster_mod
     await cluster_mod.rebuild_cache()
 
+    # 3.5. Phase 10 (D-02, D-19): httpx Blob client init — only when blob mode active.
+    # OFFLINE_DEMO=true short-circuits to local at the dispatcher (D-18), so this
+    # branch is unreachable under firewalled-CI; enforces D-19 fail-loud on missing token.
+    if config.STORAGE_BACKEND == "blob" and not config.OFFLINE_DEMO:
+        from .storage import blob_client
+        await blob_client.init_client()
+
     # 4. Neon keepalive (postgres branch only). Started AFTER rebuild so the rebuild
     #    gets a clean pool slot first (Pitfall 7).
     if hasattr(db, "get_pool"):
@@ -118,13 +126,16 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
-        # Shutdown: cancel keepalive, then close the pool.
+        # Shutdown: cancel keepalive, close blob client, then close the pool.
         if keepalive_task is not None:
             keepalive_task.cancel()
             try:
                 await keepalive_task
             except asyncio.CancelledError:
                 pass
+        if config.STORAGE_BACKEND == "blob" and not config.OFFLINE_DEMO:
+            from .storage import blob_client
+            await blob_client.close_client()
         if hasattr(db, "close_pool"):
             await db.close_pool()
 
@@ -150,12 +161,71 @@ app.add_middleware(XFFStrip)
 
 config.DATA_DIR.mkdir(parents=True, exist_ok=True)
 (config.DATA_DIR / "clips").mkdir(parents=True, exist_ok=True)
-app.mount("/media", StaticFiles(directory=str(config.DATA_DIR / "clips")), name="media")
+# Phase 10 (D-16): /media is only mounted in local mode or under OFFLINE_DEMO.
+# In blob mode the frontend renders absolute Vercel Blob URLs (BLOB-05).
+if config.STORAGE_BACKEND == "local" or config.OFFLINE_DEMO:
+    app.mount("/media", StaticFiles(directory=str(config.DATA_DIR / "clips")), name="media")
 
 
 @app.get("/health")
 async def health():
     return {"ok": True}
+
+
+_RUN_ID_RE = re.compile(r"^[a-f0-9]+_run_[0-9]+$")
+
+
+@app.get("/runs/{run_id}.mp4", include_in_schema=False)
+async def runs_proxy(run_id: str, request: Request):
+    """Phase 10 proxy for runs/{run_id}.mp4 stored on a private-only Blob store.
+
+    The provisioned Vercel Blob store rejects `access="public"` uploads, so
+    runs/* land at the private domain and require the bearer token. We can't
+    leak that token to the browser, so the backend streams the bytes through
+    with the Authorization header attached. Forwards the client's Range header
+    so iOS Safari's media element can seek without buffering the whole file.
+    """
+    if config.STORAGE_BACKEND != "blob" or config.OFFLINE_DEMO:
+        raise HTTPException(status_code=404, detail="not found")
+    if not _RUN_ID_RE.match(run_id) or len(run_id) > 128:
+        raise HTTPException(status_code=400, detail="invalid run_id")
+
+    from .storage import blob_client
+    token = config.BLOB_READ_WRITE_TOKEN
+    store_id = blob_client._store_id_from_token(token)
+    upstream = f"https://{store_id}.private.blob.vercel-storage.com/runs/{run_id}.mp4"
+    headers = {"Authorization": f"Bearer {token}"}
+    rng = request.headers.get("range")
+    if rng:
+        headers["Range"] = rng
+
+    client = blob_client.get_client()
+    req = client.build_request("GET", upstream, headers=headers)
+    upstream_resp = await client.send(req, stream=True)
+
+    if upstream_resp.status_code in (404, 410):
+        await upstream_resp.aclose()
+        raise HTTPException(status_code=404, detail="not found")
+    if upstream_resp.status_code >= 400:
+        body = (await upstream_resp.aread())[:500]
+        await upstream_resp.aclose()
+        log.warning("runs proxy upstream %d run_id=%s body=%s", upstream_resp.status_code, run_id, body)
+        raise HTTPException(status_code=502, detail="upstream error")
+
+    passthrough = {"content-type", "content-length", "content-range", "accept-ranges", "etag", "last-modified"}
+    out_headers = {k: v for k, v in upstream_resp.headers.items() if k.lower() in passthrough}
+    out_headers.setdefault("content-type", "video/mp4")
+    out_headers.setdefault("accept-ranges", "bytes")
+    out_headers["cache-control"] = "private, max-age=60"
+
+    async def _body():
+        try:
+            async for chunk in upstream_resp.aiter_bytes(chunk_size=64 * 1024):
+                yield chunk
+        finally:
+            await upstream_resp.aclose()
+
+    return StreamingResponse(_body(), status_code=upstream_resp.status_code, headers=out_headers)
 
 
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024  # 100 MiB
@@ -558,14 +628,13 @@ async def debug_clip(clip_id: str):
     return {"found": True, "clip": clip}
 
 
-def _delete_files(paths: list[str]) -> int:
+async def _delete_paths_async(paths: list[str]) -> int:
+    from . import storage  # local import — avoid circular
     n = 0
     for path_str in paths:
         try:
-            p = Path(path_str)
-            if p.is_file():
-                p.unlink()
-                n += 1
+            await storage.delete_clip(path_str)
+            n += 1
         except Exception as e:
             log.warning("admin_reset: could not delete %s: %s", path_str, e)
     return n
@@ -598,6 +667,11 @@ async def admin_reset(
     if mode == "all":
         counts = await db.reset_all()
         deleted_files = 0
+        # Phase 10 (D-15): mode=all physically scans the local clips dir, which
+        # is empty in blob mode. The Blob-side bulk wipe relies on db.reset_all
+        # truncating rows + Phase 11's cleanup hook for blocked clips. For the
+        # v1.1 demo cutover (D-15) we accept stale Blob objects on mode=all —
+        # the demo corpus is small and re-uploaded from fixtures.
         for p in (config.DATA_DIR / "clips").glob("*"):
             try:
                 if p.is_file():
@@ -610,7 +684,7 @@ async def admin_reset(
         if count is None:
             raise HTTPException(status_code=400, detail="mode=last requires ?count=N")
         out = await db.delete_recent_clips(limit=count)
-        deleted_files = _delete_files(out["paths_to_delete"])
+        deleted_files = await _delete_paths_async(out["paths_to_delete"])
         result = {
             "mode": "last",
             "count_requested": count,
@@ -621,7 +695,7 @@ async def admin_reset(
         if seconds is None:
             raise HTTPException(status_code=400, detail="mode=since requires ?seconds=S")
         out = await db.delete_recent_clips(since_seconds=seconds)
-        deleted_files = _delete_files(out["paths_to_delete"])
+        deleted_files = await _delete_paths_async(out["paths_to_delete"])
         result = {
             "mode": "since",
             "seconds": seconds,

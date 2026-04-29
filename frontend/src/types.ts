@@ -4,9 +4,10 @@
 export interface Clip {
   id: string;
   /**
-   * Path served by the backend StaticFiles mount, e.g. "/media/abc.mp4".
-   * Server-emitted; treated as opaque on the client — never construct or parse
-   * client-side. `fetchFeed` prefixes this with `API_BASE` if it's relative.
+   * Absolute Vercel Blob URL (e.g. https://...vercel-storage.com/runs/abc.mp4)
+   * when STORAGE_BACKEND=blob, or relative `/media/...` path under
+   * STORAGE_BACKEND=local rollback. Frontend renders directly via the _abs()
+   * helper in api.ts.
    */
   url: string;
   lat: number;
@@ -66,9 +67,19 @@ export interface Segment {
   /** Cluster centroid coordinates for distance calculation (FED-03). Null when GPS unavailable. */
   centroid_lat: number | null;
   centroid_lng: number | null;
-  /** Actual video file URL path (e.g. "/media/abc.webm"). Null for legacy/demo segments. */
+  /**
+   * Absolute Vercel Blob URL (e.g. https://...vercel-storage.com/runs/abc.mp4)
+   * when STORAGE_BACKEND=blob, or relative `/media/...` path under
+   * STORAGE_BACKEND=local rollback. Frontend renders directly via the _abs()
+   * helper in api.ts.
+   */
   video_url: string | null;
-  /** All ordered clip URL paths for sequential multi-angle playback. */
+  /**
+   * Absolute Vercel Blob URL (e.g. https://...vercel-storage.com/runs/abc.mp4)
+   * when STORAGE_BACKEND=blob, or relative `/media/...` path under
+   * STORAGE_BACKEND=local rollback. Frontend renders directly via the _abs()
+   * helper in api.ts.
+   */
   video_urls: (string | null)[] | null;
 }
 

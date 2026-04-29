@@ -108,13 +108,17 @@ Full archive: [milestones/v1.0-ROADMAP.md](./milestones/v1.0-ROADMAP.md)
 **Depends on**: Phase 9
 **Requirements**: BLOB-01 through BLOB-08
 **Success Criteria** (what must be TRUE):
-  1. Backend redeploys and existing clip media still plays from the feed (Blob URLs absolute; `/media` StaticFiles mount removed).
-  2. A new clip recorded in iOS Safari uploads via `POST /clips` and lands in Vercel Blob under `uploads/{clip_id}.{ext}`.
-  3. Compiled run segments appear in Vercel Blob under `runs/{run_id}.mp4` and frontend renders them from absolute Blob URLs.
-  4. A direct browser PUT to Vercel Blob is rejected (401/403).
-  5. After a clip's moderation decision flips to `blocked`, its Blob object is hard-deleted within the cleanup window.
-  6. `STORAGE_BACKEND=local` env var rolls back to v1.0 local-FS path without code changes.
-**Plans**: TBD
+  1. Backend redeploys to Railway and existing clip media still plays from the feed (Blob URLs absolute; `/media` StaticFiles mount removed).
+  2. A new clip recorded in the iOS Safari PWA uploads via `POST /clips` and lands in Vercel Blob under `uploads/{clip_id}.{ext}` — verifiable via Blob console.
+  3. Compiled run segments appear in Vercel Blob under `runs/{run_id}.mp4` and the frontend feed renders them from absolute Blob URLs.
+  4. A direct browser PUT to Vercel Blob is rejected (verified by attempting one and observing 401/403).
+  5. After a clip's moderation decision flips to `blocked`, its Blob object is hard-deleted within the cleanup window (verifiable via Blob console + DB join).
+  6. Setting `STORAGE_BACKEND=local` env var rolls the backend back to the v1.0 local-FS path without code changes.
+**Plans**: 1 plan
+
+Plans:
+- [x] 10-01-PLAN.md — Vercel Blob migration: storage package, lifespan integration, ffmpeg + private Blob auth headers, tempdir-stitch, frontend absolute-URL guard, BLOB-08 cleanup hook
+**UI hint**: yes
 
 ### Phase 11: Moderation Gate (Gemini Flash-Lite + CSAM hash)
 **Goal**: Every uploaded clip passes through a moderation gate before entering cluster/compile; gate runs parallel-with-Marengo so common-case latency does not regress; tiered failure policy (timeout fail-CLOSED, 5xx outage fail-OPEN to admin queue, CSAM fail-CLOSED); newsworthy corroboration via ≥2-parent + violence-signal soft-flag.
@@ -149,7 +153,7 @@ Full archive: [milestones/v1.0-ROADMAP.md](./milestones/v1.0-ROADMAP.md)
 | 4. Multi-Agent Compile + Real-Time Feed | v1.0 | 3/3 | Complete | 2026-04-26 |
 | 8. Observability Scaffolding | v1.1 backbone | 3/3 | Complete | 2026-04-28 |
 | 9. Postgres Migration | v1.1 backbone | 9/9 | Complete | 2026-04-28 |
-| 10. Vercel Blob Migration | v1.1 backbone | 0/TBD | Not started | — |
+| 10. Vercel Blob Migration | v1.1 backbone | 1/1 | Complete | 2026-04-29 |
 | 11. Moderation Gate | v1.1 backbone | 0/TBD | Not started | — |
 | 12. Reactive Reporting + Admin Queue | v1.1 backbone | 0/TBD | Not started | — |
 | 13. Observability Deepening + OFFLINE_DEMO Audit | v1.1 backbone | 0/TBD | Not started | — |

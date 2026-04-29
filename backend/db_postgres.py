@@ -165,17 +165,21 @@ async def insert_clip(
     ts: float,
     session_id: str | None,
 ) -> str:
+    from . import storage  # local import — avoid circular at module load
     clip_id = uuid.uuid4().hex
     ext = ext_from_mime(file.content_type)
-    path = CLIPS_DIR / f"{clip_id}.{ext}"
     contents = await file.read()
-    path.write_bytes(contents)
+    result = await storage.save_clip_bytes(clip_id, ext, contents)
+    is_blob_url = result.startswith("http")
     now = time.time()
     pool = get_pool()
     await pool.execute(
-        "INSERT INTO clips (id, path, lat, lng, ts, session_id, created_at) "
-        "VALUES ($1, $2, $3, $4, $5, $6, $7)",
-        clip_id, str(path), lat, lng, ts, session_id, now,
+        "INSERT INTO clips (id, path, blob_url, lat, lng, ts, session_id, created_at) "
+        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        clip_id,
+        None if is_blob_url else result,
+        result if is_blob_url else None,
+        lat, lng, ts, session_id, now,
     )
     log.info("insert_clip id=%s bytes=%d", clip_id, len(contents))
     return clip_id
@@ -188,18 +192,18 @@ async def get_clip(clip_id: str) -> dict | None:
 
 
 async def fetch_recent_clips(limit: int = 50) -> list[dict]:
+    from . import storage  # local import — avoid circular at module load
     pool = get_pool()
     rows = await pool.fetch(
-        "SELECT id, path, lat, lng, ts, created_at FROM clips "
+        "SELECT id, path, blob_url, lat, lng, ts, created_at FROM clips "
         "ORDER BY created_at DESC LIMIT $1",
         limit,
     )
     out = []
     for r in rows:
-        filename = Path(r["path"]).name
         out.append({
             "id": r["id"],
-            "url": f"/media/{filename}",
+            "url": storage.get_playable_url(dict(r)),
             "lat": r["lat"],
             "lng": r["lng"],
             "ts": r["ts"],
@@ -348,6 +352,7 @@ async def insert_segment(
 
 async def fetch_recent_segments(limit: int = 50) -> list[dict]:
     """JOIN segments + clusters; batch-fetch all ordered clip paths for sequential playback."""
+    from . import storage  # local import — avoid circular at module load
     pool = get_pool()
     rows = await pool.fetch(
         """SELECT s.id, s.cluster_id, s.ordered_clip_ids, s.title, s.caption,
@@ -364,26 +369,36 @@ async def fetch_recent_segments(limit: int = 50) -> list[dict]:
         ids = json.loads(r["ordered_clip_ids"])
         all_ids.extend(ids)
         parsed_rows.append((r, ids))
-    clip_path_map: dict[str, str] = {}
+    clip_row_map: dict[str, dict] = {}
     if all_ids:
         # WHERE id = ANY($1::text[]) replaces the SQLite IN ({placeholders}) pattern;
         # asyncpg sends the Python list as a Postgres array.
         path_rows = await pool.fetch(
-            "SELECT id, path FROM clips WHERE id = ANY($1::text[])", all_ids,
+            "SELECT id, path, blob_url FROM clips WHERE id = ANY($1::text[])",
+            all_ids,
         )
         for p in path_rows:
-            clip_path_map[p["id"]] = p["path"]
+            clip_row_map[p["id"]] = dict(p)
+    blob_mode = config.STORAGE_BACKEND == "blob" and not config.OFFLINE_DEMO
     out = []
     for r, ids in parsed_rows:
         def _url(clip_id: str) -> str | None:
-            # Phase 4.6: ordered_clip_ids may be run IDs (`{parent}_run_{n}`),
-            # which compile_segment writes as data/clips/{run_id}.mp4.
+            # Phase 4.6: ordered_clip_ids may be run IDs (`{parent}_run_{n}`).
+            # Phase 10: in blob mode, run videos live at runs/{run_id}.mp4 on the
+            # public store (constructed via storage.runs_public_url) — the old
+            # `/media/{run_id}.mp4` 404s because the StaticFiles mount is not
+            # registered. Parent-clip rows hold a PRIVATE blob URL that the
+            # browser cannot fetch (no Authorization header on <video src=>);
+            # return None so the frontend renders "Compiling…" instead of a
+            # black <video> element.
             if "_run_" in clip_id:
-                return f"/media/{clip_id}.mp4"
-            path = clip_path_map.get(clip_id)
-            if not path:
+                return storage.runs_public_url(clip_id)
+            if blob_mode:
                 return None
-            return f"/media/{path.rsplit('/', 1)[-1]}"
+            row = clip_row_map.get(clip_id)
+            if not row:
+                return None
+            return storage.get_playable_url(row)
         video_urls = [_url(cid) for cid in ids]
         out.append({
             "id": r["id"],
@@ -577,7 +592,7 @@ async def fetch_cluster_clips_with_children(cluster_id: str) -> list[dict]:
     # Step A: parent rows in this cluster
     parent_rows = [
         dict(r) for r in await pool.fetch(
-            """SELECT id, path, lat, lng, ts
+            """SELECT id, path, blob_url, lat, lng, ts
                FROM clips
                WHERE cluster_id = $1 AND parent_id IS NULL
                ORDER BY ts ASC""",
@@ -586,13 +601,14 @@ async def fetch_cluster_clips_with_children(cluster_id: str) -> list[dict]:
     ]
     parent_ids = [p["id"] for p in parent_rows]
     parent_path_map: dict[str, str] = {p["id"]: p["path"] for p in parent_rows}
+    parent_blob_url_map: dict[str, str | None] = {p["id"]: p.get("blob_url") for p in parent_rows}
 
     if not parent_ids:
         return []
 
     # Step B: parents themselves + any child of those parents.
     rows = await pool.fetch(
-        """SELECT id, path, lat, lng, ts, parent_id,
+        """SELECT id, path, blob_url, lat, lng, ts, parent_id,
                   start_offset_sec, end_offset_sec
            FROM clips
            WHERE id = ANY($1::text[])
@@ -608,10 +624,16 @@ async def fetch_cluster_clips_with_children(cluster_id: str) -> list[dict]:
             if r["parent_id"]
             else r["path"]
         )
+        parent_blob_url = (
+            parent_blob_url_map.get(r["parent_id"])
+            if r["parent_id"]
+            else r["blob_url"]
+        )
         out.append({
             "id": r["id"],
             "path": r["path"] or parent_path,
             "parent_path": parent_path,
+            "parent_blob_url": parent_blob_url,
             "lat": r["lat"],
             "lng": r["lng"],
             "ts": r["ts"],
@@ -745,7 +767,7 @@ async def delete_recent_clips(
         async with conn.transaction():
             if limit is not None:
                 parents_raw = await conn.fetch(
-                    "SELECT id, path, cluster_id FROM clips "
+                    "SELECT id, path, blob_url, cluster_id FROM clips "
                     "WHERE parent_id IS NULL "
                     "ORDER BY created_at DESC LIMIT $1",
                     limit,
@@ -754,7 +776,7 @@ async def delete_recent_clips(
                 assert since_seconds is not None
                 cutoff = time.time() - float(since_seconds)
                 parents_raw = await conn.fetch(
-                    "SELECT id, path, cluster_id FROM clips "
+                    "SELECT id, path, blob_url, cluster_id FROM clips "
                     "WHERE parent_id IS NULL AND created_at >= $1",
                     cutoff,
                 )
@@ -764,7 +786,12 @@ async def delete_recent_clips(
 
             parent_ids = [p["id"] for p in parents]
             affected_clusters = sorted({p["cluster_id"] for p in parents if p["cluster_id"]})
-            paths_to_delete.extend(p["path"] for p in parents if p["path"])
+            # Phase 10: blob_url takes precedence over path. admin/reset routes
+            # URL-shaped entries through the storage dispatcher (Task 2.4).
+            for p in parents:
+                target = p.get("blob_url") or p.get("path")
+                if target:
+                    paths_to_delete.append(target)
 
             child_rows = await conn.fetch(
                 "SELECT id FROM clips WHERE parent_id = ANY($1::text[])",

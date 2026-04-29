@@ -18,6 +18,7 @@ Private helpers:
 
 import asyncio
 import logging
+import tempfile
 import time
 from pathlib import Path
 
@@ -123,9 +124,32 @@ async def embed_worker(clip_id: str) -> tuple[str, np.ndarray]:
     if clip is None:
         raise ValueError(f"embed_worker: clip {clip_id!r} not found")
 
-    clip_path = clip["path"]
-    if not Path(clip_path).exists():
-        raise FileNotFoundError(f"embed_worker: file missing at {clip_path!r}")
+    blob_url = clip.get("blob_url")
+    db_path = clip.get("path")
+
+    tmp_path: str | None = None
+    if blob_url:
+        # Phase 10 blob mode: download private blob to a tempfile so the
+        # synchronous Marengo SDK (open(clip_path, "rb")) has a real fd.
+        # Mirrors the compile.py:42-67 _download_refs_to_tempdir streaming
+        # pattern (chunk_size=64 KiB) to avoid loading 100 MiB clips into RAM.
+        from ..storage import blob_client
+        client = blob_client.get_client()
+        headers = {"Authorization": f"Bearer {config.BLOB_READ_WRITE_TOKEN}"}
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+            tmp_path = tmp.name
+            async with client.stream("GET", blob_url, headers=headers) as resp:
+                resp.raise_for_status()
+                async for chunk in resp.aiter_bytes(chunk_size=64 * 1024):
+                    tmp.write(chunk)
+        clip_path = tmp_path
+    elif db_path and Path(db_path).exists():
+        clip_path = db_path
+    else:
+        raise FileNotFoundError(
+            f"embed_worker: clip {clip_id!r} has no readable source "
+            f"(path={db_path!r}, blob_url={'set' if blob_url else 'unset'})"
+        )
 
     try:
         loop = asyncio.get_event_loop()
@@ -161,3 +185,6 @@ async def embed_worker(clip_id: str) -> tuple[str, np.ndarray]:
             )
             await conn.commit()
         raise
+    finally:
+        if tmp_path:
+            Path(tmp_path).unlink(missing_ok=True)

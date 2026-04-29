@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).parent / ".env")
+load_dotenv(Path(__file__).parent / ".env.local")
 
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")
 DATA_DIR = Path(os.environ.get("DATA_DIR", "./data")).resolve()
@@ -54,3 +54,14 @@ KEEPALIVE_INTERVAL_S: int = int(os.environ.get("KEEPALIVE_INTERVAL_S", "240"))
 #   Phase 9 effect: hard-overrides METADATA_BACKEND to sqlite, skips Neon pool init + keepalive.
 #   Mirrors Phase 8 D-16 graceful-degrade pattern (empty SENTRY_DSN → skip Sentry).
 OFFLINE_DEMO: bool = os.environ.get("OFFLINE_DEMO", "false").strip().lower() == "true"
+
+# Phase 10: Vercel Blob migration (D-12, D-19, D-23; amendments 1-8 in 10-PLAN.md)
+# STORAGE_BACKEND: 'local' (default — v1.0 path, kept indefinitely for OFFLINE_DEMO + rollback)
+#   or 'blob' (v1.1 cutover — Vercel Blob via raw httpx wrapper, D-01).
+#   OFFLINE_DEMO=true hard-overrides to local regardless of this value (D-18).
+STORAGE_BACKEND: str = os.environ.get("STORAGE_BACKEND", "local").strip().lower()
+# BLOB_READ_WRITE_TOKEN: Vercel-issued read/write token for the Blob store.
+#   Format: vercel_blob_rw_<store_id>_<random>. Loaded once at module import.
+#   Never logged, never sent to browser (L-02). Empty when STORAGE_BACKEND=blob
+#   AND OFFLINE_DEMO=false fails fast at lifespan startup (D-19).
+BLOB_READ_WRITE_TOKEN: str = os.environ.get("BLOB_READ_WRITE_TOKEN", "").strip()

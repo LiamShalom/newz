@@ -48,12 +48,21 @@ const segment: Segment & { url: string | null } = {
   url: "/media/test.mp4",
 };
 
-function render(active: boolean) {
+// Phase 10 (BLOB-05): same fixture with absolute Blob URLs to assert no
+// double-prefix in render.
+const blobSegment: Segment & { url: string | null } = {
+  ...segment,
+  video_url: "https://teststore.public.blob.vercel-storage.com/runs/seg-1.mp4",
+  video_urls: ["https://teststore.public.blob.vercel-storage.com/runs/seg-1.mp4"],
+  url: "https://teststore.public.blob.vercel-storage.com/runs/seg-1.mp4",
+};
+
+function render(active: boolean, seg: Segment & { url: string | null } = segment) {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
   act(() => {
-    root.render(<SegmentCard segment={segment} active={active} />);
+    root.render(<SegmentCard segment={seg} active={active} />);
   });
   mounted.push({ container, root });
   return { container, root };
@@ -80,5 +89,20 @@ describe("SegmentCard active playback", () => {
       root.render(<SegmentCard segment={segment} active={false} />);
     });
     expect(pauseMock).toHaveBeenCalled();
+  });
+
+  it.each([
+    ["relative", segment],
+    ["absolute Blob URL", blobSegment],
+  ])("renders %s without double-prefix", (_label, seg) => {
+    const { container } = render(true, seg);
+    const video = container.querySelector("video");
+    if (video && seg.url) {
+      const src = video.getAttribute("src") ?? video.querySelector("source")?.getAttribute("src");
+      if (src) {
+        // No double-prefix: src must NOT contain "httphttps" or two http schemes.
+        expect(src).not.toMatch(/http.*http/);
+      }
+    }
   });
 });

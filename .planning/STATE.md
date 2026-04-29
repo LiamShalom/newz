@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Pilot MVP for funding (Public-Launch-Ready Backbone)
 status: in_progress
-last_updated: "2026-04-28T00:00:00.000Z"
-last_activity: 2026-04-28 -- shipped Phase 01 comments + shares (pending iPhone UAT)
+last_updated: "2026-04-29T20:30:00.000Z"
+last_activity: 2026-04-29 -- shipped Phase 10 (Vercel Blob migration); 4 SC passed, 3 deferred to Phase 11
 progress:
   total_phases: 8
-  completed_phases: 5
-  total_plans: 19
-  completed_plans: 15
-  percent: 56
+  completed_phases: 6
+  total_plans: 20
+  completed_plans: 16
+  percent: 75
 ---
 
 # Project State: Newz
@@ -28,12 +28,12 @@ progress:
 | Field | Value |
 |-------|-------|
 | Active Milestone | v1.1 Pilot MVP for funding (Public-Launch-Ready Backbone) |
-| Active Phases | Backbone: 10 next (planning) · Feature: `01-comments-and-sharing` (shipped, pending iPhone UAT) |
-| Status | Backbone phases 8 + 9 shipped; feature track Phase 01 shipped |
+| Active Phases | Backbone: 11 next (Moderation Gate) · Feature: `01-comments-and-sharing` (shipped, pending iPhone UAT) |
+| Status | Backbone phases 8 + 9 + 10 shipped; feature track Phase 01 shipped |
 | Workflow | Two tracks: backbone uses sequenced phases (8-13); feature track uses per-feature GSD |
 
 ```
-[█████░░░░░░] ~50% — backbone 2/6 (8, 9 shipped); feature 0/N (01 ready)
+[███████░░░░] ~75% — backbone 3/6 (8, 9, 10 shipped); feature 0/N (01 ready)
 ```
 
 ## Accumulated Context
@@ -110,19 +110,16 @@ None blocking the active phase (`01-comments-and-sharing` ready to execute; Phas
 
 ## Session Continuity
 
-**Last session ended:** 2026-04-28 — Phase 01 (comments + shares) shipped end-to-end. Wave 4 verification (T4.1–T4.4) deferred to next human session because it requires a real iPhone (iOS Safari keyboard, OG preview unfurl, Web Share API) and a running backend in a network-enabled environment.
+**Last session ended:** 2026-04-29 — Phase 10 (Vercel Blob migration) shipped. SC-1, SC-2, SC-3, SC-4 passed in live HUMAN-UAT against the Railway preview backend. Task 5.5 / SC-5 (cleanup_blocked_clip) and SC-6 (env-flip rollback) deferred to Phase 11 (cleanup hook lacks production caller until moderation gate; rollback is theoretical now that `clips.path` is nullable). Spec amendment captured in `10-HUMAN-UAT.md`: provisioned Vercel Blob store is private-only, so `runs/*` reads route through a backend proxy (`GET /runs/{run_id}.mp4`) instead of CDN-direct.
 
-**Next action (feature track):**
-1. Run Wave 4 verification (T4.1–T4.4) on a real iPhone + desktop browser. See `phases/01-comments-and-sharing/01-SUMMARY.md` for the checklist.
-2. After UAT passes, flip ROADMAP Mando #5 status from "pending iPhone UAT" to plain "✅ Shipped" and pick the next feature.
+**Next action (backbone track):** Plan Phase 11 (Moderation Gate — Gemini Flash-Lite + Cloudflare CSAM hash). Pre-flight TODOs from Pending Todos still apply (Gemini latency benchmark, Cloudflare CSAM tool / NCMEC application lead time).
 
-**Next action (backbone track):** Liam to plan Phase 10 (Vercel Blob migration) once spike + dependency context cleared.
+**Next action (feature track):** Run Wave 4 verification (T4.1–T4.4) on a real iPhone + desktop browser for Phase 01 (comments + shares). See `phases/01-comments-and-sharing/01-SUMMARY.md`.
 
 **Key files to load on resume:**
 
-- `.planning/phases/01-comments-and-sharing/01-SUMMARY.md` — what shipped, decisions, pending verification
-- `.planning/phases/01-comments-and-sharing/01-PLAN.md` — original task breakdown
-- `.planning/phases/09-postgres-migration-neon-asyncpg-alembic/09-CONTEXT.md` — backbone Phase 9 context
+- `.planning/phases/10-vercel-blob-migration/10-HUMAN-UAT.md` — Phase 10 UAT outcomes + spec amendments (private-store proxy)
+- `.planning/phases/01-comments-and-sharing/01-SUMMARY.md` — feature track Phase 01 status
 - `.planning/PROJECT.md` — v1.1 active scope (both tracks), anonymity constraint, nomenclature
 - `.planning/ROADMAP.md` — full v1.1 backlog
 
