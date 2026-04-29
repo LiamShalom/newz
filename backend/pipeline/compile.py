@@ -291,12 +291,11 @@ async def _resolve_run_ids_to_stitch_refs(
 async def _save_fallback_segment(cluster_id: str, video_url: str | None = None) -> str:
     """CMP-06: idempotent fallback. Chronological order, generic AP-wire caption.
 
-    When called with video_url=None (orchestrator-chain failure path), we fall
-    back to the first cluster clip's playable URL so the feed shows *something*
-    rather than a black <video> with no source. Without this, publisher flakes
-    or LLM timeouts produced segment rows that rendered as black screens.
+    Leaves video_url=None on failure paths intentionally. In blob mode the
+    parent clips live at uploads/* (private) and can't be browser-fetched;
+    fetch_recent_segments returns None for those rows so the feed renders
+    "Compiling…" instead of a black <video>.
     """
-    from .. import storage  # local import — avoid circular at module load
     existing = await db.get_segment_for_cluster(cluster_id)
     if existing:
         return existing["id"]
@@ -308,12 +307,6 @@ async def _save_fallback_segment(cluster_id: str, video_url: str | None = None) 
         when = datetime.now(tz=timezone.utc).strftime("%b %-d, %Y")
     location_str = "Pasadena, CA"  # default; cluster centroid reverse-geocode is a Phase 5 follow-up
     caption = f"{when} — {location_str}. Submitted footage from {len(clip_ids)} contributor(s)."
-
-    if video_url is None and clip_ids:
-        first_clip = await db.get_clip(clip_ids[0])
-        if first_clip:
-            video_url = storage.get_playable_url(first_clip)
-
     return await db.insert_segment(
         cluster_id=cluster_id,
         ordered_clip_ids=clip_ids,

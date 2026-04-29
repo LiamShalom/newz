@@ -380,15 +380,19 @@ async def fetch_recent_segments(limit: int = 50) -> list[dict]:
             )
             for p in await path_cur.fetchall():
                 clip_row_map[p["id"]] = dict(p)
+    blob_mode = config.STORAGE_BACKEND == "blob" and not config.OFFLINE_DEMO
     out = []
     for r, ids in parsed_rows:
         def _url(clip_id: str) -> str | None:
             # Phase 4.6: ordered_clip_ids may be run IDs (`{parent}_run_{n}`).
-            # Phase 10: when stored_video_url is populated for the segment,
-            # callers prefer that — runs/* uploads land via compile.py and the
-            # absolute URL is written into seg.video_url at insert time.
+            # Phase 10: in blob mode, run videos live at runs/{run_id}.mp4 on the
+            # public store. Parent-clip URLs in blob mode are private and the
+            # browser cannot fetch them — return None so the frontend renders
+            # "Compiling…" instead of a black <video> element.
             if "_run_" in clip_id:
-                return f"/media/{clip_id}.mp4"
+                return storage.runs_public_url(clip_id)
+            if blob_mode:
+                return None
             row = clip_row_map.get(clip_id)
             if not row:
                 return None

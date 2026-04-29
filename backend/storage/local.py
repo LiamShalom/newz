@@ -28,6 +28,7 @@ __all__ = [
     "cleanup_blocked_clip",
     "stitch_input_for",
     "authorized_blob_input",
+    "runs_public_url",
 ]
 
 
@@ -83,3 +84,9 @@ def stitch_input_for(run_row: dict) -> tuple[str, dict[str, str] | None]:
 
 def authorized_blob_input(pathname: str) -> tuple[str, dict[str, str] | None]:
     return (str(CLIPS_DIR / Path(pathname).name), None)
+
+
+def runs_public_url(run_id: str) -> str:
+    # Local-mode parity for blob.runs_public_url — runs are served from the
+    # /media StaticFiles mount (registered when STORAGE_BACKEND=local).
+    return f"/media/{run_id}.mp4"

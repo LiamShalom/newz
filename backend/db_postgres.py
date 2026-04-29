@@ -376,15 +376,22 @@ async def fetch_recent_segments(limit: int = 50) -> list[dict]:
         )
         for p in path_rows:
             clip_row_map[p["id"]] = dict(p)
+    blob_mode = config.STORAGE_BACKEND == "blob" and not config.OFFLINE_DEMO
     out = []
     for r, ids in parsed_rows:
         def _url(clip_id: str) -> str | None:
             # Phase 4.6: ordered_clip_ids may be run IDs (`{parent}_run_{n}`).
-            # Phase 10: defer to storage.get_playable_url so blob_url-populated
-            # rows render absolute URLs; segment.video_url (set by compile.py
-            # post-upload) takes precedence for run IDs.
+            # Phase 10: in blob mode, run videos live at runs/{run_id}.mp4 on the
+            # public store (constructed via storage.runs_public_url) — the old
+            # `/media/{run_id}.mp4` 404s because the StaticFiles mount is not
+            # registered. Parent-clip rows hold a PRIVATE blob URL that the
+            # browser cannot fetch (no Authorization header on <video src=>);
+            # return None so the frontend renders "Compiling…" instead of a
+            # black <video> element.
             if "_run_" in clip_id:
-                return f"/media/{clip_id}.mp4"
+                return storage.runs_public_url(clip_id)
+            if blob_mode:
+                return None
             row = clip_row_map.get(clip_id)
             if not row:
                 return None

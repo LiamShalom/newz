@@ -25,6 +25,7 @@ __all__ = [
     "cleanup_blocked_clip",
     "stitch_input_for",
     "authorized_blob_input",
+    "runs_public_url",
 ]
 
 
@@ -93,3 +94,13 @@ def authorized_blob_input(pathname: str) -> tuple[str, dict[str, str]]:
     url = f"https://{store_id}.private.blob.vercel-storage.com/{pathname}"
     headers = {"Authorization": f"Bearer {token}"}
     return (url, headers)
+
+
+def runs_public_url(run_id: str) -> str:
+    # Mirror of trim_window's upload pathname (`runs/{run_id}.mp4`, public access).
+    # Used by feed serializers to reconstruct the browser-playable URL for each
+    # angle in a multi-angle segment — without this, video_urls falls back to
+    # `/media/{run_id}.mp4` which 404s in blob mode (no /media mount).
+    token = config.BLOB_READ_WRITE_TOKEN
+    store_id = blob_client._store_id_from_token(token)
+    return f"https://{store_id}.public.blob.vercel-storage.com/runs/{run_id}.mp4"
