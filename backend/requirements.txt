@@ -5,7 +5,8 @@ pydantic==2.10.3
 python-dotenv==1.0.1
 aiosqlite==0.20.0
 numpy>=2.4.0
-tenacity
+httpx==0.28.1
+tenacity==9.1.4
 twelvelabs==1.2.3
 pytest>=8.0
 pytest-asyncio>=0.23
