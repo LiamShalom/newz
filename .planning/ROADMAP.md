@@ -95,7 +95,10 @@ Plans:
   4. A direct browser PUT to Vercel Blob is rejected (verified by attempting one and observing 401/403).
   5. After a clip's moderation decision flips to `blocked`, its Blob object is hard-deleted within the cleanup window (verifiable via Blob console + DB join).
   6. Setting `STORAGE_BACKEND=local` env var rolls the backend back to the v1.0 local-FS path without code changes.
-**Plans**: TBD
+**Plans**: 1 plan
+
+Plans:
+- [ ] 10-01-PLAN.md — Vercel Blob migration: storage package, lifespan integration, ffmpeg + private Blob auth headers, tempdir-stitch, frontend absolute-URL guard, BLOB-08 cleanup hook
 **UI hint**: yes
 
 ### Phase 11: Moderation Gate (Gemini Flash-Lite + CSAM hash)
@@ -154,7 +157,7 @@ Phases execute in numeric order: 8 → 9 → 10 → 11 ∥ 12 → 13
 | 4. Multi-Agent Compile + Real-Time Feed | v1.0 | 3/3 | Complete | 2026-04-26 |
 | 8. Observability Scaffolding | v1.1 | 0/TBD | Not started | - |
 | 9. Postgres Migration | v1.1 | 0/TBD | Not started | - |
-| 10. Vercel Blob Migration | v1.1 | 0/TBD | Not started | - |
+| 10. Vercel Blob Migration | v1.1 | 0/1 | Not started | - |
 | 11. Moderation Gate | v1.1 | 0/TBD | Not started | - |
 | 12. Reactive Reporting + Admin Queue | v1.1 | 0/TBD | Not started | - |
 | 13. Observability Deepening + OFFLINE_DEMO Audit | v1.1 | 0/TBD | Not started | - |
