@@ -19,10 +19,18 @@ export function CommentList({ comments }: { comments: Comment[] }) {
     <ol className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
       {comments.map((c) => (
         <li key={c.id} className="flex gap-3">
-          <Ghost
-            aria-hidden
-            className="mt-0.5 h-5 w-5 shrink-0 text-ink-secondary"
-          />
+          <div className="relative mt-0.5 shrink-0">
+            <Ghost
+              aria-hidden
+              className="h-5 w-5 text-ink-secondary"
+            />
+            <span
+              aria-label={`commenter ${c.commenter_index}`}
+              className="absolute -bottom-1 -right-1 grid h-4 min-w-[1rem] place-items-center rounded-full bg-coral px-[3px] text-[10px] font-semibold leading-none text-white"
+            >
+              {c.commenter_index}
+            </span>
+          </div>
           <div className="min-w-0 flex-1">
             <div className="text-[11px] uppercase tracking-wide text-ink-secondary">
               anonymous · {relativeTime(c.created_at)}

@@ -93,6 +93,10 @@ export interface Comment {
   text: string;
   /** POSIX seconds, server-side timestamp. */
   created_at: number;
+  /** Rank of this commenter among unique session_ids on this segment, ordered
+   *  by their first-seen timestamp. Stable per (segment, session_id). 1-indexed.
+   *  Drives the per-commenter badge on the ghost icon. */
+  commenter_index: number;
 }
 
 /**

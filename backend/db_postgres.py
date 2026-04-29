@@ -482,26 +482,64 @@ async def get_segment_by_id(segment_id: str) -> dict | None:
 # ---------------------------------------------------------------------------
 
 async def insert_comment(segment_id: str, session_id: str, text: str) -> dict:
-    """Append a comment. Returns the public-safe dict (no session_id)."""
+    """Append a comment + return public-safe dict (no session_id) including
+    `commenter_index` — the rank of this session_id among unique commenters
+    on this segment, ordered by their first-seen timestamp. Stable per
+    (segment, session_id), so a returning commenter keeps the same number."""
     now = time.time()
     pool = get_pool()
-    row = await pool.fetchrow(
-        """INSERT INTO comments (segment_id, session_id, text, created_at)
-           VALUES ($1, $2, $3, $4) RETURNING id""",
-        segment_id, session_id, text, now,
-    )
-    return {"id": row["id"], "segment_id": segment_id, "text": text, "created_at": now}
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                """INSERT INTO comments (segment_id, session_id, text, created_at)
+                   VALUES ($1, $2, $3, $4) RETURNING id""",
+                segment_id, session_id, text, now,
+            )
+            idx_row = await conn.fetchrow(
+                """SELECT idx FROM (
+                       SELECT session_id,
+                              ROW_NUMBER() OVER (ORDER BY MIN(created_at)) AS idx
+                       FROM comments
+                       WHERE segment_id = $1
+                       GROUP BY session_id
+                   ) ranks
+                   WHERE session_id = $2""",
+                segment_id, session_id,
+            )
+    return {
+        "id": row["id"],
+        "segment_id": segment_id,
+        "text": text,
+        "created_at": now,
+        "commenter_index": int(idx_row["idx"]) if idx_row else 1,
+    }
 
 
 async def list_comments(segment_id: str, limit: int = 200) -> list[dict]:
-    """Return public-safe comments for a segment, newest first. Excludes session_id."""
+    """Public-safe comments for a segment, newest first. Each row carries a
+    stable `commenter_index` (rank of session_id by first-seen timestamp)."""
     pool = get_pool()
     rows = await pool.fetch(
-        """SELECT id, text, created_at FROM comments
-           WHERE segment_id = $1 ORDER BY created_at DESC LIMIT $2""",
+        """WITH ranks AS (
+               SELECT session_id,
+                      ROW_NUMBER() OVER (ORDER BY MIN(created_at)) AS idx
+               FROM comments
+               WHERE segment_id = $1
+               GROUP BY session_id
+           )
+           SELECT c.id, c.text, c.created_at, r.idx AS commenter_index
+           FROM comments c
+           JOIN ranks r ON c.session_id = r.session_id
+           WHERE c.segment_id = $1
+           ORDER BY c.created_at DESC
+           LIMIT $2""",
         segment_id, limit,
     )
-    return [dict(r) for r in rows]
+    return [
+        {"id": r["id"], "text": r["text"], "created_at": r["created_at"],
+         "commenter_index": int(r["commenter_index"])}
+        for r in rows
+    ]
 
 
 async def count_comments_since(session_id: str, since_ts: float) -> int:

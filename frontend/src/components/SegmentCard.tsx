@@ -1,5 +1,21 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import { MessageCircle, Share } from "lucide-react";
+import { MessageCircle } from "lucide-react";
+
+/** iOS-style filled corner-arrow share icon. Lucide ships only an outlined
+ *  variant; this matches the screenshot Roan referenced — solid, no stroke. */
+function ShareArrowIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden
+      className={className}
+    >
+      <path d="M14 3l7 6-7 6v-3.6c-3.6 0-6.4 1-8.6 3.6 0-5 3-9 8.6-9V3z" />
+    </svg>
+  );
+}
 import type { Segment } from "../types";
 import { relativeTime } from "../timeFormat";
 import { distanceLabel } from "../distance";
@@ -191,25 +207,26 @@ export function SegmentCard({
         {segment.caption}
       </p>
 
-      <div className="mt-4 px-4 flex items-center gap-3">
+      <div className="mt-4 px-4 flex items-center gap-4">
         <button
           type="button"
           onClick={() => setCommentsOpen(true)}
           aria-label="open comments"
-          className="inline-flex items-center gap-1.5 rounded-full border border-hairline px-3 py-1.5 text-[13px] text-ink-primary hover:bg-surface-elevated"
+          className="inline-flex items-center gap-1.5 text-ink-primary"
         >
-          <MessageCircle className="h-4 w-4" />
-          <span>{commentCount ?? "comment"}</span>
+          <MessageCircle className="h-6 w-6" />
+          {commentCount !== undefined && (
+            <span className="text-[13px]">{commentCount}</span>
+          )}
         </button>
         {CAN_SHARE && (
           <button
             type="button"
             onClick={handleShare}
             aria-label="share"
-            className="inline-flex items-center gap-1.5 rounded-full border border-hairline px-3 py-1.5 text-[13px] text-ink-primary hover:bg-surface-elevated"
+            className="inline-flex items-center text-ink-primary"
           >
-            <Share className="h-4 w-4" />
-            <span>share</span>
+            <ShareArrowIcon className="h-6 w-6" />
           </button>
         )}
       </div>
