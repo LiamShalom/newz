@@ -86,6 +86,16 @@ CREATE TABLE IF NOT EXISTS segments (
   created_at REAL NOT NULL,
   FOREIGN KEY(cluster_id) REFERENCES clusters(id)
 );
+
+CREATE TABLE IF NOT EXISTS comments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  segment_id TEXT NOT NULL,
+  session_uuid TEXT NOT NULL,
+  text TEXT NOT NULL CHECK(length(text) >= 1 AND length(text) <= 300),
+  created_at REAL NOT NULL,
+  FOREIGN KEY(segment_id) REFERENCES segments(id)
+);
+CREATE INDEX IF NOT EXISTS idx_comments_segment_created ON comments(segment_id, created_at DESC);
 """
 
 
