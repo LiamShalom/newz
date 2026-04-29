@@ -1,4 +1,10 @@
+# Phase 8 (D-01..D-17): observability MUST be imported before any other backend
+# module that calls logging.getLogger(). Pitfall 6 — without this, pre-warm and
+# DB-init log lines emit as plain text instead of JSON.
+from . import observability  # noqa: F401  — runs configure_logging() + init_sentry() at import
+
 import asyncio
+import hmac
 import json
 import logging
 import math
@@ -12,20 +18,20 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sse_starlette.sse import EventSourceResponse
 
+from structlog.contextvars import bind_contextvars
+
 from . import config, db, events
 from .pipeline.run import run_pipeline
 from .models import IngestResponse
+from .observability.middleware import XFFStrip, RequestIDAndContextvarsBind
+from .observability.metrics import MetricsMiddleware, make_metrics_endpoint, STAGE_DURATION
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger(__name__)
 
 
 async def _pre_warm_marengo() -> None:
-    """Fire-and-forget Marengo pre-warm. Pays cold-start cost before first judge clip.
-    Skipped when USE_MOCK_EMBEDDINGS=true. Failure is non-fatal."""
-    if config.USE_MOCK_EMBEDDINGS:
-        log.info("pre-warm skipped (USE_MOCK_EMBEDDINGS=true)")
-        return
+    """Fire-and-forget Marengo pre-warm. Pays cold-start cost before first clip.
+    Failure is non-fatal."""
     pre_warm_path = config.PRE_WARM_CLIP_PATH
     if not pre_warm_path or not Path(pre_warm_path).exists():
         log.warning("pre-warm skipped: PRE_WARM_CLIP_PATH=%r not found", pre_warm_path)
@@ -41,11 +47,8 @@ async def _pre_warm_marengo() -> None:
 
 async def _pre_warm_sdk() -> None:
     """Pre-warm Claude Agent SDK connection. Parallel with Marengo pre-warm.
-    Skipped when OFFLINE_DEMO=true or ANTHROPIC_API_KEY not set (log + degrade gracefully).
+    Skipped when ANTHROPIC_API_KEY not set (log + degrade gracefully).
     """
-    if os.environ.get("OFFLINE_DEMO", "").lower() == "true":
-        log.info("sdk pre-warm skipped (OFFLINE_DEMO=true)")
-        return
     if not os.environ.get("ANTHROPIC_API_KEY"):
         log.warning(
             "ANTHROPIC_API_KEY not set — compile pipeline will be unavailable. "
@@ -61,21 +64,67 @@ async def _pre_warm_sdk() -> None:
         log.warning("Claude SDK pre-warm failed (non-fatal): %s", exc)
 
 
+async def _neon_keepalive(pool) -> None:
+    """DEMO-03: SELECT 1 every config.KEEPALIVE_INTERVAL_S seconds (default 240)
+    to defeat Neon's scale-to-zero idle threshold (5 min). Logs one INFO line per
+    successful ping, one WARNING per failure. Cancelled cleanly on shutdown.
+
+    Runs outside any request scope — no contextvars (request_id absent on purpose).
+    structlog stdlib bridge from Phase 8 routes the log line through JSON automatically.
+    """
+    keepalive_log = logging.getLogger("backend.keepalive")
+    while True:
+        try:
+            await pool.fetchval("SELECT 1")
+            keepalive_log.info("neon_keepalive ok")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            keepalive_log.warning("neon_keepalive failed (non-fatal): %s", exc)
+        await asyncio.sleep(config.KEEPALIVE_INTERVAL_S)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Phase 9 (D-16, D-17, RESEARCH Pitfall 7): asyncpg pool init + Neon keepalive task.
+    # Order: init_pool → db.init (postgres no-op / sqlite schema) → cluster rebuild
+    #        → keepalive task → pre-warm tasks → yield. Shutdown reverses with cancel + close.
+    keepalive_task: asyncio.Task | None = None
+
+    # 1. asyncpg pool (postgres branch only). hasattr() is the dispatcher contract:
+    #    db.init_pool exists iff METADATA_BACKEND=postgres AND OFFLINE_DEMO=false.
+    if hasattr(db, "init_pool"):
+        await db.init_pool()
+
+    # 2. db.init() — no-op for postgres (schema owned by Alembic); creates schema for sqlite.
     await db.init()
-    # Phase 3: rebuild in-memory cluster cache from sqlite (CLU-10).
-    # Must complete before pre-warm task is scheduled so the first clip ingest
-    # sees a populated cache.
+
+    # 3. CLUSTERS rebuild — must complete before pre-warm so first ingest sees populated cache.
+    #    Reads from whichever backend is active (DB-04 across both branches).
     from .pipeline import cluster as cluster_mod
     await cluster_mod.rebuild_cache()
-    # FED-05: insert staged demo segment if segments table is empty
-    from .seed.demo_segment import seed_demo_segment
-    await seed_demo_segment()
-    # Fire pre-warms in parallel (Marengo + Claude SDK) — fire-and-forget; never blocks startup
+
+    # 4. Neon keepalive (postgres branch only). Started AFTER rebuild so the rebuild
+    #    gets a clean pool slot first (Pitfall 7).
+    if hasattr(db, "get_pool"):
+        keepalive_task = asyncio.create_task(_neon_keepalive(db.get_pool()))
+
+    # 5. Existing pre-warms (unchanged) — fire-and-forget.
     asyncio.create_task(_pre_warm_marengo())
     asyncio.create_task(_pre_warm_sdk())
-    yield
+
+    try:
+        yield
+    finally:
+        # Shutdown: cancel keepalive, then close the pool.
+        if keepalive_task is not None:
+            keepalive_task.cancel()
+            try:
+                await keepalive_task
+            except asyncio.CancelledError:
+                pass
+        if hasattr(db, "close_pool"):
+            await db.close_pool()
 
 
 app = FastAPI(title="Newz API", lifespan=lifespan)
@@ -87,6 +136,15 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Phase 8 (D-12): middleware registration order matters because FastAPI applies
+# middleware in REVERSE-add-order. Effective request flow:
+#   XFFStrip (outermost) -> RequestIDAndContextvarsBind -> MetricsMiddleware -> CORS -> routes
+# XFFStrip MUST run first so client-supplied IP-revealing headers are stripped
+# before any other middleware or route handler can log them (PRIV-01).
+app.add_middleware(MetricsMiddleware)
+app.add_middleware(RequestIDAndContextvarsBind)
+app.add_middleware(XFFStrip)
 
 config.DATA_DIR.mkdir(parents=True, exist_ok=True)
 (config.DATA_DIR / "clips").mkdir(parents=True, exist_ok=True)
@@ -120,7 +178,17 @@ async def ingest_clip(
         raise HTTPException(status_code=413, detail="clip too large")
     await file.seek(0)
 
-    clip_id = await db.insert_clip(file, lat, lng, ts, session_id=x_session_id)
+    # Phase 8 (D-17): ingest stage timing covers file-write + DB-insert latency.
+    # Full request latency captured separately by REQUEST_DURATION{route="/clips"}.
+    with STAGE_DURATION.labels(stage="ingest").time():
+        clip_id = await db.insert_clip(file, lat, lng, ts, session_id=x_session_id)
+    # WR-01: bind clip_id into structlog contextvars now that it exists, so any
+    # subsequent log line in this request (including the broadcast below) carries
+    # clip_id as a structured field. PRIV-02 whitelist allows clip_id.
+    # The contextvar is request-scoped — RequestIDAndContextvarsBind clears
+    # contextvars at request end, and run_pipeline (spawned below) re-binds in
+    # its own task context.
+    bind_contextvars(clip_id=clip_id)
     await events.broadcast({"type": "clip_added", "clip_id": clip_id})
     asyncio.create_task(run_pipeline(clip_id))
     return IngestResponse(clip_id=clip_id, status="processing")
@@ -307,7 +375,16 @@ async def debug_trigger_compile(cluster_id: str):
 
 @app.get("/debug/dbstate")
 async def debug_dbstate():
-    """Dev-only: counts and sample IDs straight from sqlite, no in-memory."""
+    """Dev-only: counts and sample IDs straight from sqlite, no in-memory.
+
+    Phase 9: this endpoint is sqlite-only — postgres branch returns 503.
+    db.DB_PATH is None in the postgres branch (db_postgres.py stub).
+    """
+    if db.DB_PATH is None:
+        raise HTTPException(
+            status_code=503,
+            detail=f"debug/dbstate is sqlite-only; current backend is {config.METADATA_BACKEND}",
+        )
     import aiosqlite as _aios
     async with _aios.connect(db.DB_PATH) as conn:
         conn.row_factory = _aios.Row
@@ -373,7 +450,8 @@ async def admin_reset(
     expected = config.ADMIN_TOKEN
     if not expected:
         raise HTTPException(status_code=503, detail="ADMIN_TOKEN not configured")
-    if not x_admin_token or x_admin_token != expected:
+    # CR-01 — constant-time compare. Mirrors /metrics auth verbatim.
+    if not x_admin_token or not hmac.compare_digest(x_admin_token, expected):
         raise HTTPException(status_code=401, detail="invalid admin token")
 
     if mode == "all":
@@ -417,3 +495,15 @@ async def admin_reset(
     return result
 
 
+# Phase 8 (D-09, D-10): /metrics endpoint mirrors /admin/reset auth verbatim.
+# Same env var (ADMIN_TOKEN), same header (X-Admin-Token), same status codes
+# (503 on empty token, 401 on mismatch). include_in_schema=False keeps it out
+# of the public OpenAPI spec.
+# WR-03: factory takes no argument; the route handler reads config.ADMIN_TOKEN
+# per-request (mirrors /admin/reset behavior, survives in-process config reload).
+app.add_api_route(
+    "/metrics",
+    make_metrics_endpoint(),
+    methods=["GET"],
+    include_in_schema=False,
+)

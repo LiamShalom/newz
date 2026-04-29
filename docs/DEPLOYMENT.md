@@ -40,8 +40,7 @@ The **order matters** — both sides need the other's URL before CORS works. Pla
 4. Set env vars (Railway dashboard → Variables):
    - `DATA_DIR=/data` — must match the volume mount path or sqlite + clips land on the ephemeral container FS.
    - `FRONTEND_URL=<vercel url>` — fill after step 2 below; placeholder `http://localhost:5173` will work for the first boot.
-   - `OFFLINE_DEMO=false`
-   - `TWELVELABS_API_KEY=<secret>` and `ANTHROPIC_API_KEY=<secret>` — see `docs/CONFIGURATION.md`.
+   - `TWELVELABS_API_KEY=<secret>`, `ANTHROPIC_API_KEY=<secret>`, `GEMINI_API_KEY=<secret>` — see `docs/CONFIGURATION.md`.
 5. Wait for healthcheck `GET /health` to flip green (`backend/app.py:96`). Copy the public URL.
 
 ### 2. Frontend (Vercel)
@@ -131,7 +130,6 @@ Run this when uploaded clips disappear after a Railway redeploy or restart. Goal
 
 ## Known issues
 
-- **Volume not persisting across restarts (2026-04-25).** See "Persistent volume setup" + diagnostic checklist above. Until resolved, the demo cannot rely on overnight clip retention; re-seed via `backend/seed/demo_segment.py` after every restart (`backend/app.py:73`).
-- **Cold-start latency on Marengo first call (5-30s).** Mitigated by `_pre_warm_marengo` at lifespan startup (`backend/app.py:23`, `app.py:76`) — but if `seed/prewarm.mp4` is missing the warmup is silently skipped. Verify the file shipped in the Docker image.
-- **`OFFLINE_DEMO=true` is the documented WiFi-failure fallback.** If hackathon WiFi dies mid-demo, set on Railway and redeploy — Claude SDK pre-warm + downstream live calls are skipped (`backend/app.py:46`). See `CONFIGURATION.md` "Tunables".
+- **Volume not persisting across restarts (2026-04-25).** See "Persistent volume setup" + diagnostic checklist above.
+- **Cold-start latency on Marengo first call (5-30s).** Mitigated by `_pre_warm_marengo` at lifespan startup — but if `seed/prewarm.mp4` is missing the warmup is silently skipped. Verify the file shipped in the Docker image.
 - **`Procfile` is shipped alongside `Dockerfile`.** Railway uses the Dockerfile (per `railway.toml`); the `Procfile` is dev-only and won't be honored in production. <!-- VERIFY: Railway never falls back to Procfile when Dockerfile build fails -->

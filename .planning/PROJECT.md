@@ -22,11 +22,26 @@ Avoid "segment," "post," "story," "video" — they're ambiguous and create confu
 - Frontend: React 18 + Vite + TypeScript + Tailwind 4 on Vercel; iOS Safari MediaRecorder with MIME-type fallback ladder; SSE-driven feed auto-refresh; Stories-style montage cards with autoplay-on-scroll.
 - Codebase: ~28K LOC TS+Python, 177 commits, ~38h elapsed build window.
 
-**Active — v1.1 Pilot MVP for funding** (started 2026-04-27):
+**Active — v1.1 Pilot MVP for funding (Public-Launch-Ready Backbone)** (started 2026-04-27):
 
-Goal: get in front of funders (TwelveLabs feature/credits, Buerk Center @ UW, CoMotion @ UW) with something that works for real users, not just a demo. Reliability + missing core features. Backlog in `ROADMAP.md`.
+Goal: get in front of funders (TwelveLabs feature/credits, Buerk Center @ UW, CoMotion @ UW) with something that works for real users, not just a demo. Two parallel tracks under one milestone:
 
-Workflow: per-feature GSD. Each backlog item that gets worked on becomes its own phase under `.planning/phases/<NN>-<slug>/`. **No master sequenced roadmap** — features are picked off opportunistically.
+- **Backbone track (Liam, backend, sequenced phases 8–13):** Make Newz survivable in public — durable data via managed Postgres on Neon (✅ Phase 9 shipped), Vercel Blob for clip media, pre-publish AI moderation gate parallel-with-Marengo, anonymous reactive reporting + admin queue, full observability with structured logs + Sentry + Logfire tracing (✅ Phase 8 shipped).
+- **Feature track (Roan, UI, per-feature phases under `phases/<NN>-<slug>/`):** Fill core UX gaps — anonymous comments + shares (active), location/permissions gate, censoring UX, etc. No master sequence; pick by priority + dependency.
+
+Both tracks share anonymity invariants, OFFLINE_DEMO survivability, and the reliability-over-polish bias. Backlog in `ROADMAP.md`.
+
+**Workflow note:** Backbone phases use sequenced numbering (8-13). Feature track restarted at `01-` due to a parallel re-frame on 2026-04-27. Numbering will be reconciled at a later cleanup; no behavioral impact today.
+
+**Out of scope for v1.1 (deferred):**
+- Abuse controls (per-session/IP rate limits, bans) — deferred v1.2.
+- Accounts / login / profiles — anonymity-by-default remains load-bearing.
+- Live streaming, native iOS, map view, conventional likes — carried forward from v1.0 out-of-scope.
+
+**Inherited v1.0 gaps (not addressed in v1.1):**
+- Phase 03/04 verification + UAT gaps.
+- `montage-not-updating` debug session.
+- Calibration recalc against post-parent-flip clustering.
 
 ## Core Value
 
@@ -53,13 +68,21 @@ Workflow: per-feature GSD. Each backlog item that gets worked on becomes its own
 
 ### Active (v1.1 Pilot — see ROADMAP.md for full backlog)
 
-**Mando for pilot** (must ship before showing funders):
-- [ ] Anonymous comments on montages (no accounts, no display names, ever)
-- [ ] Share montages (Web Share API)
+**Backbone track (Liam, sequenced phases 8–13):**
+- [x] Phase 8 — Observability scaffolding (structured logs + Sentry + metrics + PII scrubbers) — shipped
+- [x] Phase 9 — Postgres migration to Neon (asyncpg + Alembic, METADATA_BACKEND dispatcher) — shipped
+- [ ] Phase 10 — Vercel Blob migration for clip media (server-mediated; signed URLs)
+- [ ] Phase 11 — Moderation gate (Gemini Flash-Lite + Cloudflare CSAM hash, parallel-with-Marengo)
+- [ ] Phase 12 — Reactive reporting + admin queue (anonymous reports; brigading defense)
+- [ ] Phase 13 — Observability deepening + OFFLINE_DEMO audit (Logfire spans, anonymity regression test)
+
+**Feature track (Roan, per-feature phases — mando for pilot):**
+- [ ] Anonymous comments on montages (no accounts, no display names, ever) — `phases/01-comments-and-sharing/` active
+- [ ] Share montages (Web Share API) — same phase
 - [ ] Clip selection logic fix (montages don't seem to actually pick clips)
 - [ ] Safari location services bug — permissions gate decision
 - [ ] Adding videorecordings to existing montages
-- [ ] Video censoring
+- [ ] Video censoring (UI side; pairs with Phase 11 backbone moderation)
 - [ ] Permissions gate (mic + cam + location flow)
 - [ ] Real test suite
 
@@ -133,4 +156,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Current State
 
 ---
-*Last updated: 2026-04-27 — opened v1.1 Pilot MVP milestone, switched to per-feature GSD*
+*Last updated: 2026-04-28 — merged v1.1 narratives: backbone (Liam, phases 8-13) + feature track (Roan, per-feature) under one Pilot MVP for Funding milestone*

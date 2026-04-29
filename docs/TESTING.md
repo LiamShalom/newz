@@ -67,31 +67,15 @@ Fixtures use `tmp_path` + `monkeypatch` to isolate the SQLite `DB_PATH` and `CLI
 
 The MIME-ladder tests are the unit-test mirror of Pitfall #3 (iOS Safari MediaRecorder) — they pin the candidate list ordering so a refactor cannot silently break the Safari path.
 
-## Mocking + offline
+## Mocking the embed call
 
-Two env flags double as testing levers — both default to `false`, both are read in `backend/config.py`:
+Backend integration tests stub `backend.pipeline.embed._call_marengo` directly via `monkeypatch.setattr` so no Twelve Labs network call happens during `pytest`. See `_stub_call_marengo` in `backend/tests/test_pipeline_integration.py` for the deterministic-vector helper.
 
-- **`USE_MOCK_EMBEDDINGS=true`** — `backend/pipeline/embed.py` returns deterministic random unit vectors instead of calling Twelve Labs Marengo. Used by:
-  - `make backend` target (avoids burning API credits during local dev)
-  - Backend integration tests (no network in test env)
-- **`OFFLINE_DEMO=true`** — Serves cached embeddings + cached compile output from `backend/seed/`. No external API calls. The hackathon-WiFi-died fallback (Pitfall #6).
+## Manual smoke test
 
-**Demo seed** — `backend/seed/seed_demo.py` uploads 3-4 staged clips from `backend/seed/demo/clip-*.mp4` to a running backend at hardcoded Caltech coords (`34.1377, -118.1253`). Run against a clean DB to reproduce the canonical demo flow:
+The iPhone Safari hardware gate ([`docs/IPHONE-GATE.md`](IPHONE-GATE.md)) is the load-bearing manual check — 13-row matrix covering record, retake, post, denied permissions, 30s auto-stop, and persistence across refresh. **MUST be PASS on a real iPhone (not DevTools emulator) before any embedding work.**
 
-```bash
-python -m backend.seed.seed_demo --base-url http://localhost:8000
-```
-
-The seed script is what judges' live clips will displace — it exists so the demo is never empty.
-
-## Manual smoke tests
-
-Two manual gates carry weight that automated tests do not:
-
-1. **iPhone Safari hardware gate** — see [`docs/IPHONE-GATE.md`](IPHONE-GATE.md). 13-row matrix covering record, retake, post, denied permissions, 30s auto-stop, and persistence across refresh. **MUST be PASS on a real iPhone (not DevTools emulator) before any embedding work.** Closes Pitfall #3.
-2. **Demo replay** — Start backend with `OFFLINE_DEMO=true`, run `seed_demo.py`, and confirm the feed renders 3-4 clustered clips with a compiled segment caption within 30s. This is the Tier-5 fallback for the live demo.
-
-The calibration notebook (`backend/notebooks/calibration.ipynb`) is a manual-execution Phase 3 deliverable — it tunes the composite-score threshold against a staged dataset. Not part of `pytest`, but failure to re-run it after clustering changes will silently regress demo quality.
+The calibration notebook (`backend/notebooks/calibration.ipynb`) is a manual-execution deliverable — it tunes the composite-score threshold against a staged dataset. Not part of `pytest`, but failure to re-run it after clustering changes will silently regress demo quality.
 
 ## What's NOT tested (by design)
 
@@ -102,7 +86,7 @@ This is a 60-second 4-clip hackathon demo, not a product. The following are inte
 - **Coverage thresholds** — no `pytest-cov` config, no `vitest --coverage` gate. Don't ship a coverage badge.
 - **Cross-browser matrix** — iOS Safari is the only target; other browsers are not regression-tested.
 - **CI integration** — no `.github/workflows/` test job. Tests run locally before commits.
-- **Twelve Labs Marengo live-call tests** — covered by `USE_MOCK_EMBEDDINGS`; live calls are reserved for the demo itself.
+- **Twelve Labs Marengo live-call tests** — `_call_marengo` is stubbed in tests; live calls are reserved for runtime.
 - **Claude Agent SDK live-call tests** — `test_compile_timeout.py` mocks `query` and `_run_agents`; full subagent runs are a manual gate.
 
 If a hackathon-scope change requires one of the above, it's likely a sign the change is out of scope (see `.planning/PROJECT.md` "Out of Scope").

@@ -174,8 +174,6 @@ def test_update_centroid_running_mean_renormalized():
 @pytest.mark.asyncio
 async def test_cluster_worker_creates_new_cluster_when_empty(tmp_db, monkeypatch):
     """Empty CLUSTERS: cluster_worker creates a new cluster, sets clip.cluster_id in DB."""
-    monkeypatch.setattr(config, "USE_MOCK_EMBEDDINGS", True)
-
     clip_id = await _insert_fake_clip(tmp_db)
     mock_vec = _unit_vec(seed=99)
 
@@ -211,8 +209,6 @@ async def test_cluster_worker_joins_when_above_threshold(tmp_db, monkeypatch):
     """Two clips with identical vec/GPS/ts: second clip joins the first cluster.
     Final state: 1 cluster, member_count=2, second broadcast has is_new_cluster=False.
     """
-    monkeypatch.setattr(config, "USE_MOCK_EMBEDDINGS", True)
-
     clip1 = await _insert_fake_clip(tmp_db, lat=34.1377, lng=-118.1253, ts=1_000_000.0)
     clip2 = await _insert_fake_clip(tmp_db, lat=34.1377, lng=-118.1253, ts=1_000_000.0)
 

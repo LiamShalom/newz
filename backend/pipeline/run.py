@@ -1,7 +1,11 @@
 import asyncio
 import logging
+import os
+
+from structlog.contextvars import bind_contextvars, unbind_contextvars
 
 from .. import config, db, events
+from ..observability.metrics import STAGE_DURATION
 from .embed import embed_worker
 from .cluster import cluster_worker
 from .compile import compile_segment
@@ -10,10 +14,27 @@ log = logging.getLogger(__name__)
 
 
 def _scrub(msg: str) -> str:
-    """Redact secrets from error strings broadcast over the public /events SSE."""
-    key = config.TWELVELABS_API_KEY
-    if key and key in msg:
-        msg = msg.replace(key, "***REDACTED***")
+    """Redact secrets from error strings broadcast over the public /events SSE.
+
+    WR-02 — scrub ALL configured secrets, not just TWELVELABS_API_KEY. A stack
+    trace string serialized to anonymous SSE subscribers may plausibly contain
+    any of:
+      - TWELVELABS_API_KEY (Marengo)
+      - GEMINI_API_KEY (caption pipeline)
+      - ADMIN_TOKEN (/admin/reset, /metrics)
+      - SENTRY_DSN (also writeable target — DSN is a credential)
+      - ANTHROPIC_API_KEY (Claude Agent SDK; not centralized in config — read env)
+    """
+    secrets = (
+        config.TWELVELABS_API_KEY,
+        config.GEMINI_API_KEY,
+        config.ADMIN_TOKEN,
+        config.SENTRY_DSN,
+        os.environ.get("ANTHROPIC_API_KEY", "").strip(),
+    )
+    for s in secrets:
+        if s and s in msg:
+            msg = msg.replace(s, "***REDACTED***")
     return msg
 
 
@@ -37,12 +58,28 @@ async def run_pipeline(clip_id: str) -> None:
     Phase 4.6: embed_worker returns exactly one (parent_clip_id, parent_vec) pair.
     cluster_worker is called once per upload using the parent's asset-scope vector.
     Compile fires only when the cluster has >=2 distinct parent uploads (Pivot 2).
+
+    Phase 8 (D-17): stage timing via STAGE_DURATION.labels(stage=...).time().
+    Stage enum: ingest|embed|cluster|compile|stitch.
+    `compile` and `stitch` wraps deferred to Plan 13 (those wraps live inside
+    backend/pipeline/compile.py and backend/pipeline/stitch.py, which Phase 11
+    moderation-gate work also touches — defer to minimize merge friction).
+
+    WR-01: bind `clip_id` into structlog contextvars at entry so every log
+    line emitted from this task (including bridged stdlib logs from
+    embed_worker / cluster_worker / compile_segment) carries clip_id as a
+    top-level structured JSON field, satisfying the PRIV-02 whitelist
+    (request_id, session_hash, clip_id) and the contract documented in
+    RequestIDAndContextvarsBind. Unbind in finally so the structlog
+    contextvars don't leak across asyncio tasks.
     """
+    bind_contextvars(clip_id=clip_id)
     try:
-        parent_clip_id, parent_vec = await embed_worker(clip_id)
+        with STAGE_DURATION.labels(stage="embed").time():
+            parent_clip_id, parent_vec = await embed_worker(clip_id)
         log.info(
-            "pipeline embed done clip_id=%s parent_dims=%d",
-            clip_id, len(parent_vec),
+            "pipeline embed done parent_dims=%d",
+            len(parent_vec),
         )
         await events.broadcast({
             "type": "pipeline_progress",
@@ -50,10 +87,11 @@ async def run_pipeline(clip_id: str) -> None:
             "stage": "embedded",
         })
 
-        cluster_id = await cluster_worker(parent_clip_id, parent_vec)
+        with STAGE_DURATION.labels(stage="cluster").time():
+            cluster_id = await cluster_worker(parent_clip_id, parent_vec)
         log.info(
-            "pipeline cluster done clip_id=%s cluster_id=%s",
-            clip_id, cluster_id,
+            "pipeline cluster done cluster_id=%s",
+            cluster_id,
         )
 
         await events.broadcast({
@@ -64,8 +102,10 @@ async def run_pipeline(clip_id: str) -> None:
 
         if await _should_compile(cluster_id):
             asyncio.create_task(compile_segment(cluster_id))
-            log.info("compile triggered cluster_id=%s parent=%s", cluster_id, clip_id)
+            log.info("compile triggered cluster_id=%s", cluster_id)
 
     except Exception as exc:
-        log.exception("pipeline failed clip_id=%s", clip_id)
+        log.exception("pipeline failed")
         await events.broadcast({"type": "pipeline_error", "clip_id": clip_id, "error": _scrub(str(exc))})
+    finally:
+        unbind_contextvars("clip_id")

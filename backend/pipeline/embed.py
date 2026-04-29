@@ -14,8 +14,6 @@ Private helpers:
         Synchronous dispatcher — runs in thread pool.
     _call_marengo(clip_path, clip_id) -> tuple[np.ndarray, list[dict], int]
         Synchronous Marengo embed with native segmentation. Run only inside run_in_executor.
-    _mock_embedding(clip_id) -> np.ndarray
-        Deterministic unit vector, stable across restarts (OFFLINE_DEMO safe).
 """
 
 import asyncio
@@ -29,15 +27,6 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 from .. import config, db
 
 log = logging.getLogger(__name__)
-
-
-def _mock_embedding(clip_id: str) -> np.ndarray:
-    """Deterministic 512-d unit vector keyed by clip_id (PYTHONHASHSEED-stable)."""
-    seed = int.from_bytes(clip_id.encode("utf-8")[:8], "big") % (2**32)
-    rng = np.random.default_rng(seed)
-    vec = rng.random(512).astype(np.float32)
-    vec /= np.linalg.norm(vec) + 1e-12
-    return vec
 
 
 @retry(
@@ -117,20 +106,6 @@ def _call_marengo(
 def _sync_embed(
     clip_path: str, clip_id: str
 ) -> tuple[np.ndarray, list[dict], int]:
-    if config.USE_MOCK_EMBEDDINGS:
-        log.info("embed mock clip_id=%s", clip_id)
-        parent_vec = _mock_embedding(clip_id)
-        # Generate 3 deterministic fake children at 0-3s, 3-6s, 6-9s
-        children = []
-        for i in range(3):
-            child_id_key = f"{clip_id}_child_{i * 3}"
-            cvec = _mock_embedding(child_id_key)
-            children.append({
-                "start_offset_sec": float(i * 3),
-                "end_offset_sec": float(i * 3 + 3),
-                "vec": cvec,
-            })
-        return parent_vec, children, 0
     return _call_marengo(clip_path, clip_id)
 
 
