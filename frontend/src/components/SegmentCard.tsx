@@ -1,25 +1,22 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { MessageCircle } from "lucide-react";
 
-/** iOS-style outlined curved share arrow. Stroked (not filled) so it reads
- *  the same visual weight as Lucide's stroked MessageCircle alongside it.
- *  Two strokes: the curved stem from lower-left to upper-right, and the
- *  arrowhead pointing NE at the end of the curve. */
+/** Curved share arrow with tapered stem — thin at the tail, thicker as it
+ *  sweeps into the arrowhead, then a chunky arrowhead pointing NE. Modeled
+ *  on the reference image Roan provided (arrow.jpg). The path is filled
+ *  (not stroked) so we can vary the line weight along its length — SVG
+ *  doesn't support variable stroke-width, so we trace the outer boundary
+ *  of the shape as a single closed path. */
 function ShareArrowIcon({ className }: { className?: string }) {
   return (
     <svg
       viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
+      fill="currentColor"
       xmlns="http://www.w3.org/2000/svg"
       aria-hidden
       className={className}
     >
-      <path d="M4 19c0-7 5-12 14-12" />
-      <path d="M13 3l5 4-5 4" />
+      <path d="M3.2 20.4 C 3.7 13.8, 7.5 7.6, 16 6.6 L 16 3 L 22 8.5 L 16 14 L 16 10.6 C 11 11.2, 7 13.5, 5.5 20.4 Z" />
     </svg>
   );
 }
