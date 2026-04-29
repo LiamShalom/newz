@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Pilot MVP for funding (Public-Launch-Ready Backbone)
 status: in_progress
-last_updated: "2026-04-29T21:00:00.000Z"
-last_activity: 2026-04-29 -- shipped Phase 10 (Vercel Blob migration); PR #9 open against main
+last_updated: "2026-04-29T22:00:00.000Z"
+last_activity: 2026-04-29 -- shipped Phase 02 (Safari permissions + recorder reliability); merged via PR #10
 progress:
   total_phases: 8
   completed_phases: 6
@@ -20,16 +20,16 @@ progress:
 **Core Value:** Multi-angle event clustering must work — show the same event captured by different people, automatically grouped and compiled into one coherent montage.
 
 **Current Focus:** v1.1 Pilot MVP for funding — two parallel tracks:
-- **Backbone (Liam):** Phase 9 (Postgres) shipped; Phase 10 (Vercel Blob) up next.
-- **Feature (Roan):** Phase `01-comments-and-sharing` shipped 2026-04-28 (pending real-iPhone UAT — T4.1–T4.4).
+- **Backbone (Liam):** Phase 9 (Postgres) + Phase 10 (Vercel Blob) shipped; Phase 11 (Moderation gate) next.
+- **Feature (Roan):** Phase 01 (comments + shares) + Phase 02 (Safari permissions) shipped; next feature TBD.
 
 ## Current Position
 
 | Field | Value |
 |-------|-------|
 | Active Milestone | v1.1 Pilot MVP for funding (Public-Launch-Ready Backbone) |
-| Active Phases | Backbone: 11 next (Moderation Gate) · Feature: `01-comments-and-sharing` (shipped, pending iPhone UAT) |
-| Status | Backbone phases 8 + 9 + 10 shipped; feature track Phase 01 shipped |
+| Active Phases | Backbone: 11 next (Moderation Gate) · Feature: 01 + 02 shipped, next TBD |
+| Status | Backbone phases 8 + 9 + 10 shipped; feature track Phase 01 + Phase 02 shipped |
 | Workflow | Two tracks: backbone uses sequenced phases (8-13); feature track uses per-feature GSD |
 
 ```
