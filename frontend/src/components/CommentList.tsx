@@ -15,35 +15,42 @@ export function CommentList({ comments }: { comments: Comment[] }) {
       </div>
     );
   }
+  // Comments arrive newest-first. To number commenters in arrival order
+  // (oldest = #1), reverse for the index lookup. Used as a visual fallback
+  // when the backend hasn't shipped commenter_index yet (deploy lag).
+  const arrivalOrder = [...comments].reverse();
+  const fallbackIndex = (c: Comment): number => arrivalOrder.indexOf(c) + 1;
+
   return (
     <ol className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
-      {comments.map((c) => (
-        <li key={c.id} className="flex items-start gap-3">
-          <div className="relative h-6 w-6 shrink-0">
-            <Ghost
-              aria-hidden
-              className="absolute inset-0 h-6 w-6 text-ink-secondary"
-            />
-            {c.commenter_index ? (
+      {comments.map((c) => {
+        const num = c.commenter_index || fallbackIndex(c);
+        return (
+          <li key={c.id} className="flex items-start gap-3">
+            <div className="relative h-6 w-6 shrink-0">
+              <Ghost
+                aria-hidden
+                className="absolute inset-0 h-6 w-6 text-ink-secondary"
+              />
               <span
-                aria-label={`commenter ${c.commenter_index}`}
+                aria-label={`commenter ${num}`}
                 style={{ right: "-2px", bottom: "-2px" }}
                 className="absolute grid h-3.5 min-w-[14px] place-items-center rounded-full bg-coral px-1 text-[9px] font-semibold leading-none text-white ring-2 ring-surface"
               >
-                {c.commenter_index}
+                {num}
               </span>
-            ) : null}
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="text-[11px] uppercase tracking-wide text-ink-secondary">
-              anonymous · {relativeTime(c.created_at)}
             </div>
-            <p className="mt-0.5 text-[15px] leading-snug text-ink-primary break-words">
-              {c.text}
-            </p>
-          </div>
-        </li>
-      ))}
+            <div className="min-w-0 flex-1">
+              <div className="text-[11px] uppercase tracking-wide text-ink-secondary">
+                anonymous · {relativeTime(c.created_at)}
+              </div>
+              <p className="mt-0.5 text-[15px] leading-snug text-ink-primary break-words">
+                {c.text}
+              </p>
+            </div>
+          </li>
+        );
+      })}
     </ol>
   );
 }
