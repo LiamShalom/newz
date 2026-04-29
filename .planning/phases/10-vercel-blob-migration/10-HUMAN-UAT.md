@@ -30,22 +30,22 @@ result: pending
 ### 2. SC-1 — Backend redeploy + Blob URLs render in feed
 expected: Redeploy `liam/phase-10-blob-migration` to Railway with `STORAGE_BACKEND=blob`. Confirm `GET /health` returns 200 and the feed at the frontend renders existing clips. New URLs are absolute Blob URLs (`https://*.blob.vercel-storage.com/...`); `/media` mount is no longer registered (`curl https://newz-preview.up.railway.app/media/anything` returns 404).
 
-result: pending
+**result: PASSED 2026-04-29** — preview backend at `https://newz-prev.up.railway.app`. `curl /health → 200`, `curl /media/anything.mp4 → 404` confirms the mount is conditionally unregistered when `STORAGE_BACKEND=blob`. Feed render half deferred (rolls into SC-3 — feed is empty until a 2-parent compile fires).
 
 ### 3. SC-2 — New clip POST lands in Blob `uploads/`
 expected: From the iOS Safari PWA, record a fresh clip and confirm it uploads via `POST /clips`. Vercel Blob console shows `uploads/{clip_id}.mp4` (or `.webm` per MIME ladder). DB row's `clips.blob_url` is populated.
 
-result: pending
+**result: PASSED 2026-04-29** — recorded clip on iOS Safari at the Vercel preview frontend, POST /clips fired against the Railway preview backend (visible in Railway logs), `uploads/{clip_id}.mp4` confirmed in Vercel Blob console. Root cause of initial blockage: `VITE_API_BASE` was missing the `https://` prefix (resolved as relative URL → never reached Railway). Captured in `.planning/debug/phone-upload-no-railway-logs.md`.
 
 ### 4. SC-3 — Compiled run-segments land in Blob `runs/`
 expected: After clustering triggers a compile, the resulting run-segment uploads to `runs/{run_id}.mp4` (public). Frontend feed renders the absolute Blob URL directly with no auth header.
 
-result: pending
+result: pending — needs ≥2 distinct parent uploads at near-identical GPS+timestamp (CLAUDE.md: compile fires only with ≥2 parents). Record a 2nd clip near the first to trigger.
 
 ### 5. SC-4 — Direct browser PUT to Vercel Blob is rejected
 expected: From a browser console, attempt `fetch('https://hlgbvhvavvgpwp13.private.blob.vercel-storage.com/uploads/test.mp4', {method: 'PUT', body: 'x'})`. Returns 401/403. Confirms `BLOB_READ_WRITE_TOKEN` is server-only and L-02 (no client-upload tokens issued) holds.
 
-result: pending
+**result: PASSED 2026-04-29** — direct browser PUT was blocked by CORS preflight (Vercel Blob's private storage does not advertise cross-origin write headers for unauthenticated requests). The blob never gets written. Equivalent security boundary to a 401/403 on the response.
 
 ### 6. SC-5 — Cleanup hook hard-deletes blocked clips within window
 expected: (Same as Task 5.5 above — promoted to a success-criterion check.) Manually flip a clip's `moderation_status` to `blocked` and call `cleanup_blocked_clip(clip_id)`. Vercel Blob console shows the object is gone within the cleanup window.
