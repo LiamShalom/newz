@@ -1,8 +1,12 @@
 import { useState, useCallback, useEffect, useRef } from "react";
+import { MessageCircle } from "lucide-react";
 import type { Segment } from "../types";
 import { relativeTime } from "../timeFormat";
 import { distanceLabel } from "../distance";
 import { LivePill } from "./LivePill";
+import { Comments } from "./Comments";
+import { fetchComments } from "../api";
+import { subscribeToCommentsFor } from "../commentsBus";
 
 function deriveSummary(s: Segment, locationStr: string | null): string {
   const angles = s.source_count > 1 ? `Captured from ${s.source_count} angles` : "Single-angle footage";
@@ -55,6 +59,31 @@ export function SegmentCard({
       : segment.location;
 
   const summary = deriveSummary(segment, locationStr ?? null);
+
+  const [commentsOpen, setCommentsOpen] = useState(false);
+  const [commentCount, setCommentCount] = useState<number | undefined>(undefined);
+
+  // Lazy: fetch the count once per card. Pilot scale; revisit if N gets large.
+  useEffect(() => {
+    let cancelled = false;
+    fetchComments(segment.id)
+      .then((cs) => {
+        if (!cancelled) setCommentCount(cs.length);
+      })
+      .catch(() => {
+        // Network blip — leave undefined so the badge stays hidden, no error UI.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [segment.id]);
+
+  // Live SSE increments — works whether the sheet is open or not.
+  useEffect(() => {
+    return subscribeToCommentsFor(segment.id, () => {
+      setCommentCount((c) => (c ?? 0) + 1);
+    });
+  }, [segment.id]);
 
   return (
     <article className="relative">
@@ -139,6 +168,25 @@ export function SegmentCard({
       <p className="mt-3 px-4 text-[13px] leading-[1.5] text-ink-primary">
         {segment.caption}
       </p>
+
+      <div className="mt-4 px-4 flex items-center gap-3">
+        <button
+          type="button"
+          onClick={() => setCommentsOpen(true)}
+          aria-label="open comments"
+          className="inline-flex items-center gap-1.5 rounded-full border border-hairline px-3 py-1.5 text-[13px] text-ink-primary hover:bg-surface-elevated"
+        >
+          <MessageCircle className="h-4 w-4" />
+          <span>{commentCount ?? "comment"}</span>
+        </button>
+      </div>
+
+      <Comments
+        segmentId={segment.id}
+        videoUrl={currentUrl ?? null}
+        open={commentsOpen}
+        onClose={() => setCommentsOpen(false)}
+      />
     </article>
   );
 }
