@@ -82,7 +82,7 @@ progress:
 - [ ] Run Vercel Blob AsyncBlobClient (vercel 0.5.8) spike before Phase 10 planning — bleeding-edge SDK
 - [ ] Benchmark Gemini 2.5 Flash-Lite latency on actual v1.0 staged demo dataset before Phase 11 planning
 - [ ] Start Cloudflare CSAM Scanning Tool / NCMEC approval application (unknown lead time) before Phase 11 scheduling
-- [ ] Retire SQLite (`db_sqlite.py`) once Neon cutover stabilizes. Mechanical: delete file, simplify `backend/db.py` to direct Postgres import, drop `aiosqlite` from requirements. Strategic: decide what `OFFLINE_DEMO=true` does without SQLite — in-memory stub vs. retire the flag entirely. Owner: Liam. Phase 01 (comments) added parallel SQLite + Postgres CRUD per current dispatcher contract; both go away together.
+- [x] **Retire SQLite (`db_sqlite.py`)** — DONE 2026-04-29. Deleted db_sqlite.py + 6 SQLite-fixtured test files; collapsed `backend/db.py` to a single `from .db_postgres import *`; removed METADATA_BACKEND env var (no more dispatcher); rewrote `embed.py` and `keyframes.py` SQLite call sites to use the asyncpg pool; rewrote `/debug/dbstate` for postgres; dropped `aiosqlite` from requirements. OFFLINE_DEMO flag retained for Sentry/pre-warm/blob-client-skip; lifespan now skips pool init under OFFLINE_DEMO so the firewalled-CI smoke posture survives without a SQLite fallback. DB-touching routes 5xx under OFFLINE_DEMO — by design.
 
 **Carry-overs:**
 - [ ] Re-run calibration notebook against parent-clustered code path (from v1.0 deferred)

@@ -178,12 +178,10 @@ async def embed_worker(clip_id: str) -> tuple[str, np.ndarray]:
         return clip_id, parent_vec
 
     except Exception:
-        import aiosqlite
-        async with aiosqlite.connect(db.DB_PATH) as conn:
-            await conn.execute(
-                "UPDATE clips SET embedding_status = 'failed' WHERE id = ?", (clip_id,)
-            )
-            await conn.commit()
+        # Mark clip as failed so retries / observability can see it.
+        await db.get_pool().execute(
+            "UPDATE clips SET embedding_status = 'failed' WHERE id = $1", clip_id,
+        )
         raise
     finally:
         if tmp_path:

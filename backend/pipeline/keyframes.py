@@ -14,7 +14,6 @@ import os
 import subprocess
 import tempfile
 
-import aiosqlite
 from imageio_ffmpeg import get_ffmpeg_exe
 
 from .. import db
@@ -33,22 +32,19 @@ async def _fetch_cluster_clips_with_duration(cluster_id: str) -> list[dict]:
     Mirrors db.fetch_cluster_clips but adds duration_sec without changing the
     public MCP surface used by subagents.
     """
-    async with aiosqlite.connect(db.DB_PATH) as conn:
-        conn.row_factory = aiosqlite.Row
-        cursor = await conn.execute(
-            """
-            SELECT c.id,
-                   COALESCE(NULLIF(c.path, ''), p.path) AS path,
-                   c.duration_sec,
-                   c.start_offset_sec,
-                   c.end_offset_sec
-            FROM clips c
-            LEFT JOIN clips p ON c.parent_id = p.id
-            WHERE c.cluster_id = ? ORDER BY c.ts ASC
-            """,
-            (cluster_id,),
-        )
-        rows = await cursor.fetchall()
+    rows = await db.get_pool().fetch(
+        """
+        SELECT c.id,
+               COALESCE(NULLIF(c.path, ''), p.path) AS path,
+               c.duration_sec,
+               c.start_offset_sec,
+               c.end_offset_sec
+        FROM clips c
+        LEFT JOIN clips p ON c.parent_id = p.id
+        WHERE c.cluster_id = $1 ORDER BY c.ts ASC
+        """,
+        cluster_id,
+    )
     return [dict(r) for r in rows]
 
 

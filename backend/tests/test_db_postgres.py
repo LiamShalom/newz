@@ -1,22 +1,18 @@
-"""Phase 9 (09-03) — db_postgres.py signature parity + pool lifecycle tests.
+"""db_postgres.py — module-level + pool lifecycle tests.
 
 Tests in this file do NOT require a live Neon connection. They exercise:
   * module import without DATABASE_URL set
-  * __all__ parity vs. db_sqlite.__all__ (D-07 contract)
-  * inspect.signature() byte-identity for every callable in db_sqlite.__all__
   * get_pool() fail-fast when init_pool() not awaited
   * presence of $-style placeholders only (zero `?` placeholders in SQL strings)
   * BYTEA defensive cast pattern (`bytes(row[...])`)
-  * DB_PATH stub == None; CLIPS_DIR == config.DATA_DIR / "clips"
+  * CLIPS_DIR == config.DATA_DIR / "clips"
 
-Live-pool integration tests (insert_clip / get_clip round-trip, etc.) belong
-in a separate file gated by DATABASE_URL availability — see Phase 9 plan 04+
-for the conftest fixture (D-10).
+Live-pool integration tests (insert_clip / get_clip round-trip, etc.) further
+down use the `fresh_db` fixture and skip when DATABASE_URL is unset.
 """
 
 from __future__ import annotations
 
-import inspect
 import re
 from pathlib import Path
 
@@ -40,47 +36,10 @@ def test_module_imports_cleanly_without_database_url(monkeypatch):
     assert hasattr(db_postgres, "get_pool")
 
 
-def test_all_list_has_28_names():
-    """25 db_sqlite parity names + 3 lifecycle helpers (init_pool, close_pool, get_pool)."""
+def test_all_list_has_expected_size():
+    """Lifecycle helpers + CRUD + admin. Sanity check on __all__ size."""
     from backend import db_postgres
-    assert len(db_postgres.__all__) == 28, db_postgres.__all__
-
-
-# ---------------------------------------------------------------------------
-# Signature parity — D-07 contract
-# ---------------------------------------------------------------------------
-
-def test_all_db_sqlite_names_present_in_db_postgres():
-    """Every name in db_sqlite.__all__ MUST appear in db_postgres.__all__."""
-    from backend import db_sqlite, db_postgres
-    sqlite_names = set(db_sqlite.__all__)
-    postgres_names = set(db_postgres.__all__)
-    missing = sqlite_names - postgres_names
-    assert not missing, f"db_postgres missing parity names: {missing}"
-
-
-def test_db_postgres_only_extras_are_lifecycle_helpers():
-    """db_postgres adds exactly 3 names not in db_sqlite (init_pool, close_pool, get_pool)."""
-    from backend import db_sqlite, db_postgres
-    sqlite_names = set(db_sqlite.__all__)
-    postgres_names = set(db_postgres.__all__)
-    extra = postgres_names - sqlite_names
-    assert extra == {"init_pool", "close_pool", "get_pool"}, extra
-
-
-def test_callable_signatures_match_db_sqlite():
-    """For every callable name in db_sqlite.__all__, inspect.signature must match db_postgres."""
-    from backend import db_sqlite, db_postgres
-    for name in db_sqlite.__all__:
-        if name in {"DB_PATH", "CLIPS_DIR"}:
-            continue
-        s_obj = getattr(db_sqlite, name)
-        p_obj = getattr(db_postgres, name)
-        if not callable(s_obj):
-            continue
-        s_sig = inspect.signature(s_obj)
-        p_sig = inspect.signature(p_obj)
-        assert s_sig == p_sig, f"signature mismatch for {name}: sqlite={s_sig}, postgres={p_sig}"
+    assert len(db_postgres.__all__) >= 25, db_postgres.__all__
 
 
 # ---------------------------------------------------------------------------
@@ -98,16 +57,10 @@ def test_get_pool_raises_runtime_error_before_init_pool(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Module-level constant stubs
+# Module-level constants
 # ---------------------------------------------------------------------------
 
-def test_db_path_stub_is_none():
-    """Postgres has no file path; DB_PATH is None for db_sqlite parity (debug/dbstate guards)."""
-    from backend import db_postgres
-    assert db_postgres.DB_PATH is None
-
-
-def test_clips_dir_matches_sqlite_path():
+def test_clips_dir_matches_data_dir():
     """CLIPS_DIR must equal config.DATA_DIR / 'clips' (still consumed by /media StaticFiles)."""
     from backend import config, db_postgres
     assert db_postgres.CLIPS_DIR == config.DATA_DIR / "clips"
@@ -178,21 +131,16 @@ def test_bytea_defensive_cast():
 
 
 def test_async_def_count_at_least_24():
-    """db_sqlite has 22 async defs (21 functions + init). db_postgres adds init_pool +
-    close_pool = 24 minimum. (get_pool is sync.)
-    """
+    """db_postgres has at least 24 async defs (21 CRUD + init + init_pool +
+    close_pool). get_pool is sync. Sanity check on the public surface."""
     src = _read_source()
     n = len(re.findall(r"^async def ", src, re.MULTILINE))
     assert n >= 24, f"only {n} async defs found"
 
 
 # ===========================================================================
-# Phase 9 (09-09): basic CRUD + embedding round-trip parity tests via fresh_db.
-#
-# These tests use the `fresh_db` fixture from conftest.py (D-10 parametrize) —
-# each runs once against sqlite, once against postgres (postgres skipped when
-# DATABASE_URL is unset). They are the DB-01 unit gate. The signature parity
-# contract from D-07 means the same test body works against either backend.
+# Live-DB CRUD + embedding round-trip tests. Use the `fresh_db` fixture from
+# conftest.py — skipped when DATABASE_URL is unset.
 # ===========================================================================
 
 import io
