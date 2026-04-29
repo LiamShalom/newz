@@ -277,11 +277,12 @@ export function Recorder() {
   }
 
   if (phase.kind === "error") {
-    const onRetry =
-      phase.error === "location-unavailable"
-        ? () => initializePermissions()
-        : undefined;
-    return <PermissionErrorScreen kind={phase.error} onRetry={onRetry} />;
+    return (
+      <PermissionErrorScreen
+        kind={phase.error}
+        onRetry={() => initializePermissions()}
+      />
+    );
   }
 
   if (
