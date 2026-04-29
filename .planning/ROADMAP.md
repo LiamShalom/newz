@@ -38,7 +38,7 @@ Per-feature GSD: each backlog item becomes its own phase under `phases/<NN>-<slu
 | 2 | Clip selection logic fix | Bug | Liam | 🟡 Open — montage doesn't seem to pick clips; may need redesign | — |
 | 3 | Location bug ("UW shows Pasadena") | Bug | Liam | ✅ Shipped (PR #2, `beda750`) | — |
 | 4 | Safari location services bug + permissions gate decision | Bug + Decision | Roan | 🟡 Open — see strategic Q in PROJECT.md | — |
-| 5 | **Anonymous comments + shares** | Feature | Roan | 🟢 Plan ready, executing | `phases/01-comments-and-sharing/` |
+| 5 | **Anonymous comments + shares** | Feature | Roan | ✅ Shipped (pending real-iPhone verification) | `phases/01-comments-and-sharing/` |
 | 6 | Video censoring (UI side; pairs with Phase 11 backbone) | Feature | Roan | 🟡 Open — depends on backbone Phase 11 | — |
 | 7 | Permissions gate (mic + cam + location flow) | Feature | Roan | 🟡 Open — depends on #4 | — |
 | 8 | Adding videorecordings to existing montages | Bug | Liam | 🟡 Open — feature exists but doesn't work | — |
@@ -70,7 +70,7 @@ Per-feature GSD: each backlog item becomes its own phase under `phases/<NN>-<slu
 - [ ] Phase 11: Moderation gate — open · Liam
 - [ ] Phase 12: Reactive reporting + admin queue — open · Liam
 - [ ] Phase 13: Observability deepening + OFFLINE_DEMO audit — open · Liam
-- [ ] Phase 01: Anonymous comments + shares — plan ready, executing · Roan
+- [x] Phase 01: Anonymous comments + shares — shipped (pending real-iPhone verification) · Roan
 
 ### v1.0 Hackathon MVP (shipped)
 
@@ -153,7 +153,7 @@ Full archive: [milestones/v1.0-ROADMAP.md](./milestones/v1.0-ROADMAP.md)
 | 11. Moderation Gate | v1.1 backbone | 0/TBD | Not started | — |
 | 12. Reactive Reporting + Admin Queue | v1.1 backbone | 0/TBD | Not started | — |
 | 13. Observability Deepening + OFFLINE_DEMO Audit | v1.1 backbone | 0/TBD | Not started | — |
-| 01. Anonymous comments + shares | v1.1 feature | 0/1 | Plan ready | — |
+| 01. Anonymous comments + shares | v1.1 feature | 1/1 | Shipped (pending iPhone UAT) | 2026-04-28 |
 
 ---
 

@@ -4,13 +4,13 @@ milestone: v1.1
 milestone_name: Pilot MVP for funding (Public-Launch-Ready Backbone)
 status: in_progress
 last_updated: "2026-04-28T00:00:00.000Z"
-last_activity: 2026-04-28 -- merged backbone + feature tracks
+last_activity: 2026-04-28 -- shipped Phase 01 comments + shares (pending iPhone UAT)
 progress:
   total_phases: 8
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 19
-  completed_plans: 14
-  percent: 50
+  completed_plans: 15
+  percent: 56
 ---
 
 # Project State: Newz
@@ -20,16 +20,16 @@ progress:
 **Core Value:** Multi-angle event clustering must work — show the same event captured by different people, automatically grouped and compiled into one coherent montage.
 
 **Current Focus:** v1.1 Pilot MVP for funding — two parallel tracks:
-- **Backbone (Liam):** Phase 9 (Postgres) just shipped; Phase 10 (Vercel Blob) up next.
-- **Feature (Roan):** Phase `01-comments-and-sharing` planned, ready for execute.
+- **Backbone (Liam):** Phase 9 (Postgres) shipped; Phase 10 (Vercel Blob) up next.
+- **Feature (Roan):** Phase `01-comments-and-sharing` shipped 2026-04-28 (pending real-iPhone UAT — T4.1–T4.4).
 
 ## Current Position
 
 | Field | Value |
 |-------|-------|
 | Active Milestone | v1.1 Pilot MVP for funding (Public-Launch-Ready Backbone) |
-| Active Phases | Backbone: 10 next (planning) · Feature: `01-comments-and-sharing` (ready to execute) |
-| Status | Backbone phases 8 + 9 shipped; feature track plan drafted |
+| Active Phases | Backbone: 10 next (planning) · Feature: `01-comments-and-sharing` (shipped, pending iPhone UAT) |
+| Status | Backbone phases 8 + 9 shipped; feature track Phase 01 shipped |
 | Workflow | Two tracks: backbone uses sequenced phases (8-13); feature track uses per-feature GSD |
 
 ```
@@ -110,19 +110,21 @@ None blocking the active phase (`01-comments-and-sharing` ready to execute; Phas
 
 ## Session Continuity
 
-**Last session ended:** 2026-04-28 — pulled main, merged backbone (phases 8 + 9 shipped) into feature branch.
+**Last session ended:** 2026-04-28 — Phase 01 (comments + shares) shipped end-to-end. Wave 4 verification (T4.1–T4.4) deferred to next human session because it requires a real iPhone (iOS Safari keyboard, OG preview unfurl, Web Share API) and a running backend in a network-enabled environment.
 
-**Next action (feature track):** Execute `phases/01-comments-and-sharing/01-PLAN.md` — Wave 1 backend skeleton, then Wave 2 UI, then Wave 3 share + public route. Roan owns all waves.
+**Next action (feature track):**
+1. Run Wave 4 verification (T4.1–T4.4) on a real iPhone + desktop browser. See `phases/01-comments-and-sharing/01-SUMMARY.md` for the checklist.
+2. After UAT passes, flip ROADMAP Mando #5 status from "pending iPhone UAT" to plain "✅ Shipped" and pick the next feature.
 
 **Next action (backbone track):** Liam to plan Phase 10 (Vercel Blob migration) once spike + dependency context cleared.
 
 **Key files to load on resume:**
 
-- `.planning/phases/01-comments-and-sharing/01-CONTEXT.md` — feature scope, decisions, open questions
-- `.planning/phases/01-comments-and-sharing/01-PLAN.md` — task breakdown
-- `.planning/phases/09-postgres-migration-neon-asyncpg-alembic/09-CONTEXT.md` — backbone Phase 9 context (just shipped)
+- `.planning/phases/01-comments-and-sharing/01-SUMMARY.md` — what shipped, decisions, pending verification
+- `.planning/phases/01-comments-and-sharing/01-PLAN.md` — original task breakdown
+- `.planning/phases/09-postgres-migration-neon-asyncpg-alembic/09-CONTEXT.md` — backbone Phase 9 context
 - `.planning/PROJECT.md` — v1.1 active scope (both tracks), anonymity constraint, nomenclature
 - `.planning/ROADMAP.md` — full v1.1 backlog
 
 ---
-*Last updated: 2026-04-28 after merging main → feature/comments-and-sharing*
+*Last updated: 2026-04-28 — Phase 01 (comments + shares) shipped, pending Wave 4 iPhone UAT*
