@@ -1,9 +1,10 @@
 ---
 slug: video-upload-path-null-blob
-status: root_cause_found
+status: resolved
 trigger: "POST /clips fails on backend preview deployment with asyncpg.exceptions.NotNullViolationError on column clips.path"
 created: 2026-04-28
 updated: 2026-04-28
+resolved_by: f7700b7 fix(10) relax clips.path NOT NULL for blob-mode INSERT; db4dd8d fix(10) download blob URL to tempfile in embed_worker
 branch: liam/phase-10-blob-migration
 phase: 10-vercel-blob-migration
 ---
