@@ -60,6 +60,28 @@ export async function postClip(args: {
 // montage" in copy. No session_id is ever returned in responses.
 // ---------------------------------------------------------------------------
 
+/**
+ * Fetch a single segment by id (T3.2 — standalone /m/:segmentId view).
+ * Resolves to a Segment with the same `url` / `video_urls` synthesis as
+ * fetchSegments() applies, or rejects on 404 / network failure.
+ */
+export async function fetchSegment(
+  segmentId: string,
+): Promise<Segment & { url: string | null }> {
+  const res = await fetch(
+    `${API_BASE}/segments/${encodeURIComponent(segmentId)}`,
+  );
+  if (!res.ok) throw new Error(`segment ${res.status}`);
+  const s = (await res.json()) as Segment;
+  return {
+    ...s,
+    url: s.video_url ? `${API_BASE}${s.video_url}` : null,
+    video_urls: s.video_urls
+      ? s.video_urls.map((v) => (v ? `${API_BASE}${v}` : null))
+      : null,
+  };
+}
+
 export async function fetchComments(segmentId: string): Promise<Comment[]> {
   const res = await fetch(
     `${API_BASE}/segments/${encodeURIComponent(segmentId)}/comments`,
