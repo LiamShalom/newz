@@ -495,14 +495,18 @@ async def _stitch_segment_runs(cluster_id: str) -> list[str]:
             return run_id, None
         log.info("trim ok run_id=%s elapsed_ms=%d", run_id, elapsed_ms)
         if blob_mode:
-            # trim_window returns the absolute Blob URL on upload success and
-            # the LOCAL tempfile path on upload failure. The tempfile has
-            # already been deleted above; surfacing it as a video_url leaks an
-            # unservable `/tmp/...` string into the segment row (frontend
-            # tries `${API_BASE}/tmp/...` → 404). Treat anything that isn't an
-            # absolute http URL as a failure and emit None — the feed then
-            # renders "Compiling…" cleanly via fetch_recent_segments fallback.
-            if isinstance(result, str) and result.startswith("http"):
+            # trim_window returns either an absolute Blob URL (legacy) or the
+            # relative backend-proxy path `/runs/{run_id}.mp4` (current — the
+            # provisioned Vercel Blob store is private-only, so reads go
+            # through the FastAPI proxy). On upload failure it returns the
+            # local tempfile path (already unlinked above), which would leak
+            # `/tmp/...` into the segment row — frontend would request
+            # `${API_BASE}/tmp/...` and 404. Accept http URLs and `/runs/`
+            # paths; reject everything else and emit None so the feed renders
+            # "Compiling…" cleanly via fetch_recent_segments fallback.
+            if isinstance(result, str) and (
+                result.startswith("http") or result.startswith("/runs/")
+            ):
                 return run_id, result
             log.warning(
                 "trim+upload result not a URL run_id=%s result_prefix=%r — emitting None",
