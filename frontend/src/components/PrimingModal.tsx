@@ -30,7 +30,7 @@ export function PrimingModal({ onContinue }: Props) {
         <button
           type="button"
           onClick={onContinue}
-          className="no-blue-focus mt-6 w-full h-14 rounded-full bg-gradient-to-r from-coral-light to-coral text-white font-semibold text-2xl"
+          className="no-blue-focus mt-6 w-full h-12 rounded-full bg-gradient-to-r from-coral-light to-coral text-white font-semibold text-lg"
         >
           Continue
         </button>
