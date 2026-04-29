@@ -56,13 +56,45 @@ export function CommentSheet({
     };
   }, [open, segmentId]);
 
-  // Lock body scroll while open.
+  // iOS-grade body-scroll-lock: pin body via position:fixed with the current
+  // scrollY, then restore on close. overflow:hidden alone leaks on iOS Safari.
   useEffect(() => {
     if (!open) return;
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
+    const scrollY = window.scrollY;
+    const body = document.body;
+    body.style.position = "fixed";
+    body.style.top = `-${scrollY}px`;
+    body.style.left = "0";
+    body.style.right = "0";
+    body.style.overflow = "hidden";
     return () => {
-      document.body.style.overflow = prev;
+      body.style.position = "";
+      body.style.top = "";
+      body.style.left = "";
+      body.style.right = "";
+      body.style.overflow = "";
+      window.scrollTo(0, scrollY);
+    };
+  }, [open]);
+
+  // VisualViewport offset for iOS keyboard fallback (older Safari versions
+  // where dvh alone doesn't reposition fixed elements). Modern iOS handles
+  // this natively via dvh; this is belt-and-suspenders.
+  const [kbInset, setKbInset] = useState(0);
+  useEffect(() => {
+    if (!open) return;
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const onResize = () => {
+      const inset = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+      setKbInset(inset);
+    };
+    onResize();
+    vv.addEventListener("resize", onResize);
+    vv.addEventListener("scroll", onResize);
+    return () => {
+      vv.removeEventListener("resize", onResize);
+      vv.removeEventListener("scroll", onResize);
     };
   }, [open]);
 
@@ -92,8 +124,13 @@ export function CommentSheet({
         className="absolute inset-0 bg-black/50"
       />
       <div
-        className="absolute inset-x-0 bottom-0 flex flex-col rounded-t-2xl bg-surface shadow-2xl"
-        style={{ height: "70dvh", maxHeight: "70dvh" }}
+        className="absolute inset-x-0 flex flex-col rounded-t-2xl bg-surface shadow-2xl"
+        style={{
+          bottom: kbInset,
+          height: "70dvh",
+          maxHeight: "70dvh",
+          overscrollBehavior: "contain",
+        }}
       >
         <header className="flex items-center justify-between border-b border-hairline px-4 py-3">
           <h2 className="text-[15px] font-semibold text-ink-primary">
