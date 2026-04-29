@@ -69,7 +69,7 @@ export function CommentComposer({
           placeholder="add a comment"
           rows={1}
           aria-label="comment text"
-          className="flex-1 resize-none rounded-2xl border border-hairline bg-surface-elevated px-3 py-2 text-[15px] leading-snug text-ink-primary placeholder:text-ink-secondary focus:outline-none focus-visible:outline-none focus:ring-1 focus:ring-coral focus:border-coral"
+          className="flex-1 resize-none rounded-2xl border border-hairline bg-surface-elevated px-3 py-2 text-[15px] leading-snug text-ink-primary placeholder:text-ink-secondary focus:outline-none focus:ring-1 focus:ring-coral focus:border-coral"
           style={{ maxHeight: "120px" }}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
