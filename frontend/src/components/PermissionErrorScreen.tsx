@@ -22,11 +22,11 @@ interface Props {
 const COPY = {
   "camera-blocked": {
     heading: "Camera blocked",
-    body: "Open iPhone Settings → Apps → Safari → Camera, allow access, then come back and tap Try again.",
+    body: "iPhone Settings → Apps → Safari → Camera → Allow. Then tap Try again.",
   },
   "location-blocked": {
     heading: "Location blocked",
-    body: "Open iPhone Settings → Privacy & Security → Location Services → Safari Websites → While Using App, then come back and tap Try again.",
+    body: "Check both: (1) Settings → Privacy & Security → Location Services is ON. (2) Same screen, scroll to Safari Websites → While Using App. Then tap Try again.",
   },
   "location-unavailable": {
     heading: "Couldn't get your location",
