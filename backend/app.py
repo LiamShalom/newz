@@ -20,7 +20,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from structlog.contextvars import bind_contextvars
 
-from . import config, db, events, rate_limit
+from . import config, db, events, rate_limit, content_filter
 from .pipeline.run import run_pipeline
 from .models import IngestResponse, CommentCreateRequest
 from .observability.middleware import XFFStrip, RequestIDAndContextvarsBind
@@ -285,6 +285,9 @@ async def post_comment(
             detail="too many comments — slow down",
             headers={"Retry-After": str(retry_after)},
         )
+    filter_result = content_filter.check(text)
+    if filter_result.blocked:
+        raise HTTPException(status_code=400, detail=f"comment rejected: {filter_result.reason}")
     comment = await db.insert_comment(segment_id, x_session_uuid, text)
     await events.broadcast({
         "type": "comment_added",
