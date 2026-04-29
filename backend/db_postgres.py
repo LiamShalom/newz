@@ -45,6 +45,8 @@ __all__ = [
     "get_cluster", "count_distinct_parents_in_cluster",
     # Segments
     "insert_segment", "fetch_recent_segments", "get_segment_for_cluster",
+    # Comments (Phase 01 feature track)
+    "insert_comment", "list_comments", "count_comments_since",
     # Compile lock
     "set_compile_in_flight", "is_compile_in_flight",
     # Cluster clip queries
@@ -406,6 +408,44 @@ async def get_segment_for_cluster(cluster_id: str) -> dict | None:
         "SELECT * FROM segments WHERE cluster_id = $1", cluster_id,
     )
     return dict(row) if row else None
+
+
+# ---------------------------------------------------------------------------
+# Phase 01 (feature track): anonymous comments
+# session_uuid is server-side only — never returned to clients.
+# ---------------------------------------------------------------------------
+
+async def insert_comment(segment_id: str, session_uuid: str, text: str) -> dict:
+    """Append a comment. Returns the public-safe dict (no session_uuid)."""
+    now = time.time()
+    pool = get_pool()
+    row = await pool.fetchrow(
+        """INSERT INTO comments (segment_id, session_uuid, text, created_at)
+           VALUES ($1, $2, $3, $4) RETURNING id""",
+        segment_id, session_uuid, text, now,
+    )
+    return {"id": row["id"], "segment_id": segment_id, "text": text, "created_at": now}
+
+
+async def list_comments(segment_id: str, limit: int = 200) -> list[dict]:
+    """Return public-safe comments for a segment, newest first. Excludes session_uuid."""
+    pool = get_pool()
+    rows = await pool.fetch(
+        """SELECT id, text, created_at FROM comments
+           WHERE segment_id = $1 ORDER BY created_at DESC LIMIT $2""",
+        segment_id, limit,
+    )
+    return [dict(r) for r in rows]
+
+
+async def count_comments_since(session_uuid: str, since_ts: float) -> int:
+    """Count comments authored by this session since `since_ts` (Unix seconds). For rate limiting."""
+    pool = get_pool()
+    row = await pool.fetchrow(
+        "SELECT COUNT(*) AS n FROM comments WHERE session_uuid = $1 AND created_at >= $2",
+        session_uuid, since_ts,
+    )
+    return int(row["n"]) if row else 0
 
 
 # ---------------------------------------------------------------------------

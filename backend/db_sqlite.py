@@ -31,6 +31,8 @@ __all__ = [
     "get_cluster", "count_distinct_parents_in_cluster",
     # Segments
     "insert_segment", "fetch_recent_segments", "get_segment_for_cluster",
+    # Comments (Phase 01 feature track)
+    "insert_comment", "list_comments", "count_comments_since",
     # Compile lock
     "set_compile_in_flight", "is_compile_in_flight",
     # Cluster clip queries
@@ -414,6 +416,49 @@ async def get_segment_for_cluster(cluster_id: str) -> dict | None:
         ) as cur:
             row = await cur.fetchone()
     return dict(row) if row else None
+
+
+# ---------------------------------------------------------------------------
+# Phase 01 (feature track): anonymous comments
+# session_uuid is server-side only — never returned to clients.
+# ---------------------------------------------------------------------------
+
+async def insert_comment(segment_id: str, session_uuid: str, text: str) -> dict:
+    """Append a comment. Returns the public-safe dict (no session_uuid)."""
+    now = time.time()
+    async with aiosqlite.connect(DB_PATH) as conn:
+        cur = await conn.execute(
+            """INSERT INTO comments (segment_id, session_uuid, text, created_at)
+               VALUES (?, ?, ?, ?) RETURNING id""",
+            (segment_id, session_uuid, text, now),
+        )
+        row = await cur.fetchone()
+        await conn.commit()
+    return {"id": row[0], "segment_id": segment_id, "text": text, "created_at": now}
+
+
+async def list_comments(segment_id: str, limit: int = 200) -> list[dict]:
+    """Return public-safe comments for a segment, newest first. Excludes session_uuid."""
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+            """SELECT id, text, created_at FROM comments
+               WHERE segment_id = ? ORDER BY created_at DESC LIMIT ?""",
+            (segment_id, limit),
+        ) as cur:
+            rows = await cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def count_comments_since(session_uuid: str, since_ts: float) -> int:
+    """Count comments authored by this session since `since_ts` (Unix seconds). For rate limiting."""
+    async with aiosqlite.connect(DB_PATH) as conn:
+        async with conn.execute(
+            "SELECT COUNT(*) FROM comments WHERE session_uuid = ? AND created_at >= ?",
+            (session_uuid, since_ts),
+        ) as cur:
+            row = await cur.fetchone()
+    return int(row[0]) if row else 0
 
 
 async def set_compile_in_flight(cluster_id: str, value: bool, ttl_seconds: float = 30.0) -> bool:

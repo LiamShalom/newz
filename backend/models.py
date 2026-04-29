@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class Clip(BaseModel):
@@ -13,3 +13,7 @@ class Clip(BaseModel):
 class IngestResponse(BaseModel):
     clip_id: str
     status: str
+
+
+class CommentCreateRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=300)

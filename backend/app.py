@@ -22,7 +22,7 @@ from structlog.contextvars import bind_contextvars
 
 from . import config, db, events
 from .pipeline.run import run_pipeline
-from .models import IngestResponse
+from .models import IngestResponse, CommentCreateRequest
 from .observability.middleware import XFFStrip, RequestIDAndContextvarsBind
 from .observability.metrics import MetricsMiddleware, make_metrics_endpoint, STAGE_DURATION
 
@@ -241,6 +241,57 @@ async def sse_events(request: Request):
             await events.unsubscribe(q)
 
     return EventSourceResponse(event_stream(), ping=15)
+
+
+# ---------------------------------------------------------------------------
+# Phase 01 (feature track): anonymous comments on segments (montages)
+#   POST /segments/{id}/comments — body { text }; X-Session-UUID header (server-side only)
+#   GET  /segments/{id}/comments — public-safe list, no session_uuid leakage
+# ---------------------------------------------------------------------------
+
+async def _segment_exists(segment_id: str) -> bool:
+    """Existence check via get_segment_for_cluster reverse-lookup is awkward; use raw query.
+
+    No FK enforcement on SQLite path (PRAGMA foreign_keys not enabled), so we 404 explicitly
+    instead of relying on IntegrityError discrimination across backends.
+    """
+    if config.METADATA_BACKEND == "postgres" and not config.OFFLINE_DEMO:
+        pool = db.get_pool()
+        row = await pool.fetchrow("SELECT 1 FROM segments WHERE id = $1", segment_id)
+        return row is not None
+    import aiosqlite
+    async with aiosqlite.connect(db.DB_PATH) as conn:
+        async with conn.execute("SELECT 1 FROM segments WHERE id = ?", (segment_id,)) as cur:
+            return (await cur.fetchone()) is not None
+
+
+@app.post("/segments/{segment_id}/comments", status_code=201)
+async def post_comment(
+    segment_id: str,
+    payload: CommentCreateRequest,
+    x_session_uuid: str | None = Header(default=None, alias="X-Session-UUID"),
+):
+    if not x_session_uuid:
+        raise HTTPException(status_code=400, detail="X-Session-UUID header required")
+    if not await _segment_exists(segment_id):
+        raise HTTPException(status_code=404, detail="segment not found")
+    text = payload.text.strip()
+    if not (1 <= len(text) <= 300):
+        raise HTTPException(status_code=400, detail="text must be 1-300 chars after trim")
+    comment = await db.insert_comment(segment_id, x_session_uuid, text)
+    await events.broadcast({
+        "type": "comment_added",
+        "segment_id": segment_id,
+        "comment": comment,
+    })
+    return comment
+
+
+@app.get("/segments/{segment_id}/comments")
+async def list_segment_comments(segment_id: str):
+    if not await _segment_exists(segment_id):
+        raise HTTPException(status_code=404, detail="segment not found")
+    return {"comments": await db.list_comments(segment_id)}
 
 
 @app.get("/debug/clusters", include_in_schema=False)
