@@ -282,20 +282,40 @@ def _build_stitch_refs(selected: list[dict]) -> list[dict]:
     max(end)]. That collapsed two same-parent picks into a window covering
     the FULL parent duration, so a 90s parent → 90s composite → slow Gemini
     call → 300s budget exhaustion. See .planning/debug/compile-timeout-300s.md.
+
+    Blob mode (Phase 10): when parent_blob_url is populated and parent_path
+    is None, emit the Blob URL as `path` plus the bearer-token headers so a
+    downstream tempdir-download (see _resolve_caption_input_to_local) can
+    fetch the source clip. Local mode is unchanged.
     """
+    from urllib.parse import urlparse
     refs: list[dict] = []
     for child in selected:
+        parent_blob_url = child.get("parent_blob_url")
         parent_path = child.get("parent_path")
-        if not parent_path:
+        src: str | None = None
+        ref_headers: dict[str, str] | None = None
+        if parent_blob_url:
+            from ..storage.blob import authorized_blob_input
+            pathname = urlparse(parent_blob_url).path.lstrip("/")
+            url, headers = authorized_blob_input(pathname)
+            src = url
+            ref_headers = headers
+        elif parent_path:
+            src = parent_path
+        if not src:
             continue
         start = float(child.get("start_offset_sec") or 0.0)
         end = child.get("end_offset_sec")
         end = float(end) if end is not None else start + 3.0
-        refs.append({
-            "path": parent_path,
+        ref: dict = {
+            "path": src,
             "start_offset_sec": start,
             "end_offset_sec": end,
-        })
+        }
+        if ref_headers is not None:
+            ref["headers"] = ref_headers
+        refs.append(ref)
     return refs
 
 
@@ -330,21 +350,56 @@ async def generate_caption(
     composite_path = config.DATA_DIR / "clips" / f"{cluster_id}_caption_input.mp4"
     composite_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # Phase 10: Blob-mode refs carry HTTPS URLs that ffmpeg's `_sync_stitch`
+    # can't ingest directly (private blobs require Authorization headers, and
+    # the sync path doesn't pass them). Pre-download to a tempdir and rewrite
+    # refs to local paths before calling stitch_clips. Local-mode refs pass
+    # through unchanged. Mirrors compile.py:_download_refs_to_tempdir; kept
+    # local here to avoid the compile↔caption_pipeline import cycle.
+    needs_download = any(r["path"].startswith("http") for r in stitch_refs)
+    import tempfile
+    tmpdir_ctx = tempfile.TemporaryDirectory() if needs_download else None
     try:
-        stitched = await stitch_clips(stitch_refs, str(composite_path))
-        # CRITICAL: stitch_clips returns clip_refs[0]["path"] (a SOURCE FILE) on failure.
-        # We must only proceed when stitched == composite_path; otherwise our finally
-        # block would unlink the user's original recording. See the data-loss bug
-        # documented in the cleanup section below.
-        if stitched != str(composite_path) or not Path(composite_path).exists():
-            log.warning(
-                "generate_caption: stitch did not produce composite at %s (got %r) — skipping Gemini",
-                composite_path, stitched,
+        if needs_download and tmpdir_ctx is not None:
+            from ..storage import blob_client
+            tmpdir = tmpdir_ctx.name
+
+            async def _dl_one(ref: dict, idx: int) -> dict:
+                src_url = ref["path"]
+                if not src_url.startswith("http"):
+                    return ref
+                local = f"{tmpdir}/cap-src-{idx}.mp4"
+                client = blob_client.get_client()
+                headers = ref.get("headers") or {}
+                async with client.stream("GET", src_url, headers=headers) as resp:
+                    resp.raise_for_status()
+                    with open(local, "wb") as f:
+                        async for chunk in resp.aiter_bytes(chunk_size=64 * 1024):
+                            f.write(chunk)
+                return {**ref, "path": local, "headers": None}
+
+            stitch_refs = await asyncio.gather(
+                *[_dl_one(r, i) for i, r in enumerate(stitch_refs)]
             )
+
+        try:
+            stitched = await stitch_clips(stitch_refs, str(composite_path))
+            # CRITICAL: stitch_clips returns clip_refs[0]["path"] (a SOURCE FILE) on failure.
+            # We must only proceed when stitched == composite_path; otherwise our finally
+            # block would unlink the user's original recording. See the data-loss bug
+            # documented in the cleanup section below.
+            if stitched != str(composite_path) or not Path(composite_path).exists():
+                log.warning(
+                    "generate_caption: stitch did not produce composite at %s (got %r) — skipping Gemini",
+                    composite_path, stitched,
+                )
+                return None
+        except Exception:
+            log.exception("generate_caption: stitch failed for cluster %s", cluster_id)
             return None
-    except Exception:
-        log.exception("generate_caption: stitch failed for cluster %s", cluster_id)
-        return None
+    finally:
+        if tmpdir_ctx is not None:
+            tmpdir_ctx.cleanup()
 
     ts = selected[0].get("ts")
     when_iso = (
