@@ -18,7 +18,7 @@ export function PrimingModal({ onContinue }: Props) {
       style={{ minHeight: "100dvh" }}
     >
       <div className="bg-[#1A1A1A] rounded-2xl p-6 max-w-sm w-full border border-[#262626]">
-        <h2 className="text-4xl font-semibold leading-[1.05] text-[#FAFAFA]">
+        <h2 className="text-2xl font-semibold leading-[1.1] whitespace-nowrap text-[#FAFAFA]">
           Location and Camera
         </h2>
         <p className="mt-4 text-base leading-[1.5] text-[#FAFAFA]">
