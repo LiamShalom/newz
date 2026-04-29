@@ -430,14 +430,13 @@ async def debug_clip(clip_id: str):
     return {"found": True, "clip": clip}
 
 
-def _delete_files(paths: list[str]) -> int:
+async def _delete_paths_async(paths: list[str]) -> int:
+    from . import storage  # local import — avoid circular
     n = 0
     for path_str in paths:
         try:
-            p = Path(path_str)
-            if p.is_file():
-                p.unlink()
-                n += 1
+            await storage.delete_clip(path_str)
+            n += 1
         except Exception as e:
             log.warning("admin_reset: could not delete %s: %s", path_str, e)
     return n
@@ -470,6 +469,11 @@ async def admin_reset(
     if mode == "all":
         counts = await db.reset_all()
         deleted_files = 0
+        # Phase 10 (D-15): mode=all physically scans the local clips dir, which
+        # is empty in blob mode. The Blob-side bulk wipe relies on db.reset_all
+        # truncating rows + Phase 11's cleanup hook for blocked clips. For the
+        # v1.1 demo cutover (D-15) we accept stale Blob objects on mode=all —
+        # the demo corpus is small and re-uploaded from fixtures.
         for p in (config.DATA_DIR / "clips").glob("*"):
             try:
                 if p.is_file():
@@ -482,7 +486,7 @@ async def admin_reset(
         if count is None:
             raise HTTPException(status_code=400, detail="mode=last requires ?count=N")
         out = await db.delete_recent_clips(limit=count)
-        deleted_files = _delete_files(out["paths_to_delete"])
+        deleted_files = await _delete_paths_async(out["paths_to_delete"])
         result = {
             "mode": "last",
             "count_requested": count,
@@ -493,7 +497,7 @@ async def admin_reset(
         if seconds is None:
             raise HTTPException(status_code=400, detail="mode=since requires ?seconds=S")
         out = await db.delete_recent_clips(since_seconds=seconds)
-        deleted_files = _delete_files(out["paths_to_delete"])
+        deleted_files = await _delete_paths_async(out["paths_to_delete"])
         result = {
             "mode": "since",
             "seconds": seconds,
