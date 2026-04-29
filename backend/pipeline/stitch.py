@@ -130,9 +130,14 @@ def _sync_trim(ref: dict, output_path: str) -> str:
     end = ref.get("end_offset_sec")
 
     tmp_path = f"{output_path}.part-{int(time.time() * 1000)}-{os.getpid()}"
-    input_kwargs = {"ss": start}
+    input_kwargs: dict = {"ss": start}
     if end is not None:
         input_kwargs["to"] = end
+    # Phase 10 (amendment 4): forward auth headers to ffmpeg's -headers flag.
+    # CRLF terminator is mandatory per ffmpeg HTTP protocol docs (Pitfall 2).
+    headers_dict = ref.get("headers")
+    if headers_dict:
+        input_kwargs["headers"] = "".join(f"{k}: {v}\r\n" for k, v in headers_dict.items())
 
     try:
         out = (
