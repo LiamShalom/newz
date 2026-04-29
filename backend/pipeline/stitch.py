@@ -24,6 +24,8 @@ import time
 
 import ffmpeg
 
+from .. import config
+
 log = logging.getLogger(__name__)
 
 
@@ -87,11 +89,15 @@ def _sync_stitch(clip_refs: list[dict], output_path: str) -> str:
     return output_path
 
 
-async def stitch_clips(clip_refs: list[dict], output_path: str) -> str:
+async def stitch_clips(
+    clip_refs: list[dict], output_path: str, *, run_id: str | None = None,
+) -> str:
     """Async wrapper around _sync_stitch. Falls back to first clip's path on any failure.
 
     clip_refs: [{"path": str, "start_offset_sec": float, "end_offset_sec": float | None}, ...]
     output_path: absolute path for the output .mp4 file.
+    run_id: when provided AND blob mode active, upload to runs/{run_id}.mp4 (public)
+            and return the absolute Blob URL.
     Returns: output_path on success, first clip's path on failure.
     """
     if not clip_refs:
@@ -102,11 +108,28 @@ async def stitch_clips(clip_refs: list[dict], output_path: str) -> str:
 
     try:
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, _sync_stitch, clip_refs, output_path)
-        return result
+        local_out = await loop.run_in_executor(None, _sync_stitch, clip_refs, output_path)
     except Exception as exc:
         log.warning("stitch FAILED — falling back to first clip path: %s", exc)
         return fallback_path
+
+    if run_id is None or config.STORAGE_BACKEND != "blob" or config.OFFLINE_DEMO:
+        return local_out
+    try:
+        with open(local_out, "rb") as f:
+            body = f.read()
+        from ..storage import blob_client
+        obj = await blob_client.upload(
+            pathname=f"runs/{run_id}.mp4",
+            body=body,
+            content_type="video/mp4",
+            access="public",
+        )
+        log.info("stitch+upload ok run_id=%s pathname=runs/%s.mp4", run_id, run_id)
+        return obj["url"]
+    except Exception as exc:
+        log.warning("runs/ upload FAILED for run_id=%s — returning local path: %s", run_id, exc)
+        return local_out
 
 
 def _sync_trim(ref: dict, output_path: str) -> str:
@@ -168,14 +191,38 @@ def _sync_trim(ref: dict, output_path: str) -> str:
     return output_path
 
 
-async def trim_window(ref: dict, output_path: str) -> str:
-    """Async wrapper around _sync_trim. Falls back to ref['path'] on any failure."""
+async def trim_window(ref: dict, output_path: str, *, run_id: str | None = None) -> str:
+    """Async wrapper around _sync_trim. Falls back to ref['path'] on any failure.
+
+    Phase 10 (D-10): when run_id is provided AND blob mode is active, the
+    finished local .mp4 is uploaded to runs/{run_id}.mp4 (public) and the
+    absolute Blob URL is returned. Upload failure falls back to the local
+    path — frontend can still play it via /media in mixed mode.
+    """
     if not ref:
         return ""
     fallback_path = ref["path"]
     try:
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, _sync_trim, ref, output_path)
+        local_out = await loop.run_in_executor(None, _sync_trim, ref, output_path)
     except Exception as exc:
         log.warning("trim FAILED — falling back to source path: %s", exc)
         return fallback_path
+
+    if run_id is None or config.STORAGE_BACKEND != "blob" or config.OFFLINE_DEMO:
+        return local_out
+    try:
+        with open(local_out, "rb") as f:
+            body = f.read()
+        from ..storage import blob_client
+        obj = await blob_client.upload(
+            pathname=f"runs/{run_id}.mp4",
+            body=body,
+            content_type="video/mp4",
+            access="public",
+        )
+        log.info("trim+upload ok run_id=%s pathname=runs/%s.mp4", run_id, run_id)
+        return obj["url"]
+    except Exception as exc:
+        log.warning("runs/ upload FAILED for run_id=%s — returning local path: %s", run_id, exc)
+        return local_out
