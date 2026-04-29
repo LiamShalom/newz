@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Pilot MVP for funding (Public-Launch-Ready Backbone)
 status: in_progress
-last_updated: "2026-04-29T20:30:00.000Z"
-last_activity: 2026-04-29 -- shipped Phase 10 (Vercel Blob migration); 4 SC passed, 3 deferred to Phase 11
+last_updated: "2026-04-29T21:00:00.000Z"
+last_activity: 2026-04-29 -- shipped Phase 10 (Vercel Blob migration); PR #9 open against main
 progress:
   total_phases: 8
   completed_phases: 6
