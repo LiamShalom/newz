@@ -6,6 +6,12 @@ import { getOrCreateSessionId } from "./session";
 
 export const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
 
+// Phase 10 (BLOB-05): backend may now return absolute Vercel Blob URLs
+// (https://*.vercel-storage.com/...) for compiled run segments. Guard against
+// double-prefixing those with API_BASE.
+export const _abs = (u: string | null | undefined): string | null =>
+  u == null ? null : u.startsWith("http") ? u : `${API_BASE}${u}`;
+
 /**
  * Fetch compiled segments from GET /feed.
  * Passes viewer coordinates for proximity sort when available (FED-01).
@@ -26,10 +32,8 @@ export async function fetchSegments(
   const data = (await res.json()) as { segments: Segment[] };
   return data.segments.map((s) => ({
     ...s,
-    url: s.video_url ? `${API_BASE}${s.video_url}` : null,
-    video_urls: s.video_urls
-      ? s.video_urls.map((v) => (v ? `${API_BASE}${v}` : null))
-      : null,
+    url: _abs(s.video_url),
+    video_urls: s.video_urls ? s.video_urls.map(_abs) : null,
   }));
 }
 
