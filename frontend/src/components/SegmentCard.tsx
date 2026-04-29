@@ -1,24 +1,23 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { MessageCircle } from "lucide-react";
 
-/** Fizz-style share arrow: a clean curved stem ending in a chevron
- *  arrowhead pointing up-right. Uniform stroke (width 2), round caps and
- *  joins so it reads at the same visual weight as Lucide's MessageCircle. */
+/** Phosphor `share-fat` (regular weight). Single closed-shape outline with
+ *  a curved stem and a wide arrowhead — the icon Roan handed off as the
+ *  exact target. Original 256x256 viewBox preserved; size via className. */
 function ShareArrowIcon({ className }: { className?: string }) {
   return (
     <svg
-      viewBox="0 0 24 24"
+      viewBox="0 0 256 256"
       fill="none"
       stroke="currentColor"
-      strokeWidth="2"
+      strokeWidth="16"
       strokeLinecap="round"
       strokeLinejoin="round"
       xmlns="http://www.w3.org/2000/svg"
       aria-hidden
       className={className}
     >
-      <path d="M4 20c1-7 6-12 14-13" />
-      <path d="M13 3l5 4-5 4" />
+      <path d="M30.93,198.72C47.39,181.19,90.6,144,152,144v48l80-80L152,32V80C99.2,80,31.51,130.45,24,195.54A4,4,0,0,0,30.93,198.72Z" />
     </svg>
   );
 }
