@@ -12,7 +12,6 @@ Public API:
           6. Cleanup: delete uploaded Gemini file + temp stitch on disk.
 
         Returns None on any failure (caller falls back to a generic caption).
-        OFFLINE_DEMO / USE_MOCK_EMBEDDINGS / GEMINI_API_KEY missing → mock output.
 
 Replaces the prior Anthropic Haiku-per-child + Sonnet-synthesis pipeline.
 Single LLM call vs. four; native video reasoning (audio + motion + temporal continuity)
@@ -300,19 +299,6 @@ def _build_stitch_refs(selected: list[dict]) -> list[dict]:
     return refs
 
 
-def _mock_response(cluster_id: str, location: str) -> dict:
-    log.info("generate_caption mock cluster_id=%s", cluster_id)
-    return {
-        "title": "Staged Event Captured On Camera",
-        "caption": (
-            "Multiple contributors recorded near-identical footage of a staged "
-            "demo event on the Caltech campus."
-        ),
-        "location": location,
-        "source": "mock",
-    }
-
-
 async def generate_caption(
     cluster_id: str,
     centroid: np.ndarray,
@@ -325,9 +311,6 @@ async def generate_caption(
     centroid: parent-scope cluster centroid (unit vector).
     """
     location = "Pasadena, CA"  # cluster reverse-geocode is a Phase 5 follow-up
-
-    if config.OFFLINE_DEMO or config.USE_MOCK_EMBEDDINGS:
-        return _mock_response(cluster_id, location)
 
     if not config.GEMINI_API_KEY:
         log.warning("generate_caption: GEMINI_API_KEY not set — skipping Gemini track")

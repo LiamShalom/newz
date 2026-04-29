@@ -44,8 +44,7 @@ No Postgres, no Redis, no Celery, no Pinecone, no S3. Hackathon scale.
 ### 1. Embed — `backend/pipeline/embed.py`
 
 - `embed_worker` (`embed.py:135`) reads the clip path from sqlite, runs `_sync_embed` in a thread-pool executor (`run_in_executor`) so Marengo's 5-30s latency never blocks the event loop.
-- Real path: `_call_marengo` (`embed.py:47`) calls `client.assets.create()` then `client.embed.v_2.create()` with `model_name="marengo3.0"`, `embedding_scope=["clip","asset"]`, and `VideoSegmentation_Fixed(duration_sec=3)` — Marengo's native segmentation produces one parent (`asset`) vector + N child (`clip`) vectors at 3s granularity. Tenacity retries 3x with exponential backoff.
-- Mock path: `USE_MOCK_EMBEDDINGS=true` → `_mock_embedding` (`embed.py:32`) returns a deterministic 512-d unit vector keyed by `clip_id`. Three fake children at 0-3s, 3-6s, 6-9s.
+- `_call_marengo` (`embed.py:38`) calls `client.assets.create()` then `client.embed.v_2.create()` with `model_name="marengo3.0"`, `embedding_scope=["clip","asset"]`, and `VideoSegmentation_Fixed(duration_sec=3)` — Marengo's native segmentation produces one parent (`asset`) vector + N child (`clip`) vectors at 3s granularity. Tenacity retries 3x with exponential backoff.
 - Persistence: parent embedding stored under the parent `clip_id`; each child gets a row in `clips` (via `db.insert_child_clip`) with `parent_id`, `start_offset_sec`, `end_offset_sec`, and its own embedding row. Children — not the parent — are what flows into clustering.
 - Pre-warm: `_pre_warm_marengo` (`app.py:23`) fires once at lifespan startup against `seed/prewarm.mp4` so the first real clip doesn't pay cold-start latency.
 
@@ -135,8 +134,7 @@ Vercel (HTTPS)                Railway (HTTPS)
 - **Frontend**: `frontend/vercel.json` defines `pnpm install --frozen-lockfile && pnpm build`, output `dist/`, SPA rewrite `/(.*) → /index.html`. Build-time `VITE_API_BASE` baked into bundle (`frontend/src/api.ts:7`).
 - **Backend**: `backend/Dockerfile` installs ffmpeg + requirements.txt, binds `0.0.0.0:${PORT}`. `backend/railway.toml` declares Dockerfile builder + `/health` healthcheck (30s timeout, restart on failure max 5). `DATA_DIR=/data` mount path is mandatory; without it clips disappear on redeploy.
 - **CORS**: `app.add_middleware(CORSMiddleware, allow_origins=[FRONTEND_URL, "http://localhost:5173"])` (`app.py:83`). Both origins allowed simultaneously so dev and prod work without a redeploy.
-- **Pre-warm**: lifespan fires `_pre_warm_marengo` and `_pre_warm_sdk` in parallel as fire-and-forget tasks (`app.py:76-77`) — startup never blocks on them. SDK pre-warm is skipped when `OFFLINE_DEMO=true` or `ANTHROPIC_API_KEY` unset.
-- **Demo seed**: `seed_demo_segment()` (`backend/seed/demo_segment.py`) inserts a staged segment if `segments` is empty — `OFFLINE_DEMO=true` serves cached embeddings + cached compile output without external API calls (Tier-5 fallback for hackathon WiFi failure).
+- **Pre-warm**: lifespan fires `_pre_warm_marengo` and `_pre_warm_sdk` in parallel as fire-and-forget tasks — startup never blocks on them. SDK pre-warm is skipped when `ANTHROPIC_API_KEY` is unset.
 
 Setup and CORS sanity check: see [README.md](../README.md). iPhone hardware gate: see [docs/IPHONE-GATE.md](./IPHONE-GATE.md).
 

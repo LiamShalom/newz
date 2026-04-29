@@ -1,9 +1,6 @@
-# Phase 3 Demo Clips
+# Demo Clips
 
-3-4 short MP4s of one event from different angles. Used by:
-
-- `backend/seed/seed_demo.py` — uploads via POST /clips with Caltech-area GPS
-- `backend/notebooks/calibration.ipynb` — proves CLU-07 (same-event fuse) and CLU-08 (adversarial separate)
+3-4 short MP4s of one event from different angles, kept around for ad-hoc testing of the embed → cluster → compile pipeline. Used by `backend/notebooks/calibration.ipynb` to prove CLU-07 (same-event fuse) and CLU-08 (adversarial separate).
 
 ## Naming Convention
 
@@ -19,12 +16,13 @@ Files glob via `sorted(CLIP_DIR.glob("clip-*.mp4"))` — names must sort lexicog
 - Vertical orientation (matches iOS Safari capture)
 - Total directory size under 30MB (committed to git)
 
-## Re-uploading
+## Manual upload
 
-Backend running on http://localhost:8000:
+Use the in-app recorder or `curl` directly. Backend running on `http://localhost:8000`:
 
-```
-python -m backend.seed.seed_demo --base-url http://localhost:8000
+```bash
+curl -F "file=@clip-1.mp4" -F "lat=34.1377" -F "lng=-118.1253" -F "ts=$(date +%s)" \
+  http://localhost:8000/clips
 ```
 
 Then `curl http://localhost:8000/debug/clusters | jq` to inspect.

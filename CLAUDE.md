@@ -42,7 +42,6 @@ Admin endpoint: token-guarded `POST /admin/reset` wipes clips between demo runs.
 
 - **Anonymity is load-bearing.** No accounts, no login, no profiles. Anonymous session UUID in localStorage only.
 - **iOS Safari is the demo target.** Verified on real iPhone. MIME-type fallback ladder: `mp4;avc1 → webm;vp9 → webm → no mimeType`.
-- **OFFLINE_DEMO=true** serves cached embeddings + cached compile output without any external API calls.
 - **Pre-warm Marengo on backend startup** with throwaway call. Cold-start latency = dead live demo.
 - **Compile pipeline LLM budget:** 300s wall-clock (raised from original 30s during v1.0 to absorb retries/throttle).
 

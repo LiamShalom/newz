@@ -8,15 +8,12 @@ convention before the actual demo footage is available.
 
 ## What This Means
 
-- `python -m backend.seed.seed_demo` will fail at upload time because the files have no
-  video content (FastAPI will accept the upload, but Marengo embedding will fail or produce
-  a zero-vector). The seed script checks `if not (3 <= len(clips) <= 4)` so the glob still
-  finds the files — **but a valid video is needed for the Marengo embed step to work**.
+- Manual upload (in-app recorder or `curl`) of these placeholders will fail at the embed
+  step because the files have no video content (FastAPI accepts the upload, but Marengo
+  embedding fails or produces a zero-vector).
 - The calibration notebook **Cell 5 (CLU-07 assertion) will FAIL** until real clips replace
   these placeholders. The assertion requires the largest cluster to have >= 3 members, which
   requires Marengo to produce similar embeddings for same-event footage.
-- `USE_MOCK_EMBEDDINGS=true` bypasses Marengo but uses random deterministic vectors, so
-  same-event clips will NOT fuse reliably — CLU-07 will still fail with placeholders.
 
 ## How to Replace
 

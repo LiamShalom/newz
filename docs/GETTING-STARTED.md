@@ -10,7 +10,7 @@ For a higher-level overview see [README.md](../README.md). For env-var details s
 - **Python 3.11** (the `Makefile` calls `python3.11` explicitly; the backend `Dockerfile` pins `python:3.11-slim`)
 - **Node 18+** and **pnpm** (the `frontend/vite.config.ts` + `frontend/package.json` are pnpm-locked via `pnpm-lock.yaml`)
 - **ffmpeg is NOT required system-wide** — `imageio-ffmpeg` ships a bundled binary used by the compile pipeline
-- (Optional) `TWELVELABS_API_KEY` and `ANTHROPIC_API_KEY` if you want to exercise the live AI path. Without them you must run with `USE_MOCK_EMBEDDINGS=true` (mock embeddings + degraded compile fallback).
+- `TWELVELABS_API_KEY`, `ANTHROPIC_API_KEY`, and `GEMINI_API_KEY` for the live pipeline. Without `TWELVELABS_API_KEY` the embed stage will fail; without `ANTHROPIC_API_KEY` or `GEMINI_API_KEY` compile will fall back to a generic caption.
 
 ## Clone & install
 
@@ -27,17 +27,16 @@ make install
 
 ## Backend setup
 
-1. Create `backend/.env`. There is no `.env.example` checked in — populate from [docs/CONFIGURATION.md](./CONFIGURATION.md). Minimum for local mock-mode:
+1. Create `backend/.env` from `backend/.env.example`. Populate using [docs/CONFIGURATION.md](./CONFIGURATION.md):
 
    ```bash
    # backend/.env
-   USE_MOCK_EMBEDDINGS=true
    FRONTEND_URL=http://localhost:5173
    DATA_DIR=./data
-   OFFLINE_DEMO=false
+   TWELVELABS_API_KEY=...
+   ANTHROPIC_API_KEY=...
+   GEMINI_API_KEY=...
    ```
-
-   For the live path add `TWELVELABS_API_KEY=...` and `ANTHROPIC_API_KEY=...` and drop `USE_MOCK_EMBEDDINGS`.
 
 2. Run the backend:
 
@@ -45,7 +44,7 @@ make install
    make backend
    ```
 
-   This expands to `USE_MOCK_EMBEDDINGS=true uvicorn backend.app:app --reload --port 8000`. The flag in the Makefile wins over `.env` — flip to `make backend-real` when you have a Twelve Labs key.
+   This runs `uvicorn backend.app:app --reload --port 8000`.
 
 3. Smoke test:
 
@@ -54,7 +53,7 @@ make install
    # {"ok":true}
    ```
 
-   Startup logs `Marengo pre-warm complete latency_ms=...` (or `pre-warm skipped (USE_MOCK_EMBEDDINGS=true)`) and seeds a demo segment if the DB is empty.
+   Startup logs `Marengo pre-warm complete latency_ms=...`.
 
 ## Frontend setup
 
@@ -75,13 +74,13 @@ make install
 
    This is `cd frontend && pnpm dev`, which runs `vite --host` so a real iPhone on the same Wi-Fi can reach `http://<your-laptop-LAN-ip>:5173` (required for the iPhone gate — see below).
 
-3. Open `http://localhost:5173`. You should see the staged demo segment in the feed.
+3. Open `http://localhost:5173`. The feed will be empty until clips are ingested.
 
 ## End-to-end smoke test
 
 With both servers running:
 
-1. Open `http://localhost:5173` in a browser. The staged demo segment renders.
+1. Open `http://localhost:5173` in a browser. The feed starts empty.
 2. Tap the red FAB → record a 3-5s clip → "Post clip". The browser POSTs `multipart/form-data` to `http://localhost:8000/clips`.
 3. Backend logs show: `clip_added` → embed (`stage: embedded`) → cluster (`cluster_assigned` with score breakdown) → if `member_count >= 2`, compile.
 4. Verify directly:
@@ -102,7 +101,6 @@ With both servers running:
 - **Compile is gated on `ANTHROPIC_API_KEY`.** Without it, ingest + clustering still work but compile logs a warning and falls back to a generic AP-wire caption. This is the documented degraded path, not a bug.
 - **CORS trailing-slash trap.** `FRONTEND_URL` is exact-match (`backend/app.py:85`). A trailing slash breaks preflight. This was the root cause of two iPhone-gate failures (see [docs/IPHONE-GATE.md](./IPHONE-GATE.md) resolution log).
 - **Vite env vars are baked at build time.** Changing `VITE_API_BASE` requires a redeploy (`pnpm dlx vercel --prod`) — not a hot reload.
-- **Hackathon WiFi.** Pitfall #6 (KILL-DEMO). `OFFLINE_DEMO=true` + `USE_MOCK_EMBEDDINGS=true` runs the full path against cached embeddings and the seeded demo segment with zero external API calls. Pair with the 90s screencast as Tier-5.
 
 ## Next steps
 

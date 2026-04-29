@@ -110,9 +110,7 @@ After the call (`embed.py:91-114`):
 
 **The Phase 4.6 pivot** (`embed.py:137-180`): only the parent vector enters clustering. Children exist for **compile-time slicing** — angle-selector and the caption pipeline read child rows + their embeddings, but the cluster centroid is built from parent-scope vectors only. `embed_worker` returns exactly one `(clip_id, parent_vec)` pair.
 
-**Pre-warm** (`backend/app.py:23-39`): on lifespan startup, a throwaway `_sync_embed` runs against `PRE_WARM_CLIP_PATH` to pay Marengo's cold-start latency before the first real upload. Skipped when `USE_MOCK_EMBEDDINGS=true`. Failure is non-fatal.
-
-**Mock path** (`embed.py:120-134`): `USE_MOCK_EMBEDDINGS=true` returns deterministic 512-d unit vectors keyed by `clip_id` + 3 fake children at 0–3s/3–6s/6–9s. Stable across restarts so demos replay identically.
+**Pre-warm** (`backend/app.py`): on lifespan startup, a throwaway `_sync_embed` runs against `PRE_WARM_CLIP_PATH` to pay Marengo's cold-start latency before the first real upload. Failure is non-fatal.
 
 ### 5. Cluster — composite-score join
 
@@ -182,7 +180,7 @@ The orchestrator's flow (`compile.py:43-55`):
 - Branch B returns `None` or non-`vision` source → fallback caption.
 - 300s LLM timeout → fallback segment, `compile_in_flight=False`, SSE `segment_published` still fires.
 - 30s stitch timeout → segment row exists but `video_url=None`; frontend shows the segment without playable video.
-- `OFFLINE_DEMO=true` or missing `GEMINI_API_KEY` → caption pipeline returns deterministic mock copy (`caption_pipeline.py:309-340`).
+- Missing `GEMINI_API_KEY` → caption pipeline returns `None` and the fallback caption writer takes over.
 
 ### 8. Real-time feed updates
 
@@ -232,8 +230,7 @@ Failure paths:
 | ≥2 distinct parents to compile | `run.py:28-29` | Solo-parent compiles waste tokens |
 | 300s LLM compile budget | `compile.py:393` | Absorbs retry/throttle bursts |
 | 30s stitch budget | `compile.py:425` | Pulled out of LLM gather so ffmpeg isn't cancelled by orchestrator timeout |
-| Pre-warm Marengo + Claude SDK | `app.py:64-77` | Cold-start latency = dead demo |
-| OFFLINE_DEMO env flag | `caption_pipeline.py:335`, `embed.py:120` | Live-first demo with cached fallback |
+| Pre-warm Marengo + Claude SDK | `app.py` lifespan | Cold-start latency = dead demo |
 
 ## Where the data lives
 

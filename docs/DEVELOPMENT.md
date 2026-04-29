@@ -14,7 +14,7 @@ backend/                  # FastAPI single-process monolith
   models.py               # Pydantic IngestResponse etc.
   pipeline/               # Hot-path stages chained via asyncio.create_task
     run.py                # Orchestrator: embed -> cluster -> maybe compile
-    embed.py              # Marengo 3.0 (512-d) + USE_MOCK_EMBEDDINGS path
+    embed.py              # Marengo 3.0 (512-d)
     cluster.py            # Composite score; in-memory CLUSTERS dict; rebuild_cache()
     compile.py            # 4-subagent Claude SDK pipeline (60s cap)
     compile_tools.py      # MCP @tool defs (get_cluster_clips, get_clip_metadata, save_segment)
@@ -22,7 +22,7 @@ backend/                  # FastAPI single-process monolith
     stitch.py             # ffmpeg multi-angle concat
     caption_pipeline.py   # Caption generation
     frames.py             # Native Marengo 3s segmentation helpers
-  seed/                   # Demo seed (seed_demo.py, demo_segment.py, prewarm.mp4)
+  seed/                   # Marengo pre-warm asset + reusable demo clips (prewarm.mp4, demo/)
   notebooks/              # calibration.ipynb (Phase 3 cluster threshold tuning)
   tests/                  # pytest-asyncio
 frontend/                 # React 18 + Vite + TS + Tailwind 4
@@ -36,7 +36,7 @@ frontend/                 # React 18 + Vite + TS + Tailwind 4
     lib/                  # mimeLadder, getPositionWithTimeout, etc.
 docs/                     # ARCHITECTURE, CONFIGURATION, IPHONE-GATE, this file
 .planning/                # PROJECT.md, REQUIREMENTS.md, ROADMAP.md, STATE.md, research/
-Makefile                  # install / backend / backend-real / frontend / dev
+Makefile                  # install / backend / frontend / dev / reset
 ```
 
 ## Dev loop
@@ -45,12 +45,9 @@ Two-terminal hot reload. Both servers reload on file save; no manual restart in 
 
 ```bash
 make install              # python3.11 venv + pnpm install
-make backend              # uvicorn --reload :8000  (USE_MOCK_EMBEDDINGS=true; deterministic 512-d vectors)
-make backend-real         # uvicorn --reload :8000  (calls real Marengo — costs $ + latency)
+make backend              # uvicorn --reload :8000  (calls real Marengo — needs TWELVELABS_API_KEY)
 make frontend             # vite --host :5173       (--host so a real iPhone on same Wi-Fi can hit it)
 ```
-
-Use `make backend` (mock) for everything except Phase 2/4 work that needs real embeddings. The mock path is deterministic per `clip_id`, so cluster behavior is reproducible across restarts.
 
 Backend uvicorn picks up edits to anything under `backend/` including pipeline modules. **Restart manually only when:** (a) you edit `backend/.env`, or (b) you change the lifespan / pre-warm code (lifespan only runs once per process).
 
@@ -109,8 +106,6 @@ curl -N http://localhost:8000/events
 Events: `clip_added`, `pipeline_progress` (with `stage` in `embedded`/`clustered`), `pipeline_error`, plus segment broadcasts from `backend/events.py`. SSE secrets are scrubbed via `_scrub()` in `backend/pipeline/run.py` — `TWELVELABS_API_KEY` will not leak into error events.
 
 **Logs:** uvicorn logs INFO by default (`backend/app.py:19`). Pipeline stages log `pipeline embed done clip_id=...`, `pipeline cluster done child_id=... cluster_id=...`, `compile triggered cluster_id=...`. Grep there first.
-
-**Common offline-demo flag:** `OFFLINE_DEMO=true` skips Claude SDK pre-warm and gates external calls. Combine with `USE_MOCK_EMBEDDINGS=true` for fully-offline dev (no Marengo, no Claude). Both are in `backend/.env.example`.
 
 **Frontend:** Recorder.tsx covers the iOS Safari MIME ladder (`frontend/src/lib/mimeLadder.ts`). When camera silently fails on a real iPhone, check the iPhone gate runbook in [IPHONE-GATE.md](./IPHONE-GATE.md) before touching code.
 

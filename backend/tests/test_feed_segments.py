@@ -72,8 +72,7 @@ async def test_feed_returns_segments_key(tmp_db, monkeypatch):
                return_value=await db.fetch_recent_segments(limit=50)), \
          patch("backend.pipeline.cluster.rebuild_cache", new_callable=AsyncMock), \
          patch("backend.app._pre_warm_marengo", new_callable=AsyncMock), \
-         patch("backend.app._pre_warm_sdk", new_callable=AsyncMock), \
-         patch("backend.seed.demo_segment.seed_demo_segment", new_callable=AsyncMock):
+         patch("backend.app._pre_warm_sdk", new_callable=AsyncMock):
 
         from backend.app import app
         client = TestClient(app, raise_server_exceptions=True)
@@ -106,8 +105,7 @@ async def test_feed_with_lat_lng_returns_segments(tmp_db, monkeypatch):
                new_callable=AsyncMock, return_value=segs), \
          patch("backend.pipeline.cluster.rebuild_cache", new_callable=AsyncMock), \
          patch("backend.app._pre_warm_marengo", new_callable=AsyncMock), \
-         patch("backend.app._pre_warm_sdk", new_callable=AsyncMock), \
-         patch("backend.seed.demo_segment.seed_demo_segment", new_callable=AsyncMock):
+         patch("backend.app._pre_warm_sdk", new_callable=AsyncMock):
 
         from backend.app import app
         client = TestClient(app, raise_server_exceptions=True)
