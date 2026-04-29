@@ -21,6 +21,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,7 +29,6 @@ from pathlib import Path
 from claude_agent_sdk import (
     query,
     ClaudeAgentOptions,
-    AgentDefinition,
     ResultMessage,
 )
 
@@ -97,35 +97,11 @@ async def stitch_multi_source(refs: list[dict], run_id: str) -> str | None:
 log = logging.getLogger(__name__)
 
 
-ORCHESTRATOR_PROMPT_TEMPLATE = """Compile cluster {cluster_id} into a published news segment.
+ANGLE_SELECTOR_PROMPT_TEMPLATE = """You are picking the best 2-4 RUNS from cluster {cluster_id}.
 
-The title and caption will be filled in later by another worker. Pass empty
-strings ("") for both when calling save_segment. The orchestrator will
-overwrite them.
-
-Steps — use the named subagents in this order:
-1. Run angle-selector to pick the best 2-4 RUNS and order them.
-2. Run publisher with angle-selector's run_ids. Pass title="" and caption="".
-
-Pass angle-selector's JSON output verbatim into publisher's prompt.
-The cluster_id is: {cluster_id}
-"""
-
-_MCP = ["newz_tools"]
-
-AGENTS = {
-    "angle-selector": AgentDefinition(
-        description=(
-            "Picks 2-4 best RUNS from a cluster and orders them chronologically. "
-            "A run = one continuous camera angle within a single parent clip. "
-            "Run FIRST."
-        ),
-        prompt="""You are the Angle Selector for the Newz news compile pipeline.
-
-You select the best 2-4 RUNS from a cluster. A run = one continuous camera
-angle (a contiguous span of similar 3-second slices from the same source
-clip). Different runs from different parent clips give you different
-viewpoints of the same event.
+A run = one continuous camera angle (a contiguous span of similar 3-second
+slices from the same source clip). Different runs from different parent clips
+give different viewpoints of the same event.
 
 HARD CONSTRAINT — PARENT DIVERSITY:
   When the cluster contains 2 or more distinct parent clips, your selection
@@ -149,79 +125,113 @@ Order the selected runs chronologically (earliest parent ts first).
 
 Use mcp__newz_tools__get_cluster_runs to list candidates, then
 mcp__newz_tools__get_clip_metadata for any parent-clip details.
-Return ONLY a single JSON object: {"run_ids": ["...", "..."], "rationale": "..."}.
-Do not include any text outside the JSON.""",
-        tools=["mcp__newz_tools__get_cluster_runs", "mcp__newz_tools__get_clip_metadata"],
-        mcpServers=_MCP,
-        model="sonnet",
-    ),
-    "publisher": AgentDefinition(
-        description=(
-            "Persists the finished segment via save_segment. Run AFTER angle-selector. "
-            "Only calls the save_segment tool — does not rewrite captions."
-        ),
-        prompt="""You are the Publisher for the Newz news compile pipeline.
 
-Take the Angle Selector's run_ids and persist the segment. Title and caption
-are filled in later by another worker — pass empty strings for both here.
+Return ONLY a single JSON object on the LAST line of your response:
+{{"run_ids": ["...", "..."], "rationale": "..."}}
+Do not include any text after the JSON. Markdown code fences are allowed.
+"""
 
-Call mcp__newz_tools__save_segment EXACTLY ONCE with:
-  - cluster_id: provided by the orchestrator
-  - ordered_run_ids: from angle-selector's run_ids list
-  - title: ""
-  - caption: ""
-  - location: "Pasadena, CA"
-  - source_count: number of distinct parent_ids in ordered_run_ids
 
-Return ONLY the segment id string from the tool result.""",
-        tools=["mcp__newz_tools__save_segment"],
-        mcpServers=_MCP,
-        # Haiku 4.5 was unreliable at MCP tool invocation — finished the turn
-        # without calling save_segment in roughly 1 of every 3 runs, leaving
-        # compile_segment to fall through to _save_fallback_segment with no
-        # video_url (black-screen UX). Sonnet hits the tool reliably.
-        model="sonnet",
-    ),
-}
+def _extract_run_ids(text: str) -> list[str]:
+    """Pull the {"run_ids":[...], ...} object out of a model response.
+
+    Tolerant of markdown fences and surrounding chatter — the SDK has been
+    inconsistent about whether the final assistant turn is pure JSON or
+    wrapped in ```json ... ```. Returns [] if no parseable JSON is found.
+    """
+    if not text:
+        return []
+    candidates: list[str] = []
+    # Pull anything inside ```...``` first (the longest fenced block wins).
+    fence_re = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
+    candidates.extend(fence_re.findall(text))
+    # Fall back to the last balanced top-level object in the raw text.
+    last_brace = text.rfind("}")
+    if last_brace != -1:
+        depth = 0
+        start = -1
+        for i in range(last_brace, -1, -1):
+            ch = text[i]
+            if ch == "}":
+                depth += 1
+            elif ch == "{":
+                depth -= 1
+                if depth == 0:
+                    start = i
+                    break
+        if start != -1:
+            candidates.append(text[start:last_brace + 1])
+    for raw in candidates:
+        try:
+            obj = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        run_ids = obj.get("run_ids")
+        if isinstance(run_ids, list) and all(isinstance(r, str) for r in run_ids):
+            return run_ids
+    return []
 
 
 async def _run_orchestrator_chain(cluster_id: str) -> str:
-    """Run angle-selector → editor → publisher. Caption/title are filled later
-    by Branch B's overwrite — publisher saves placeholder empty strings.
+    """Single-pass run selection: ask the model to return JSON, write the
+    segment row from Python.
+
+    Replaces the old orchestrator → angle-selector → publisher subagent chain.
+    The publisher subagent finished its turn without invoking save_segment
+    on roughly one of every two runs (both Haiku and Sonnet), leaving compile
+    to fall through to _save_fallback_segment with no playable video. Cutting
+    out the publisher hop entirely makes the persistence step deterministic.
     """
     options = ClaudeAgentOptions(
         allowed_tools=[
-            "Agent",
             "mcp__newz_tools__get_cluster_runs",
             "mcp__newz_tools__get_clip_metadata",
-            "mcp__newz_tools__save_segment",
         ],
-        agents=AGENTS,
         mcp_servers={"newz_tools": newz_tools_server},
-        max_turns=20,
+        max_turns=10,
         model="sonnet",
     )
-    prompt = ORCHESTRATOR_PROMPT_TEMPLATE.format(cluster_id=cluster_id)
+    prompt = ANGLE_SELECTOR_PROMPT_TEMPLATE.format(cluster_id=cluster_id)
+    final_text: str | None = None
     async for msg in query(prompt=prompt, options=options):
         if isinstance(msg, ResultMessage):
             if msg.is_error:
                 log.error(
-                    "compile orchestrator error cluster_id=%s turns=%s errors=%s result=%s",
+                    "compile angle-selector error cluster_id=%s turns=%s errors=%s result=%s",
                     cluster_id, msg.num_turns, msg.errors, msg.result,
                 )
-                raise RuntimeError(f"orchestrator returned is_error=True: {msg.errors}")
+                raise RuntimeError(f"angle-selector returned is_error=True: {msg.errors}")
             log.info(
-                "compile orchestrator done cluster_id=%s turns=%s duration_ms=%s",
+                "compile angle-selector done cluster_id=%s turns=%s duration_ms=%s",
                 cluster_id, msg.num_turns, msg.duration_ms,
             )
+            final_text = msg.result
             break
-    seg = await db.get_segment_for_cluster(cluster_id)
-    if seg is None:
-        raise RuntimeError(
-            f"compile finished but no segment row for cluster {cluster_id} — "
-            "Publisher may have failed to call save_segment"
+
+    run_ids = _extract_run_ids(final_text or "")
+    if not run_ids:
+        log.error(
+            "angle-selector returned no parseable run_ids cluster_id=%s text=%r",
+            cluster_id, (final_text or "")[:500],
         )
-    return seg["id"]
+        raise RuntimeError(
+            f"angle-selector returned no run_ids for cluster {cluster_id}"
+        )
+
+    distinct_parents = len({rid.rsplit("_run_", 1)[0] for rid in run_ids})
+    seg_id = await db.insert_segment(
+        cluster_id=cluster_id,
+        ordered_clip_ids=run_ids,
+        title="",
+        caption="",
+        location="Pasadena, CA",
+        source_count=distinct_parents or len(run_ids),
+    )
+    log.info(
+        "save_segment cluster_id=%s seg_id=%s runs=%d distinct_parents=%d",
+        cluster_id, seg_id, len(run_ids), distinct_parents,
+    )
+    return seg_id
 
 
 async def _get_children_with_vecs(cluster_id: str) -> list[dict]:
