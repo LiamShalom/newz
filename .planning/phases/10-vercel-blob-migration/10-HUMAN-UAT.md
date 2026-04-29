@@ -40,7 +40,13 @@ expected: From the iOS Safari PWA, record a fresh clip and confirm it uploads vi
 ### 4. SC-3 — Compiled run-segments land in Blob `runs/`
 expected: After clustering triggers a compile, the resulting run-segment uploads to `runs/{run_id}.mp4` (public). Frontend feed renders the absolute Blob URL directly with no auth header.
 
-result: pending — needs ≥2 distinct parent uploads at near-identical GPS+timestamp (CLAUDE.md: compile fires only with ≥2 parents). Record a 2nd clip near the first to trigger.
+**result: PASSED 2026-04-29** — recorded ≥2 clips at near-identical GPS, compile fired, segment played in feed without "Compiling…" stall. Resolution path required four fix-forwards mid-UAT:
+- `7e2d7e3 fix(blob): proxy runs/ through backend (private-only store)` — provisioned Blob store rejects `access="public"`; backend now uploads runs as private and proxies reads via `GET /runs/{run_id}.mp4` with bearer header attached.
+- `9549b17 fix(compile): accept /runs/ relative paths in trim+upload guard` — `_trim_one` was rejecting the new relative `/runs/...` URL, dropping `video_url` to None.
+- `1df44e5 fix(blob): regex for /runs/ proxy must allow run_ ID format` — proxy regex `^[a-f0-9_]+$` rejected the letters in `_run_`, returning 400 for every legitimate run ID.
+- `0644faf feat(location): reverse-geocode cluster centroid via Nominatim` — paired location fix; previous "Pasadena, CA" was a hardcoded placeholder unrelated to Phase 10 but surfaced during this UAT.
+
+Spec amendment: BLOB-05 originally stipulated `runs/*` as **public** so the frontend could load Blob URLs directly. Provisioned Vercel Blob store is private-only (`access="public"` returns 400). Implementation deviation: `runs/*` upload as private; backend exposes `GET /runs/{run_id}.mp4` proxy with bearer-token attachment. Frontend `_abs()` prefixes the relative path with `API_BASE`. Net cost: extra hop on first byte; offset by `cache-control: private, max-age=60` on the proxy. Same security boundary (token never leaves backend).
 
 ### 5. SC-4 — Direct browser PUT to Vercel Blob is rejected
 expected: From a browser console, attempt `fetch('https://hlgbvhvavvgpwp13.private.blob.vercel-storage.com/uploads/test.mp4', {method: 'PUT', body: 'x'})`. Returns 401/403. Confirms `BLOB_READ_WRITE_TOKEN` is server-only and L-02 (no client-upload tokens issued) holds.
