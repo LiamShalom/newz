@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { PrimingModal } from "../components/PrimingModal";
 import { CameraView } from "../components/CameraView";
 import { BottomTabBar } from "../components/BottomTabBar";
 import { CameraFlipButton } from "../components/CameraFlipButton";
@@ -47,7 +48,7 @@ import { enqueue } from "../uploadQueue";
  */
 
 type Phase =
-  | { kind: "uninitialized" }
+  | { kind: "priming" }
   | { kind: "acquiring"; facing: "environment" | "user" }
   | { kind: "ready"; facing: "environment" | "user" }
   | { kind: "recording"; facing: "environment" | "user"; startedAt: number }
@@ -61,7 +62,7 @@ const MIN_RECORD_SEC = 5; // Marengo requires >=4s; 5 leaves a buffer for trim/e
 
 export function Recorder() {
   const navigate = useNavigate();
-  const [phase, setPhase] = useState<Phase>({ kind: "uninitialized" });
+  const [phase, setPhase] = useState<Phase>({ kind: "priming" });
   const [progress, setProgress] = useState(0);
 
   // Refs for things React must not re-render against.
@@ -271,6 +272,10 @@ export function Recorder() {
 
   // Render —————————————————————————————————————————————
 
+  if (phase.kind === "priming") {
+    return <PrimingModal onContinue={initializePermissions} />;
+  }
+
   if (phase.kind === "error") {
     const onRetry =
       phase.error === "location-unavailable"
@@ -298,7 +303,7 @@ export function Recorder() {
     );
   }
 
-  // uninitialized | acquiring | ready | recording — all share the camera viewport
+  // acquiring | ready | recording — all share the camera viewport
   const facing =
     phase.kind === "acquiring" ||
     phase.kind === "ready" ||
@@ -306,17 +311,7 @@ export function Recorder() {
       ? phase.facing
       : "environment";
   const isRecording = phase.kind === "recording";
-  const isUninitialized = phase.kind === "uninitialized";
-
-  // Record button onTap dispatch:
-  // - uninitialized: first tap fires permission requests
-  // - ready: starts recording
-  // - recording: stops (subject to MIN_RECORD_SEC gate via canStop)
-  const onRecordTap = isUninitialized
-    ? initializePermissions
-    : isRecording
-      ? stopRecording
-      : startRecording;
+  const onRecordTap = isRecording ? stopRecording : startRecording;
 
   return (
     <div className="fixed inset-0 bg-[#0A0A0A]" style={{ height: "100dvh" }}>
@@ -332,12 +327,14 @@ export function Recorder() {
           <CameraUploadButton />
         </>
       )}
-      <RecordButton
-        recording={isRecording}
-        progress={progress}
-        canStop={!isRecording || progress >= MIN_RECORD_SEC / RECORD_CAP_SEC}
-        onTap={onRecordTap}
-      />
+      {phase.kind === "ready" || phase.kind === "recording" ? (
+        <RecordButton
+          recording={isRecording}
+          progress={progress}
+          canStop={!isRecording || progress >= MIN_RECORD_SEC / RECORD_CAP_SEC}
+          onTap={onRecordTap}
+        />
+      ) : null}
       <AddToHomeScreenHint dismiss={isRecording} />
       {!isRecording && <BottomTabBar />}
     </div>
