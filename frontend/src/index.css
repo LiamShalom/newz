@@ -48,11 +48,18 @@ html {
 /* Global focus indicator for keyboard nav. Scoped away from form controls
    (input/textarea/select) — those carry their own component-level focus
    state (e.g. CommentComposer's coral ring) and stacking the blue outline
-   on top reads as a bug. */
-:focus-visible:not(input, textarea, select) {
+   on top reads as a bug. The .no-blue-focus class opts a button out too,
+   used by buttons that already carry a coral gradient and don't need an
+   additional blue ring. */
+:focus-visible:not(input, textarea, select, .no-blue-focus) {
   outline: 2px solid var(--color-accent-link);
   outline-offset: 2px;
   border-radius: 2px;
+}
+
+.no-blue-focus:focus-visible {
+  outline: 2px solid var(--color-coral);
+  outline-offset: 2px;
 }
 
 /* Bottom-of-video fade — theme-adaptive (default = dark fade-to-black).
