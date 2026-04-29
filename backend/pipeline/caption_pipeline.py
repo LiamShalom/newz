@@ -27,6 +27,7 @@ from pathlib import Path
 import numpy as np
 
 from .. import config
+from .geocode import reverse_geocode
 from .stitch import stitch_clips
 
 log = logging.getLogger(__name__)
@@ -330,7 +331,12 @@ async def generate_caption(
               end_offset_sec, lat, lng, ts, vec (np.ndarray or None).
     centroid: parent-scope cluster centroid (unit vector).
     """
-    location = "Pasadena, CA"  # cluster reverse-geocode is a Phase 5 follow-up
+    lats = [c["lat"] for c in children if c.get("lat") is not None]
+    lngs = [c["lng"] for c in children if c.get("lng") is not None]
+    if lats and lngs:
+        location = await reverse_geocode(sum(lats) / len(lats), sum(lngs) / len(lngs))
+    else:
+        location = "Pasadena, CA"
 
     if not config.GEMINI_API_KEY:
         log.warning("generate_caption: GEMINI_API_KEY not set — skipping Gemini track")

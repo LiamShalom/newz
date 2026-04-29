@@ -36,6 +36,7 @@ from .. import config, db, events
 from .compile_tools import newz_tools_server
 from .stitch import stitch_clips, trim_window
 from .caption_pipeline import generate_caption
+from .geocode import reverse_geocode
 from .runs import compute_runs_for_cluster
 
 
@@ -224,12 +225,17 @@ async def _run_orchestrator_chain(cluster_id: str) -> str:
         )
 
     distinct_parents = len({rid.rsplit("_run_", 1)[0] for rid in run_ids})
+    cluster = await db.get_cluster(cluster_id)
+    initial_location = await reverse_geocode(
+        (cluster or {}).get("centroid_lat"),
+        (cluster or {}).get("centroid_lng"),
+    )
     seg_id = await db.insert_segment(
         cluster_id=cluster_id,
         ordered_clip_ids=run_ids,
         title="",
         caption="",
-        location="Pasadena, CA",
+        location=initial_location,
         source_count=distinct_parents or len(run_ids),
     )
     log.info(
@@ -352,7 +358,11 @@ async def _save_fallback_segment(cluster_id: str, video_url: str | None = None) 
         when = datetime.fromtimestamp(clips[0]["ts"], tz=timezone.utc).strftime("%b %-d, %Y")
     else:
         when = datetime.now(tz=timezone.utc).strftime("%b %-d, %Y")
-    location_str = "Pasadena, CA"  # default; cluster centroid reverse-geocode is a Phase 5 follow-up
+    cluster = await db.get_cluster(cluster_id)
+    location_str = await reverse_geocode(
+        (cluster or {}).get("centroid_lat"),
+        (cluster or {}).get("centroid_lng"),
+    )
     caption = f"{when} — {location_str}. Submitted footage from {distinct_parents} contributor(s)."
     return await db.insert_segment(
         cluster_id=cluster_id,
