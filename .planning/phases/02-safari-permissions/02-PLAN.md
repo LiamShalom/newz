@@ -11,24 +11,34 @@ Three sequenced waves, ordered by leverage and risk. Wave 1 removes UI noise so 
 
 ## Task Breakdown
 
-### Wave 1 — Bug A: Redundant priming popup
+### Wave 1 — Bug A + Bug B: Drop priming, request both permissions on first record-button tap
 
-- [ ] **T1.1** — Decide between two paths after a 5-min thought exercise on the trade-off:
-  - **Path α (drop)**: delete `PrimingModal.tsx` and the `priming` phase in `Recorder.tsx`. Camera page mounts → immediately calls `acquire("environment")` → native browser permission popup is the only one. Pro: cleanest UX, zero redundancy. Con: no contextual explanation before the native dialog, possibly lower grant rate.
-  - **Path β (rewrite)**: keep `PrimingModal.tsx` but rewrite the copy to set up the upcoming native dialogs ("Tap *Allow* on the next two prompts so we can…"). Don't promise location at priming time — be honest that location is asked later, when you record. Pro: keeps grant-rate-helping context. Con: still two taps before the camera shows.
-  - **Recommend Path α for the pilot.** Funding demos prioritize speed-to-content; a redundant-feeling popup hurts more than the lost context helps.
-- [ ] **T1.2** — Implement chosen path. If α: delete `PrimingModal.tsx`, remove the `priming` phase variant from `Phase` type in `Recorder.tsx`, change initial state to `{ kind: "acquiring", facing: "environment" }`, drop `onPrimingDone`, kick off `acquire("environment")` from a `useEffect` on mount. If β: edit copy in PrimingModal.tsx and verify the priming text matches what's actually requested.
-- [ ] **T1.3** — Test on production iPhone Safari + iPhone Chrome: confirm the doubled popup no longer appears. (Bug A fix verification.)
+**Locked decision (2026-04-29 review):** Path α — drop `PrimingModal.tsx` entirely. The record button itself becomes the gesture anchor for *both* camera and location. Both browser dialogs fire synchronously inside the same gesture frame so they chain back-to-back.
 
-### Wave 2 — Bug B: iPhone Safari blocks geolocation at post
+This collapses the original Wave 1 (Bug A: redundant popup) and Wave 2 (Bug B: location blocked at post) into one coordinated change. By requesting location at permission-grant time instead of deferring to record-tap, we expect to eliminate the iPhone Safari "location-blocked" dead-end: permissions are settled upfront, before MediaRecorder ever starts.
 
-- [ ] **T2.1** — **Diagnose first, fix second.** Add structured console logs around every geolocation call point: priming/mount, `startRecording` (current GPS sample point), and `submitClip` (current await point). Log `navigator.permissions.query({name:'geolocation'})` state at each point if the API is supported on Safari. Push to a diagnostic branch, deploy via Vercel preview, test on iPhone Safari with paired Web Inspector. Capture: does the native location prompt appear? At which step? What's the failure code from getCurrentPosition (1=denied / 2=unavailable / 3=timeout)?
-- [ ] **T2.2** — Based on T2.1 findings, pick fix. Three likely paths:
-  - **Path α (gesture separation)**: move geolocation request from record-tap to *submit-tap*. Submit becomes a fresh user gesture distinct from the gesture that started MediaRecorder. Trade-off: GPS samples submit-time location, not record-time. For pilot scale this is fine — most clips are submitted within seconds of recording.
-  - **Path β (re-prompt with permissions API)**: query `navigator.permissions.state` before calling getCurrentPosition; if `denied`, surface a "Tap to enable location" button that triggers a fresh request inside the user gesture. Useful if Safari permanently caches a "Don't allow" from a prior session.
-  - **Path γ (kill the location-blocking gate)**: the strategic Q in PROJECT.md asks whether we should accept null-GPS clips with reduced clustering weight. If we go this route, no fix is needed at all — submit succeeds without GPS. Bigger product call; flag and revisit if α/β are too brittle.
-- [ ] **T2.3** — Implement chosen path. For path α (default suspect): move `getPositionWithTimeout` invocation from `startRecording` to `submitClip`, await it inline before posting. Drop `gpsPromiseRef`. Adjust `submitting` UX — possibly add a brief "getting location..." state on the submit button if the lookup is sub-second.
-- [ ] **T2.4** — Re-test on iPhone Safari production preview: full record → post flow succeeds, video lands in feed, native location prompt appears at the expected moment.
+- [ ] **T1.1** — Delete `PrimingModal.tsx`. Remove its import + usage in `Recorder.tsx`.
+- [ ] **T1.2** — Add a new initial phase `{ kind: "uninitialized" }` in `Recorder.tsx`. Render this state as: `CameraView` (no stream → naturally renders black) + `RecordButton` only. No flip / upload buttons until acquired (would confuse — they imply camera is on).
+- [ ] **T1.3** — On first record-button tap (when `phase.kind === "uninitialized"`), call a new `initializePermissions()` handler that:
+  - Fires `navigator.mediaDevices.getUserMedia(...)` and `navigator.geolocation.getCurrentPosition(...)` **synchronously** in the same gesture frame (no `await` between them — both promises kicked off, then both awaited via `Promise.all`).
+  - On both grants: phase → `{ kind: "ready", facing: "environment" }` with stream attached. User sees camera preview. They tap record again to actually start.
+  - On camera deny: phase → `{ kind: "error", error: "camera-blocked" }`.
+  - On location deny: phase → `{ kind: "error", error: "location-blocked" }`.
+- [ ] **T1.4** — Keep the existing record-tap GPS sample (line 142) for fresh per-recording coordinates, but it will now read coords without a dialog (perms are pre-granted from T1.3). If permissions weren't granted at T1.3, we never reach T1.4 — the user is on the error screen.
+- [ ] **T1.5** — Drop the `priming_shown` sessionStorage flag (moot once PrimingModal is gone).
+- [ ] **T1.6** — Build, type-check, vitest. Confirm RecordButton.test still passes (it doesn't depend on PrimingModal).
+- [ ] **T1.7** — Deploy via Vercel preview, test on iPhone Safari. Verify: app opens → camera page (black + record button) → tap record → camera dialog → Allow → location dialog → Allow → camera preview shows → tap record → recording → post → video in feed.
+
+**Fallback plan if Wave 1 doesn't fix Bug B:** the original Wave 2 investigation tasks below remain valid — they become the actual investigation if synchronous-gesture-chaining isn't enough.
+
+### Wave 2 — Bug B fallback investigation (only if Wave 1 doesn't resolve it)
+
+- [ ] **T2.1** — Add structured console logs around every geolocation call point. Log `navigator.permissions.query({name:'geolocation'})` state. Deploy to preview, test on iPhone Safari with paired Web Inspector. Capture failure code (1=denied / 2=unavailable / 3=timeout).
+- [ ] **T2.2** — Based on T2.1 findings, pick fix:
+  - **Path α**: separate gestures — move geolocation to submit-tap (loses record-tap GPS pinning).
+  - **Path β**: `navigator.permissions` query + manual re-prompt with a "Tap to enable location" recovery button.
+  - **Path γ**: accept null-GPS clips with reduced clustering weight (strategic Q in PROJECT.md — bigger call).
+- [ ] **T2.3** — Implement + re-test.
 
 ### Wave 3 — Bug C: Open Settings button is dead
 
