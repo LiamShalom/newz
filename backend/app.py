@@ -171,7 +171,7 @@ async def health():
     return {"ok": True}
 
 
-_RUN_ID_RE = re.compile(r"^[a-f0-9_]+$")
+_RUN_ID_RE = re.compile(r"^[a-f0-9]+_run_[0-9]+$")
 
 
 @app.get("/runs/{run_id}.mp4", include_in_schema=False)
