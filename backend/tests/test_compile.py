@@ -63,7 +63,7 @@ async def test_compile_segment_happy_path(tmp_path):
     async def fake_compute_runs(cid):
         return fake_runs
 
-    async def fake_trim(ref, out):
+    async def fake_trim(ref, out, *, run_id=None):
         Path(out).write_bytes(b"trimmed")
         return out
 

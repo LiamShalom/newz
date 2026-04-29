@@ -64,3 +64,46 @@ async def fresh_db(metadata_backend):
     finally:
         if hasattr(db, "close_pool"):
             await db.close_pool()
+
+
+@pytest.fixture(params=["local", "blob"], ids=["local", "blob"])
+def storage_backend(request, monkeypatch, respx_mock):
+    """D-21: parametrize STORAGE_BACKEND alongside METADATA_BACKEND.
+
+    Cells where STORAGE_BACKEND=blob register respx mocks for Vercel Blob's
+    REST endpoints. NEVER hits real Vercel Blob from CI. respx_mock is the
+    pytest-fixture form (auto-tear-down per-test) — Pitfall 5.
+    """
+    backend = request.param
+    monkeypatch.setenv("STORAGE_BACKEND", backend)
+    monkeypatch.setenv("OFFLINE_DEMO", "false")
+    if backend == "blob":
+        monkeypatch.setenv("BLOB_READ_WRITE_TOKEN", "vercel_blob_rw_TESTSTORE_xxxxx")
+        respx_mock.put("https://vercel.com/api/blob").respond(
+            json={
+                "url": "https://teststore.private.blob.vercel-storage.com/uploads/abc.mp4",
+                "downloadUrl": "https://teststore.private.blob.vercel-storage.com/uploads/abc.mp4?download=1",
+                "pathname": "uploads/abc.mp4",
+                "contentType": "video/mp4",
+                "contentDisposition": 'attachment; filename="abc.mp4"',
+            },
+        )
+        respx_mock.post("https://vercel.com/api/blob/delete").respond(200)
+        respx_mock.get("https://vercel.com/api/blob").respond(
+            json={
+                "size": 1024,
+                "uploadedAt": "2026-04-29T00:00:00Z",
+                "pathname": "uploads/abc.mp4",
+                "contentType": "video/mp4",
+                "contentDisposition": "",
+                "url": "https://teststore.private.blob.vercel-storage.com/uploads/abc.mp4",
+                "downloadUrl": "https://teststore.private.blob.vercel-storage.com/uploads/abc.mp4?download=1",
+                "cacheControl": "public, max-age=2592000",
+            },
+        )
+    import importlib
+    import backend.config
+    import backend.storage
+    importlib.reload(backend.config)
+    importlib.reload(backend.storage)
+    yield backend

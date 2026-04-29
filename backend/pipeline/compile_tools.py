@@ -23,8 +23,10 @@ log = logging.getLogger(__name__)
         "Return all RUNS in a cluster. A run is a contiguous span of similar "
         "3-second slices within a single parent clip — i.e. one continuous "
         "camera angle. Use these as candidates for angle selection. "
-        "Each run has: id, parent_id, parent_path, start_offset_sec, "
-        "end_offset_sec, duration_sec, lat/lng/ts (from parent), member_child_ids."
+        "Each run has: id, parent_id, parent_path (or parent_blob_url in blob mode), "
+        "start_offset_sec, end_offset_sec, duration_sec, lat/lng/ts (from parent), "
+        "member_child_ids. The exact source field depends on storage backend; treat "
+        "either a non-empty parent_path OR a non-null parent_blob_url as 'source available'."
     ),
     {"cluster_id": str},
 )
@@ -37,6 +39,7 @@ async def get_cluster_runs(args: dict) -> dict:
             "id": r.id,
             "parent_id": r.parent_id,
             "parent_path": r.parent_path,
+            "parent_blob_url": getattr(r, "parent_blob_url", None),
             "start_offset_sec": r.start_offset_sec,
             "end_offset_sec": r.end_offset_sec,
             "duration_sec": round(max(0.0, r.end_offset_sec - r.start_offset_sec), 2),

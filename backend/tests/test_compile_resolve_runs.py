@@ -29,9 +29,12 @@ async def test_resolve_run_ids_to_stitch_refs():
         refs = await compile_mod._resolve_run_ids_to_stitch_refs(
             "c1", ["p2_run_0", "p1_run_0"]  # editor reorder
         )
+    # Phase 10: refs gain `headers` (None in local mode) and `run_id` keys.
     assert refs == [
-        {"path": "/x/p2.mp4", "start_offset_sec": 0.0, "end_offset_sec": None},
-        {"path": "/x/p1.mp4", "start_offset_sec": 0.0, "end_offset_sec": 6.0},
+        {"path": "/x/p2.mp4", "start_offset_sec": 0.0, "end_offset_sec": None,
+         "headers": None, "run_id": "p2_run_0"},
+        {"path": "/x/p1.mp4", "start_offset_sec": 0.0, "end_offset_sec": 6.0,
+         "headers": None, "run_id": "p1_run_0"},
     ]
 
 
