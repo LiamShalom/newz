@@ -60,9 +60,19 @@ type Phase =
 const RECORD_CAP_SEC = 30; // CAP-05 hard cap
 const MIN_RECORD_SEC = 5; // Marengo requires >=4s; 5 leaves a buffer for trim/encoding
 
+// Session-scoped flag: once both permissions are granted in this tab, skip the
+// priming popup on subsequent feed→camera navigations. Cleared on a hard reload
+// (sessionStorage is per-tab) so a stale flag can't trap a user whose permissions
+// were revoked.
+const PERMS_GRANTED_KEY = "perms_granted";
+
 export function Recorder() {
   const navigate = useNavigate();
-  const [phase, setPhase] = useState<Phase>({ kind: "priming" });
+  const [phase, setPhase] = useState<Phase>(() =>
+    sessionStorage.getItem(PERMS_GRANTED_KEY) === "1"
+      ? { kind: "acquiring", facing: "environment" }
+      : { kind: "priming" },
+  );
   const [progress, setProgress] = useState(0);
 
   // Refs for things React must not re-render against.
@@ -135,15 +145,16 @@ export function Recorder() {
 
       // Both granted — attach stream, transition to ready. User taps record
       // again to actually start recording.
+      sessionStorage.setItem(PERMS_GRANTED_KEY, "1");
       cleanupStream();
       streamRef.current = camResult.value;
       setPhase({ kind: "ready", facing: "environment" });
     });
   };
 
-  // Re-acquire camera (e.g. after retake or flip). Permissions already granted
-  // by initializePermissions on first tap, so getUserMedia here doesn't show a
-  // new dialog.
+  // Re-acquire camera (e.g. after retake or flip, or on mount when permissions
+  // were already granted in this session). Granted permissions don't re-prompt,
+  // so this is dialog-free on the warm path.
   const acquire = async (facing: "environment" | "user"): Promise<void> => {
     setPhase({ kind: "acquiring", facing });
     try {
@@ -155,7 +166,9 @@ export function Recorder() {
       streamRef.current = stream;
       setPhase({ kind: "ready", facing });
     } catch {
-      // Permissions were granted earlier; failure here is a hardware issue.
+      // Cached perms got revoked between sessions, or hardware error.
+      // Clear the cache flag so the next visit re-shows priming.
+      sessionStorage.removeItem(PERMS_GRANTED_KEY);
       setPhase({ kind: "error", error: "camera-blocked" });
     }
   };
@@ -270,6 +283,16 @@ export function Recorder() {
     };
   }, []);
 
+  // Warm-path: when we initialize the phase as "acquiring" (because permissions
+  // were already granted earlier in this session), kick off the camera fetch
+  // automatically. This skips the priming popup on feed→camera navigations.
+  useEffect(() => {
+    if (phase.kind === "acquiring" && !streamRef.current) {
+      void acquire(phase.facing);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Render —————————————————————————————————————————————
 
   if (phase.kind === "priming") {
@@ -277,12 +300,15 @@ export function Recorder() {
   }
 
   if (phase.kind === "error") {
-    return (
-      <PermissionErrorScreen
-        kind={phase.error}
-        onRetry={() => initializePermissions()}
-      />
-    );
+    // For permission-denied states, only a full page reload reliably picks up
+    // a Settings change on iOS Safari — the in-page permissions cache lags.
+    // For "location-unavailable" (transient GPS failure), an in-page retry
+    // is fine and avoids tearing down the React tree.
+    const onRetry =
+      phase.error === "location-unavailable"
+        ? () => initializePermissions()
+        : () => window.location.reload();
+    return <PermissionErrorScreen kind={phase.error} onRetry={onRetry} />;
   }
 
   if (
