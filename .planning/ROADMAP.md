@@ -37,7 +37,7 @@ Per-feature GSD: each backlog item becomes its own phase under `phases/<NN>-<slu
 | 1 | Upload timeout / reliability | Bug | Liam | ✅ Shipped (PR #1, `bccd5d5`) | — |
 | 2 | Clip selection logic fix | Bug | Liam | 🟡 Open — montage doesn't seem to pick clips; may need redesign | — |
 | 3 | Location bug ("UW shows Pasadena") | Bug | Liam | ✅ Shipped (PR #2, `beda750`) | — |
-| 4 | Safari location services bug + permissions gate decision | Bug + Decision | Roan | 🟡 Open — see strategic Q in PROJECT.md | — |
+| 4 | Safari location services bug + permissions gate decision | Bug + Decision | Roan | ✅ Shipped (PR #10, `038f576`) — gate-decision deferred to Mando #7 | `phases/02-safari-permissions/` |
 | 5 | **Anonymous comments + shares** | Feature | Roan | ✅ Shipped (pending real-iPhone verification) | `phases/01-comments-and-sharing/` |
 | 6 | Video censoring (UI side; pairs with Phase 11 backbone) | Feature | Roan | 🟡 Open — depends on backbone Phase 11 | — |
 | 7 | Permissions gate (mic + cam + location flow) | Feature | Roan | 🟡 Open — depends on #4 | — |
