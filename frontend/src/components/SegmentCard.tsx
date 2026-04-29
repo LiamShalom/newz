@@ -1,12 +1,15 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import { MessageCircle } from "lucide-react";
+import { MessageCircle, Share } from "lucide-react";
 import type { Segment } from "../types";
 import { relativeTime } from "../timeFormat";
 import { distanceLabel } from "../distance";
 import { LivePill } from "./LivePill";
 import { Comments } from "./Comments";
-import { fetchComments } from "../api";
+import { API_BASE, fetchComments } from "../api";
 import { subscribeToCommentsFor } from "../commentsBus";
+
+const CAN_SHARE =
+  typeof navigator !== "undefined" && typeof navigator.share === "function";
 
 function deriveSummary(s: Segment, locationStr: string | null): string {
   const angles = s.source_count > 1 ? `Captured from ${s.source_count} angles` : "Single-angle footage";
@@ -62,6 +65,25 @@ export function SegmentCard({
 
   const [commentsOpen, setCommentsOpen] = useState(false);
   const [commentCount, setCommentCount] = useState<number | undefined>(undefined);
+
+  const handleShare = useCallback(async () => {
+    // Backend /m/<id> serves OG tags + redirects browsers to FRONTEND_URL/m/<id>.
+    // We share the backend URL so iMessage/Twitter unfurlers see the meta tags;
+    // humans following the link land on the SPA route via the JS redirect.
+    const url = `${API_BASE}/m/${encodeURIComponent(segment.id)}`;
+    const title = segment.title || "Newz montage";
+    const text = segment.caption || "";
+    try {
+      await navigator.share({ title, text, url });
+    } catch (err) {
+      // User cancelled — AbortError is expected, swallow it. Other errors are
+      // rare (permissions denied) and we have no error UI for them at pilot.
+      if ((err as DOMException)?.name !== "AbortError") {
+        // eslint-disable-next-line no-console
+        console.warn("share failed:", err);
+      }
+    }
+  }, [segment.id, segment.title, segment.caption]);
 
   // Lazy: fetch the count once per card. Pilot scale; revisit if N gets large.
   useEffect(() => {
@@ -179,6 +201,17 @@ export function SegmentCard({
           <MessageCircle className="h-4 w-4" />
           <span>{commentCount ?? "comment"}</span>
         </button>
+        {CAN_SHARE && (
+          <button
+            type="button"
+            onClick={handleShare}
+            aria-label="share"
+            className="inline-flex items-center gap-1.5 rounded-full border border-hairline px-3 py-1.5 text-[13px] text-ink-primary hover:bg-surface-elevated"
+          >
+            <Share className="h-4 w-4" />
+            <span>share</span>
+          </button>
+        )}
       </div>
 
       <Comments
