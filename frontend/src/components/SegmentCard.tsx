@@ -1,5 +1,26 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import { MessageCircle, Share } from "lucide-react";
+import { MessageCircle } from "lucide-react";
+
+/** Phosphor `share-fat` (regular weight). Single closed-shape outline with
+ *  a curved stem and a wide arrowhead — the icon Roan handed off as the
+ *  exact target. Original 256x256 viewBox preserved; size via className. */
+function ShareArrowIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 256 256"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="16"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden
+      className={className}
+    >
+      <path d="M30.93,198.72C47.39,181.19,90.6,144,152,144v48l80-80L152,32V80C99.2,80,31.51,130.45,24,195.54A4,4,0,0,0,30.93,198.72Z" />
+    </svg>
+  );
+}
 import type { Segment } from "../types";
 import { relativeTime } from "../timeFormat";
 import { distanceLabel } from "../distance";
@@ -191,25 +212,26 @@ export function SegmentCard({
         {segment.caption}
       </p>
 
-      <div className="mt-4 px-4 flex items-center gap-3">
+      <div className="mt-4 px-4 flex items-center gap-4">
         <button
           type="button"
           onClick={() => setCommentsOpen(true)}
           aria-label="open comments"
-          className="inline-flex items-center gap-1.5 rounded-full border border-hairline px-3 py-1.5 text-[13px] text-ink-primary hover:bg-surface-elevated"
+          className="inline-flex items-center gap-1.5 text-ink-primary"
         >
-          <MessageCircle className="h-4 w-4" />
-          <span>{commentCount ?? "comment"}</span>
+          <MessageCircle className="h-6 w-6" />
+          {commentCount !== undefined && (
+            <span className="text-[13px]">{commentCount}</span>
+          )}
         </button>
         {CAN_SHARE && (
           <button
             type="button"
             onClick={handleShare}
             aria-label="share"
-            className="inline-flex items-center gap-1.5 rounded-full border border-hairline px-3 py-1.5 text-[13px] text-ink-primary hover:bg-surface-elevated"
+            className="inline-flex items-center text-ink-primary"
           >
-            <Share className="h-4 w-4" />
-            <span>share</span>
+            <ShareArrowIcon className="h-6 w-6" />
           </button>
         )}
       </div>

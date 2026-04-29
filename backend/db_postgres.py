@@ -1,16 +1,15 @@
-"""Phase 9 (D-07): asyncpg implementation of backend.db_sqlite functions.
-
-Signature parity contract: every public name in `__all__` matches db_sqlite.__all__
-byte-for-byte (D-07). Per-request branching is forbidden (D-08); the dispatcher in
-backend/db.py picks this module once at import time when METADATA_BACKEND=postgres
-and OFFLINE_DEMO is unset (D-11).
+"""asyncpg implementation of the metadata DB. Single backend (Neon Postgres).
 
 Pool lifecycle: init_pool() in app.lifespan startup; close_pool() in shutdown.
-Module-level _pool singleton; --workers 1 (L-02) makes inter-process coordination
-unnecessary.
+Module-level _pool singleton; --workers 1 (L-02) makes inter-process
+coordination unnecessary.
 
-Schema is owned by Alembic (backend/migrations); init() is a no-op for postgres
-(09-05 ships the initial migration that lands all 7 v1.1 tables).
+Schema is owned by Alembic (backend/migrations); init() is a no-op (the initial
+migration in Phase 9 lands all v1.1 tables).
+
+History note: until 2026-04-29 a sibling db_sqlite.py existed for OFFLINE_DEMO
+fallback and a Phase-9 dispatcher routed between them. Both retired once Neon
+stabilized. backend/db.py now re-exports this module unconditionally.
 """
 
 import json
@@ -28,14 +27,11 @@ from . import config
 log = logging.getLogger(__name__)
 
 __all__ = [
-    # Constants (db_sqlite parity stubs)
-    "DB_PATH", "CLIPS_DIR",
+    "CLIPS_DIR",
     # Sync helpers
     "ext_from_mime",
-    # Init
-    "init",
-    # Postgres-specific lifecycle (NOT in db_sqlite.py — exported for app.lifespan)
-    "init_pool", "close_pool", "get_pool",
+    # Lifecycle
+    "init", "init_pool", "close_pool", "get_pool",
     # Clips CRUD
     "insert_clip", "get_clip", "fetch_recent_clips",
     # Embeddings
@@ -58,9 +54,7 @@ __all__ = [
     "reset_all", "delete_recent_clips",
 ]
 
-# Stubbed for db_sqlite parity. CLIPS_DIR is still consumed by /media StaticFiles
-# in Phase 9; Phase 10 retires that mount when blob storage lands.
-DB_PATH: "Path | None" = None  # postgres has no file path
+# CLIPS_DIR is still consumed by /media StaticFiles when STORAGE_BACKEND=local.
 CLIPS_DIR: Path = config.DATA_DIR / "clips"
 
 # Module-level pool singleton — process-wide; --workers 1 makes this safe.
@@ -99,11 +93,9 @@ async def init_pool() -> None:
         log.warning("init_pool called twice; ignoring second call")
         return
     if not config.DATABASE_URL:
-        # Fail-loud: this branch is only reached when METADATA_BACKEND=postgres and
-        # OFFLINE_DEMO=false (dispatcher enforces). Empty DATABASE_URL is a deploy bug.
+        # Fail-loud: empty DATABASE_URL is a deploy bug.
         raise RuntimeError(
-            "DATABASE_URL is empty but METADATA_BACKEND=postgres and OFFLINE_DEMO=false. "
-            "Set DATABASE_URL or flip METADATA_BACKEND=sqlite to use the SQLite path."
+            "DATABASE_URL is empty. Set it to the Neon DIRECT endpoint."
         )
     try:
         _pool = await asyncpg.create_pool(
@@ -144,10 +136,10 @@ def ext_from_mime(mime: str | None) -> str:
 async def init() -> None:
     """Schema is owned by Alembic migrations (run by Railway preDeployCommand).
 
-    Phase 9 keeps init() in the public surface for db_sqlite parity (D-07);
-    postgres branch is a no-op + log line. The DATA_DIR / CLIPS_DIR mkdirs are
-    still useful because /media StaticFiles serves files from CLIPS_DIR until
-    Phase 10's blob migration lands.
+    init() is a no-op + log line — kept on the public surface so the lifespan
+    sequence (init_pool → init → rebuild_cache) still has a phase-three call
+    site. CLIPS_DIR mkdir is still useful because /media StaticFiles serves
+    files from CLIPS_DIR when STORAGE_BACKEND=local.
     """
     config.DATA_DIR.mkdir(parents=True, exist_ok=True)
     CLIPS_DIR.mkdir(parents=True, exist_ok=True)
@@ -255,7 +247,7 @@ async def get_embedding(clip_id: str) -> np.ndarray | None:
 async def get_all_clusters() -> list[dict]:
     """Read all clusters with member_ids populated from clips.cluster_id JOIN.
 
-    Used by lifespan rebuild (CLU-10). Same shape as db_sqlite.get_all_clusters.
+    Used by lifespan rebuild (CLU-10).
     """
     pool = get_pool()
     cluster_rows = [
@@ -482,26 +474,64 @@ async def get_segment_by_id(segment_id: str) -> dict | None:
 # ---------------------------------------------------------------------------
 
 async def insert_comment(segment_id: str, session_id: str, text: str) -> dict:
-    """Append a comment. Returns the public-safe dict (no session_id)."""
+    """Append a comment + return public-safe dict (no session_id) including
+    `commenter_index` — the rank of this session_id among unique commenters
+    on this segment, ordered by their first-seen timestamp. Stable per
+    (segment, session_id), so a returning commenter keeps the same number."""
     now = time.time()
     pool = get_pool()
-    row = await pool.fetchrow(
-        """INSERT INTO comments (segment_id, session_id, text, created_at)
-           VALUES ($1, $2, $3, $4) RETURNING id""",
-        segment_id, session_id, text, now,
-    )
-    return {"id": row["id"], "segment_id": segment_id, "text": text, "created_at": now}
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                """INSERT INTO comments (segment_id, session_id, text, created_at)
+                   VALUES ($1, $2, $3, $4) RETURNING id""",
+                segment_id, session_id, text, now,
+            )
+            idx_row = await conn.fetchrow(
+                """SELECT idx FROM (
+                       SELECT session_id,
+                              ROW_NUMBER() OVER (ORDER BY MIN(created_at)) AS idx
+                       FROM comments
+                       WHERE segment_id = $1
+                       GROUP BY session_id
+                   ) ranks
+                   WHERE session_id = $2""",
+                segment_id, session_id,
+            )
+    return {
+        "id": row["id"],
+        "segment_id": segment_id,
+        "text": text,
+        "created_at": now,
+        "commenter_index": int(idx_row["idx"]) if idx_row else 1,
+    }
 
 
 async def list_comments(segment_id: str, limit: int = 200) -> list[dict]:
-    """Return public-safe comments for a segment, newest first. Excludes session_id."""
+    """Public-safe comments for a segment, newest first. Each row carries a
+    stable `commenter_index` (rank of session_id by first-seen timestamp)."""
     pool = get_pool()
     rows = await pool.fetch(
-        """SELECT id, text, created_at FROM comments
-           WHERE segment_id = $1 ORDER BY created_at DESC LIMIT $2""",
+        """WITH ranks AS (
+               SELECT session_id,
+                      ROW_NUMBER() OVER (ORDER BY MIN(created_at)) AS idx
+               FROM comments
+               WHERE segment_id = $1
+               GROUP BY session_id
+           )
+           SELECT c.id, c.text, c.created_at, r.idx AS commenter_index
+           FROM comments c
+           JOIN ranks r ON c.session_id = r.session_id
+           WHERE c.segment_id = $1
+           ORDER BY c.created_at DESC
+           LIMIT $2""",
         segment_id, limit,
     )
-    return [dict(r) for r in rows]
+    return [
+        {"id": r["id"], "text": r["text"], "created_at": r["created_at"],
+         "commenter_index": int(r["commenter_index"])}
+        for r in rows
+    ]
 
 
 async def count_comments_since(session_id: str, since_ts: float) -> int:

@@ -156,9 +156,16 @@ async def test_no_multi_angle_template_in_fallback_paths():
         captured.update(kwargs)
         return "seg-fallback-test"
 
-    with patch("backend.pipeline.compile.db") as mock_db:
+    async def fake_compute_runs(_cluster_id):
+        # No runs available → fallback path uses parent IDs.
+        return []
+
+    with patch("backend.pipeline.compile.db") as mock_db, \
+         patch("backend.pipeline.compile.compute_runs_for_cluster",
+               side_effect=fake_compute_runs):
         mock_db.get_segment_for_cluster = AsyncMock(return_value=None)
         mock_db.fetch_cluster_clips = AsyncMock(return_value=fake_clips)
+        mock_db.get_cluster = AsyncMock(return_value=None)
         mock_db.insert_segment = AsyncMock(side_effect=fake_insert_segment)
 
         from backend.pipeline.compile import _save_fallback_segment
