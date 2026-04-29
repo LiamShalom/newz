@@ -82,6 +82,7 @@ progress:
 - [ ] Run Vercel Blob AsyncBlobClient (vercel 0.5.8) spike before Phase 10 planning — bleeding-edge SDK
 - [ ] Benchmark Gemini 2.5 Flash-Lite latency on actual v1.0 staged demo dataset before Phase 11 planning
 - [ ] Start Cloudflare CSAM Scanning Tool / NCMEC approval application (unknown lead time) before Phase 11 scheduling
+- [ ] Retire SQLite (`db_sqlite.py`) once Neon cutover stabilizes. Mechanical: delete file, simplify `backend/db.py` to direct Postgres import, drop `aiosqlite` from requirements. Strategic: decide what `OFFLINE_DEMO=true` does without SQLite — in-memory stub vs. retire the flag entirely. Owner: Liam. Phase 01 (comments) added parallel SQLite + Postgres CRUD per current dispatcher contract; both go away together.
 
 **Carry-overs:**
 - [ ] Re-run calibration notebook against parent-clustered code path (from v1.0 deferred)

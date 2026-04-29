@@ -1,3 +1,12 @@
+"""SQLite metadata backend — kept as the OFFLINE_DEMO fallback path only.
+
+Slated for retirement once the Neon cutover stabilizes. Drop plan: delete this
+file + simplify backend/db.py to a direct `from .db_postgres import *`, drop
+aiosqlite from requirements.txt, and decide what OFFLINE_DEMO does without
+SQLite (in-memory stub vs. retire the flag entirely). See STATE.md Pending
+Todos. Don't add new SQLite-only behavior here — only signature parity with
+db_postgres.py to keep the dispatcher healthy until removal.
+"""
 import json
 import logging
 import time
