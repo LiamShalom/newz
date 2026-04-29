@@ -1,2 +1,5 @@
 .vercel
 .env*.local
+
+# mkcert dev certs (per-machine; never committed)
+*.pem

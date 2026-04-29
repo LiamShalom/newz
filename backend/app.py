@@ -15,14 +15,16 @@ from pathlib import Path
 
 from fastapi import FastAPI, UploadFile, Form, Header, File, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from html import escape as _html_escape
 from sse_starlette.sse import EventSourceResponse
 
 from structlog.contextvars import bind_contextvars
 
-from . import config, db, events
+from . import config, db, events, rate_limit, content_filter
 from .pipeline.run import run_pipeline
-from .models import IngestResponse
+from .models import IngestResponse, CommentCreateRequest
 from .observability.middleware import XFFStrip, RequestIDAndContextvarsBind
 from .observability.metrics import MetricsMiddleware, make_metrics_endpoint, STAGE_DURATION
 
@@ -241,6 +243,145 @@ async def sse_events(request: Request):
             await events.unsubscribe(q)
 
     return EventSourceResponse(event_stream(), ping=15)
+
+
+# ---------------------------------------------------------------------------
+# Phase 01 (feature track): anonymous comments on segments (montages)
+#   POST /segments/{id}/comments — body { text }; X-Session-Id header (server-side only)
+#   GET  /segments/{id}/comments — public-safe list, no session_id leakage
+# ---------------------------------------------------------------------------
+
+async def _segment_exists(segment_id: str) -> bool:
+    """Existence check via get_segment_for_cluster reverse-lookup is awkward; use raw query.
+
+    No FK enforcement on SQLite path (PRAGMA foreign_keys not enabled), so we 404 explicitly
+    instead of relying on IntegrityError discrimination across backends.
+    """
+    if config.METADATA_BACKEND == "postgres" and not config.OFFLINE_DEMO:
+        pool = db.get_pool()
+        row = await pool.fetchrow("SELECT 1 FROM segments WHERE id = $1", segment_id)
+        return row is not None
+    import aiosqlite
+    async with aiosqlite.connect(db.DB_PATH) as conn:
+        async with conn.execute("SELECT 1 FROM segments WHERE id = ?", (segment_id,)) as cur:
+            return (await cur.fetchone()) is not None
+
+
+@app.post("/segments/{segment_id}/comments", status_code=201)
+async def post_comment(
+    segment_id: str,
+    payload: CommentCreateRequest,
+    x_session_id: str | None = Header(default=None, alias="X-Session-Id"),
+):
+    if not x_session_id:
+        raise HTTPException(status_code=400, detail="X-Session-Id header required")
+    if not await _segment_exists(segment_id):
+        raise HTTPException(status_code=404, detail="segment not found")
+    text = payload.text.strip()
+    if not (1 <= len(text) <= 300):
+        raise HTTPException(status_code=400, detail="text must be 1-300 chars after trim")
+    allowed, retry_after = await rate_limit.check_and_record(x_session_id)
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="too many comments — slow down",
+            headers={"Retry-After": str(retry_after)},
+        )
+    filter_result = content_filter.check(text)
+    if filter_result.blocked:
+        raise HTTPException(status_code=400, detail=f"comment rejected: {filter_result.reason}")
+    comment = await db.insert_comment(segment_id, x_session_id, text)
+    await events.broadcast({
+        "type": "comment_added",
+        "segment_id": segment_id,
+        "comment": comment,
+    })
+    return comment
+
+
+@app.get("/segments/{segment_id}/comments")
+async def list_segment_comments(segment_id: str):
+    if not await _segment_exists(segment_id):
+        raise HTTPException(status_code=404, detail="segment not found")
+    return {"comments": await db.list_comments(segment_id)}
+
+
+# ---------------------------------------------------------------------------
+# Phase 01 (feature track): public single-segment fetch + share landing
+#   GET /segments/{id}        — JSON for the standalone montage view (T3.2)
+#   GET /m/{id}               — server-rendered HTML with OG tags (T3.1).
+#                               Bots scrape OG; browsers JS-redirect to FRONTEND_URL.
+# ---------------------------------------------------------------------------
+
+@app.get("/segments/{segment_id}")
+async def get_segment(segment_id: str):
+    seg = await db.get_segment_by_id(segment_id)
+    if seg is None:
+        raise HTTPException(status_code=404, detail="segment not found")
+    return seg
+
+
+def _truncate(text: str, n: int) -> str:
+    text = text.strip()
+    return text if len(text) <= n else text[: n - 1].rstrip() + "…"
+
+
+@app.get("/m/{segment_id}", response_class=HTMLResponse, include_in_schema=False)
+async def share_landing(segment_id: str, request: Request):
+    """T3.1 — server-rendered share landing. iMessage/Twitter unfurlers don't run
+    JS, so OG tags must be in the initial HTML. Browsers fall through to a
+    JS+meta-refresh redirect to FRONTEND_URL/m/{segment_id} (handled by the SPA)."""
+    seg = await db.get_segment_by_id(segment_id)
+    if seg is None:
+        raise HTTPException(status_code=404, detail="segment not found")
+
+    # request.base_url is what we hand to OG meta tags. Uvicorn defaults to
+    # proxy_headers=True, so Railway's X-Forwarded-Proto: https propagates and
+    # base_url reports https — required for og:video URLs to load in iMessage.
+    base = str(request.base_url).rstrip("/")
+    video_url = seg.get("video_url")
+    absolute_video = f"{base}{video_url}" if video_url else ""
+
+    title = seg.get("title") or seg.get("caption") or "Newz montage"
+    caption = seg.get("caption") or ""
+    location = seg.get("location") or ""
+    description = _truncate(f"{caption}{(' · ' + location) if location else ''}".strip(" ·"), 200)
+
+    share_url = f"{base}/m/{segment_id}"
+    spa_url = f"{config.FRONTEND_URL.rstrip('/')}/m/{segment_id}"
+
+    # html.escape covers attribute injection; no innerHTML interpolation here.
+    e = _html_escape
+    html = f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>{e(title)}</title>
+<meta name="description" content="{e(description)}" />
+
+<meta property="og:type" content="video.other" />
+<meta property="og:site_name" content="Newz" />
+<meta property="og:title" content="{e(title)}" />
+<meta property="og:description" content="{e(description)}" />
+<meta property="og:url" content="{e(share_url)}" />
+{f'<meta property="og:video" content="{e(absolute_video)}" />' if absolute_video else ''}
+{f'<meta property="og:video:secure_url" content="{e(absolute_video)}" />' if absolute_video else ''}
+{f'<meta property="og:video:type" content="video/mp4" />' if absolute_video else ''}
+
+<meta name="twitter:card" content="{('player' if absolute_video else 'summary')}" />
+<meta name="twitter:title" content="{e(title)}" />
+<meta name="twitter:description" content="{e(description)}" />
+{f'<meta name="twitter:player" content="{e(absolute_video)}" />' if absolute_video else ''}
+
+<meta http-equiv="refresh" content="0; url={e(spa_url)}" />
+<script>window.location.replace({json.dumps(spa_url)});</script>
+</head>
+<body style="font-family:system-ui,sans-serif;padding:24px;color:#111">
+<p>Redirecting to <a href="{e(spa_url)}">Newz</a>…</p>
+</body>
+</html>"""
+    return HTMLResponse(content=html, status_code=200)
 
 
 @app.get("/debug/clusters", include_in_schema=False)

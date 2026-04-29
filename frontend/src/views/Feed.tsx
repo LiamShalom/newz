@@ -4,6 +4,7 @@ import { fetchSegments } from "../api";
 import { getOrCreateSessionId } from "../session";
 import { flushUploadQueue } from "../uploadQueue";
 import { useEventSource } from "../hooks/useEventSource";
+import { dispatchCommentAdded } from "../commentsBus";
 import type { Segment, ServerEvent } from "../types";
 import { BottomTabBar } from "../components/BottomTabBar";
 import { EmptyState } from "../components/EmptyState";
@@ -58,6 +59,8 @@ export function Feed() {
   useEventSource((ev: ServerEvent) => {
     if (ev.type === "segment_published" || ev.type === "cluster_assigned") {
       void refetchFeed();
+    } else if (ev.type === "comment_added") {
+      dispatchCommentAdded(ev.segment_id, ev.comment);
     }
   });
 
