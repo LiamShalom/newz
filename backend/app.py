@@ -15,7 +15,9 @@ from pathlib import Path
 
 from fastapi import FastAPI, UploadFile, Form, Header, File, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from html import escape as _html_escape
 from sse_starlette.sse import EventSourceResponse
 
 from structlog.contextvars import bind_contextvars
@@ -302,6 +304,84 @@ async def list_segment_comments(segment_id: str):
     if not await _segment_exists(segment_id):
         raise HTTPException(status_code=404, detail="segment not found")
     return {"comments": await db.list_comments(segment_id)}
+
+
+# ---------------------------------------------------------------------------
+# Phase 01 (feature track): public single-segment fetch + share landing
+#   GET /segments/{id}        — JSON for the standalone montage view (T3.2)
+#   GET /m/{id}               — server-rendered HTML with OG tags (T3.1).
+#                               Bots scrape OG; browsers JS-redirect to FRONTEND_URL.
+# ---------------------------------------------------------------------------
+
+@app.get("/segments/{segment_id}")
+async def get_segment(segment_id: str):
+    seg = await db.get_segment_by_id(segment_id)
+    if seg is None:
+        raise HTTPException(status_code=404, detail="segment not found")
+    return seg
+
+
+def _truncate(text: str, n: int) -> str:
+    text = text.strip()
+    return text if len(text) <= n else text[: n - 1].rstrip() + "…"
+
+
+@app.get("/m/{segment_id}", response_class=HTMLResponse, include_in_schema=False)
+async def share_landing(segment_id: str, request: Request):
+    """T3.1 — server-rendered share landing. iMessage/Twitter unfurlers don't run
+    JS, so OG tags must be in the initial HTML. Browsers fall through to a
+    JS+meta-refresh redirect to FRONTEND_URL/m/{segment_id} (handled by the SPA)."""
+    seg = await db.get_segment_by_id(segment_id)
+    if seg is None:
+        raise HTTPException(status_code=404, detail="segment not found")
+
+    # request.base_url is what we hand to OG meta tags. Uvicorn defaults to
+    # proxy_headers=True, so Railway's X-Forwarded-Proto: https propagates and
+    # base_url reports https — required for og:video URLs to load in iMessage.
+    base = str(request.base_url).rstrip("/")
+    video_url = seg.get("video_url")
+    absolute_video = f"{base}{video_url}" if video_url else ""
+
+    title = seg.get("title") or seg.get("caption") or "Newz montage"
+    caption = seg.get("caption") or ""
+    location = seg.get("location") or ""
+    description = _truncate(f"{caption}{(' · ' + location) if location else ''}".strip(" ·"), 200)
+
+    share_url = f"{base}/m/{segment_id}"
+    spa_url = f"{config.FRONTEND_URL.rstrip('/')}/m/{segment_id}"
+
+    # html.escape covers attribute injection; no innerHTML interpolation here.
+    e = _html_escape
+    html = f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>{e(title)}</title>
+<meta name="description" content="{e(description)}" />
+
+<meta property="og:type" content="video.other" />
+<meta property="og:site_name" content="Newz" />
+<meta property="og:title" content="{e(title)}" />
+<meta property="og:description" content="{e(description)}" />
+<meta property="og:url" content="{e(share_url)}" />
+{f'<meta property="og:video" content="{e(absolute_video)}" />' if absolute_video else ''}
+{f'<meta property="og:video:secure_url" content="{e(absolute_video)}" />' if absolute_video else ''}
+{f'<meta property="og:video:type" content="video/mp4" />' if absolute_video else ''}
+
+<meta name="twitter:card" content="{('player' if absolute_video else 'summary')}" />
+<meta name="twitter:title" content="{e(title)}" />
+<meta name="twitter:description" content="{e(description)}" />
+{f'<meta name="twitter:player" content="{e(absolute_video)}" />' if absolute_video else ''}
+
+<meta http-equiv="refresh" content="0; url={e(spa_url)}" />
+<script>window.location.replace({json.dumps(spa_url)});</script>
+</head>
+<body style="font-family:system-ui,sans-serif;padding:24px;color:#111">
+<p>Redirecting to <a href="{e(spa_url)}">Newz</a>…</p>
+</body>
+</html>"""
+    return HTMLResponse(content=html, status_code=200)
 
 
 @app.get("/debug/clusters", include_in_schema=False)

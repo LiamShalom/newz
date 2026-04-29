@@ -40,6 +40,7 @@ __all__ = [
     "get_cluster", "count_distinct_parents_in_cluster",
     # Segments
     "insert_segment", "fetch_recent_segments", "get_segment_for_cluster",
+    "get_segment_by_id",
     # Comments (Phase 01 feature track)
     "insert_comment", "list_comments", "count_comments_since",
     # Compile lock
@@ -425,6 +426,59 @@ async def get_segment_for_cluster(cluster_id: str) -> dict | None:
         ) as cur:
             row = await cur.fetchone()
     return dict(row) if row else None
+
+
+async def get_segment_by_id(segment_id: str) -> dict | None:
+    """Single-segment fetch with the same dict shape as fetch_recent_segments items.
+    Returns None when the segment doesn't exist. Used by /m/{id} share landing
+    (T3.1) and GET /segments/{id} (T3.2)."""
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+            """SELECT s.id, s.cluster_id, s.ordered_clip_ids, s.title, s.caption,
+                      s.location, c.member_count AS source_count, s.created_at,
+                      c.centroid_lat, c.centroid_lng, s.video_url AS stored_video_url
+               FROM segments s
+               JOIN clusters c ON c.id = s.cluster_id
+               WHERE s.id = ?""",
+            (segment_id,),
+        ) as cur:
+            row = await cur.fetchone()
+        if row is None:
+            return None
+        ids = json.loads(row["ordered_clip_ids"])
+        clip_path_map: dict[str, str] = {}
+        if ids:
+            placeholders = ",".join("?" * len(ids))
+            path_cur = await conn.execute(
+                f"SELECT id, path FROM clips WHERE id IN ({placeholders})", ids,
+            )
+            for p in await path_cur.fetchall():
+                clip_path_map[p["id"]] = p["path"]
+
+    def _url(clip_id: str) -> str | None:
+        if "_run_" in clip_id:
+            return f"/media/{clip_id}.mp4"
+        path = clip_path_map.get(clip_id)
+        if not path:
+            return None
+        return f"/media/{path.rsplit('/', 1)[-1]}"
+
+    video_urls = [_url(cid) for cid in ids]
+    return {
+        "id": row["id"],
+        "cluster_id": row["cluster_id"],
+        "ordered_clip_ids": ids,
+        "title": row["title"],
+        "caption": row["caption"],
+        "location": row["location"],
+        "source_count": row["source_count"],
+        "created_at": row["created_at"],
+        "centroid_lat": row["centroid_lat"],
+        "centroid_lng": row["centroid_lng"],
+        "video_url": row["stored_video_url"] if row["stored_video_url"] else (video_urls[0] if video_urls else None),
+        "video_urls": video_urls,
+    }
 
 
 # ---------------------------------------------------------------------------
