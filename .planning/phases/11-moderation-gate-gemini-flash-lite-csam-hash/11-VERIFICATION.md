@@ -1,12 +1,12 @@
 ---
 phase: 11-moderation-gate-gemini-flash-lite-csam-hash
 verified: 2026-04-30T18:56:00Z
-status: gaps_found
-score: 22/23 must-haves verified (1 regression in cross-cutting test)
+status: human_needed
+score: 23/23 must-haves verified (T-35 gap closed in commit 99b6709)
 overrides_applied: 0
 gaps:
   - truth: "OBS-04 cardinality drift defense (test_metrics_output_only_uses_allowed_stage_values) green"
-    status: failed
+    status: resolved
     reason: "Phase 11 added stage='moderate' to STAGE_DURATION emits in run.py:89 and moderate.py:594, but the cross-cutting cardinality-drift defense test in test_observability_pipeline_metrics.py hard-codes ALLOWED_STAGES = {ingest, embed, cluster, compile, stitch} (D-17 enum). The 11-05 plan + summary updated metrics.py docstring/comment but did NOT update the test's ALLOWED_STAGES constant. Test passes in isolation (no moderation samples in registry) but fails in the full suite once any moderate-stage emit pollutes the global Prometheus registry. Verified locally: `pytest tests/pipeline/test_moderate.py tests/test_observability_pipeline_metrics.py::test_metrics_output_only_uses_allowed_stage_values` reproduces `AssertionError: unexpected stage values in /metrics: {'moderate'}`."
     artifacts:
       - path: "backend/tests/test_observability_pipeline_metrics.py"
