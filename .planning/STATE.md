@@ -3,14 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Pilot MVP for funding (Public-Launch-Ready Backbone)
 status: in_progress
-last_updated: "2026-04-29T21:00:00.000Z"
-last_activity: 2026-04-29 -- shipped Phase 10 (Vercel Blob migration); PR #9 open against main
+last_updated: "2026-04-30T02:13:12.070Z"
 progress:
-  total_phases: 8
-  completed_phases: 6
-  total_plans: 20
-  completed_plans: 16
-  percent: 75
+  total_phases: 6
+  completed_phases: 3
+  total_plans: 13
+  completed_plans: 13
+  percent: 100
 ---
 
 # Project State: Newz
@@ -20,6 +19,7 @@ progress:
 **Core Value:** Multi-angle event clustering must work — show the same event captured by different people, automatically grouped and compiled into one coherent montage.
 
 **Current Focus:** v1.1 Pilot MVP for funding — two parallel tracks:
+
 - **Backbone (Liam):** Phase 9 (Postgres) shipped; Phase 10 (Vercel Blob) up next.
 - **Feature (Roan):** Phase `01-comments-and-sharing` shipped 2026-04-28 (pending real-iPhone UAT — T4.1–T4.4).
 
@@ -74,17 +74,20 @@ progress:
 ### Pending Todos
 
 **Feature track decisions:**
+
 - [ ] Decision: censoring approach (automated / human / hybrid) — blocks feature-track censoring
 - [ ] Decision: permissions gate flow (require all permissions vs. allow no-location with reduced clustering weight) — blocks location/permissions feature
 - [ ] Decision: custom engagement signal design — blocks non-mando custom signal
 
 **Backbone track pre-flight:**
+
 - [ ] Run Vercel Blob AsyncBlobClient (vercel 0.5.8) spike before Phase 10 planning — bleeding-edge SDK
 - [ ] Benchmark Gemini 2.5 Flash-Lite latency on actual v1.0 staged demo dataset before Phase 11 planning
 - [ ] Start Cloudflare CSAM Scanning Tool / NCMEC approval application (unknown lead time) before Phase 11 scheduling
 - [ ] Retire SQLite (`db_sqlite.py`) once Neon cutover stabilizes. Mechanical: delete file, simplify `backend/db.py` to direct Postgres import, drop `aiosqlite` from requirements. Strategic: decide what `OFFLINE_DEMO=true` does without SQLite — in-memory stub vs. retire the flag entirely. Owner: Liam. Phase 01 (comments) added parallel SQLite + Postgres CRUD per current dispatcher contract; both go away together.
 
 **Carry-overs:**
+
 - [ ] Re-run calibration notebook against parent-clustered code path (from v1.0 deferred)
 - [ ] Resolve `montage-not-updating` debug session (from v1.0 deferred)
 
@@ -110,18 +113,20 @@ None blocking the active phase (`01-comments-and-sharing` ready to execute; Phas
 
 ## Session Continuity
 
-**Last session ended:** 2026-04-29 — Phase 10 (Vercel Blob migration) shipped. SC-1, SC-2, SC-3, SC-4 passed in live HUMAN-UAT against the Railway preview backend. Task 5.5 / SC-5 (cleanup_blocked_clip) and SC-6 (env-flip rollback) deferred to Phase 11 (cleanup hook lacks production caller until moderation gate; rollback is theoretical now that `clips.path` is nullable). Spec amendment captured in `10-HUMAN-UAT.md`: provisioned Vercel Blob store is private-only, so `runs/*` reads route through a backend proxy (`GET /runs/{run_id}.mp4`) instead of CDN-direct.
+**Last session ended:** 2026-04-29 — Phase 11 (Moderation Gate) context gathered. CONTEXT.md captures 29 decisions across pipeline shape (CSAM-first sequential → asyncio.gather embed+gemini), failure-mode tier classification (typed exceptions, 4xx blocks, 5xx unknown), policy taxonomy (hard-block: csam/sexual/extremist/self_harm; soft-flag: hate/violence; off-topic safe → pass), schema (per-provider rows in moderation_decisions, fixed Gemini category enum, full JSONB raw_response), CSAM (1-year retention per 2024 REPORT Act, stub-and-ship via CSAM_PROVIDER env var with lifespan production guard), and OFFLINE_DEMO bypass mirroring Phase 9/10 patterns. **Three Liam todos owed before plan execution:** (1) amend REQUIREMENTS.md MOD-07 to broaden soft-flag to all hate + all violence (drop corroboration gating); (2) amend REQUIREMENTS.md MOD-09 + STATE.md to lock 1-year retention (drop stale 90-day); (3) STATE.md Pending Todos verifications still apply (Gemini Flash-Lite latency benchmark, Cloudflare CSAM/NCMEC approval status). Phase 10 carry-overs (SC-5 cleanup_blocked_clip live caller, SC-6 env-flip rollback) get exercised by Phase 11.
 
-**Next action (backbone track):** Plan Phase 11 (Moderation Gate — Gemini Flash-Lite + Cloudflare CSAM hash). Pre-flight TODOs from Pending Todos still apply (Gemini latency benchmark, Cloudflare CSAM tool / NCMEC application lead time).
+**Next action (backbone track):** `/gsd-plan-phase 11` — research-informed plan for Phase 11 (Moderation Gate). Phase researcher must produce: Gemini Flash-Lite latency benchmark on demo dataset, Cloudflare CSAM API contract (hash algorithm, response shape, NCMEC reporting ownership), proposed SYSTEM_PROMPT + JSON response_schema for the classifier.
 
 **Next action (feature track):** Run Wave 4 verification (T4.1–T4.4) on a real iPhone + desktop browser for Phase 01 (comments + shares). See `phases/01-comments-and-sharing/01-SUMMARY.md`.
 
 **Key files to load on resume:**
 
+- `.planning/phases/11-moderation-gate-gemini-flash-lite-csam-hash/11-CONTEXT.md` — Phase 11 locked decisions + canonical refs
+- `.planning/phases/11-moderation-gate-gemini-flash-lite-csam-hash/11-DISCUSSION-LOG.md` — Phase 11 audit trail (alternatives considered)
 - `.planning/phases/10-vercel-blob-migration/10-HUMAN-UAT.md` — Phase 10 UAT outcomes + spec amendments (private-store proxy)
 - `.planning/phases/01-comments-and-sharing/01-SUMMARY.md` — feature track Phase 01 status
 - `.planning/PROJECT.md` — v1.1 active scope (both tracks), anonymity constraint, nomenclature
 - `.planning/ROADMAP.md` — full v1.1 backlog
 
 ---
-*Last updated: 2026-04-28 — Phase 01 (comments + shares) shipped, pending Wave 4 iPhone UAT*
+*Last updated: 2026-04-29 — Phase 11 (Moderation Gate) context gathered, ready for /gsd-plan-phase*
