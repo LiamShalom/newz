@@ -86,6 +86,24 @@ def get_pool() -> asyncpg.Pool:
     return _pool
 
 
+async def _set_jsonb_codec(conn: asyncpg.Connection) -> None:
+    """WR-04: register a per-connection jsonb codec so get_moderation_decisions
+    returns raw_response as a Python dict (not the raw JSON string asyncpg
+    surfaces by default). Without this codec the doc-comment claim on
+    get_moderation_decisions is a lie and compile.py:631-636's defensive
+    json.loads(raw) branch becomes the LIVE path on postgres.
+
+    Registered via pool init=, so every connection acquired from the pool
+    has the codec installed before first use.
+    """
+    await conn.set_type_codec(
+        "jsonb",
+        encoder=json.dumps,
+        decoder=json.loads,
+        schema="pg_catalog",
+    )
+
+
 async def init_pool() -> None:
     """Create the process-wide asyncpg pool (D-16). Called from app.lifespan startup.
 
@@ -96,6 +114,9 @@ async def init_pool() -> None:
       - min_size=1: allow scale-to-zero of idle connections.
       - max_size=10: L-02 / DB-07. --workers 1 makes process-singleton sufficient.
       - statement_cache_size: leave at default (100). Setting 0 only needed against -pooler.
+      - init=_set_jsonb_codec: WR-04, registers the jsonb→dict codec on every
+        new connection so get_moderation_decisions returns dicts, matching its
+        documented contract.
     """
     global _pool
     if _pool is not None:
@@ -113,8 +134,9 @@ async def init_pool() -> None:
             dsn=config.DATABASE_URL,
             min_size=1,
             max_size=10,
+            init=_set_jsonb_codec,
         )
-        log.info("asyncpg pool created min=1 max=10")
+        log.info("asyncpg pool created min=1 max=10 (jsonb codec registered)")
     except Exception as exc:
         # Sanitize: never log the DSN itself (RESEARCH §Security: DATABASE_URL leak via log).
         log.error("asyncpg pool init failed: %s (DSN redacted)", type(exc).__name__)
@@ -962,8 +984,10 @@ async def set_clip_hidden(clip_id: str, hidden: bool) -> None:
 async def get_moderation_decisions(clip_id: str) -> list[dict]:
     """Returns rows ordered by created_at DESC.
 
-    raw_response is returned as a Python dict (asyncpg jsonb codec auto-decodes);
-    provider/decision/reason/latency_ms/prompt_version come through as native types.
+    raw_response is returned as a Python dict — the asyncpg jsonb codec is
+    registered on every pool connection via init_pool's init=_set_jsonb_codec
+    (WR-04). provider/decision/reason/latency_ms/prompt_version come through
+    as native types.
     """
     pool = get_pool()
     rows = await pool.fetch(
