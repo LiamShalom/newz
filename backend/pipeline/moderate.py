@@ -411,17 +411,32 @@ def _classify_exception(exc: BaseException) -> tuple[str, str]:
 
 
 async def _drain_task(task: asyncio.Task) -> None:
-    """Re-await a cancelled task; suppress CancelledError + everything else.
+    """Re-await a cancelled task; suppress CancelledError + downstream exceptions.
 
     asyncio.wait FIRST_COMPLETED leaves pending tasks alive — they MUST be
     cancelled and awaited or Python emits "Task was destroyed but it is
     pending!" warnings and may leak resources (RESEARCH § asyncio.wait).
+
+    CR-01: do NOT swallow BaseException blanket-style — that catches
+    KeyboardInterrupt / SystemExit (deliberately carved out from Exception)
+    and breaks asyncio cancellation propagation when the OUTER scope is itself
+    being cancelled. We propagate CancelledError when the current task is
+    being cancelled by the outer scope (Python 3.11+ via cancelling()), so the
+    parent's cancel reaches all the way up.
     """
     if not task.done():
         task.cancel()
     try:
         await task
-    except (asyncio.CancelledError, BaseException):
+    except asyncio.CancelledError:
+        # The drained task was cancelled (expected — we just cancelled it).
+        # If WE are also being cancelled by the outer scope, propagate.
+        current = asyncio.current_task()
+        if current is not None and current.cancelling() > 0:
+            raise
+    except Exception:
+        # Drained task's own non-cancel exception — swallow, the caller has
+        # already inspected gemini_task.exception() / embed_task.result().
         pass
 
 
