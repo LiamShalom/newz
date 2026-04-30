@@ -21,6 +21,11 @@ REDACT_KEYS: frozenset[str] = frozenset({
     "gps_lat",
     "gps_lng",
     "blob_url",
+    # Phase 11 (D-27 reconciled): classifier raw response + prompt version may surface
+    # in error contexts (Gemini 4xx/5xx with reflected payload). Redact at the Sentry
+    # boundary; primary sink is the moderation_decisions.raw_response JSONB column.
+    "raw_response",
+    "prompt_version",
 })
 REDACTED = "[REDACTED]"
 
