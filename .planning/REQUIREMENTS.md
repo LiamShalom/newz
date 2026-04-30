@@ -34,12 +34,12 @@
 - [ ] **MOD-01:** Every uploaded clip runs through the moderation gate before entering cluster or compile.
 - [ ] **MOD-02:** Moderation classifier (Gemini 2.5 Flash-Lite) runs in parallel with Marengo embed via `asyncio.gather(..., return_exceptions=True)` + `asyncio.wait_for` per task.
 - [ ] **MOD-03:** Common-case end-to-end upload-to-publish latency does not regress against v1.0 (classifier completes inside Marengo's embed window).
-- [ ] **MOD-04:** CSAM hash check via Cloudflare CSAM Scanning Tool runs on every clip; fail-closed on any error.
+- [ ] **MOD-04:** Pilot ships classifier-only CSAM detection: Gemini 2.5 Flash-Lite `csam` category in the locked taxonomy routes to hard-block + `reported_csam` preservation per § 2258A. Real CSAM hash vendor (Thorn / PhotoDNA / Hive) and automated NCMEC CyberTipline reporting are deferred to post-pilot, before public launch. Lifespan WARN log when running in production-like env without a real vendor wired. Original "Cloudflare CSAM Scanning Tool" assumption was structurally invalid (Cloudflare's tool is CDN-cache-passive, image-only, not a programmatic API — confirmed Phase 11 research 2026-04-29).
 - [ ] **MOD-05:** Tiered failure-mode policy: classifier timeout → fail-CLOSED (block); classifier 5xx outage → fail-OPEN with `moderation_status=unknown`, surfaced in admin queue.
 - [ ] **MOD-06:** Every moderation decision (pass / block / unknown) is recorded in a `moderation_decisions` audit table with full decision context.
-- [ ] **MOD-07:** Newsworthy corroboration: when a cluster has ≥2 distinct parent uploads AND a violence signal, the segment is soft-flagged (interstitial), not hard-blocked.
+- [ ] **MOD-07:** Hate and violence signals from the classifier route to soft-flag (interstitial), not hard-block, regardless of cluster corroboration. Rationale: news-context categories (hate-crime reporting, street-violence footage filmed by a single witness) are journalism, not inappropriate content; a soft-flag interstitial preserves access while warning the viewer. Compile-eligibility ≥2-parent gate stays in `_should_compile()` (don't waste tokens compiling solo-source content), but soft-flag determination is decoupled from corroboration. (Original wording was corroboration-only; broadened per Phase 11 D-08 reconciliation 2026-04-29.)
 - [ ] **MOD-08:** Feed UI displays a tap-to-view interstitial on sensitive segments before autoplay.
-- [ ] **MOD-09:** A `reported_csam` table preserves content_hash and metadata for 90 days per 18 U.S.C. § 2258A.
+- [ ] **MOD-09:** A `reported_csam` table preserves `content_hash` (SHA-256 of clip bytes) and metadata for **1 year** per 18 U.S.C. § 2258A as amended by the 2024 REPORT Act. Preservation row is written on every classifier `csam`-category hard-block. Automated NCMEC CyberTipline report API call deferred post-pilot; pilot relies on manual NCMEC reporting workflow (Liam files via report.cybertip.org when admin queue surfaces a `reason='gemini_csam_block'` row). (Original wording said 90 days — corrected per Phase 11 D-19 reconciliation 2026-04-29.)
 - [ ] **MOD-10:** `OFFLINE_DEMO=true` bypasses every external moderation API; classifier returns a passthrough decision; CSAM hash check is skipped.
 
 ### Reactive Reporting + Admin Queue
@@ -141,16 +141,16 @@ Each REQ-ID maps to exactly one phase. 51 of 51 v1.1 requirements mapped. No orp
 | BLOB-06 | Phase 10 | Pending |
 | BLOB-07 | Phase 10 | Pending |
 | BLOB-08 | Phase 10 | Pending |
-| MOD-01 | Phase 11 | Pending |
+| MOD-01 | Phase 11 | Complete |
 | MOD-02 | Phase 11 | Pending |
 | MOD-03 | Phase 11 | Pending |
 | MOD-04 | Phase 11 | Pending |
 | MOD-05 | Phase 11 | Pending |
 | MOD-06 | Phase 11 | Pending |
 | MOD-07 | Phase 11 | Pending |
-| MOD-08 | Phase 11 | Pending |
-| MOD-10 | Phase 11 | Pending |
-| PRIV-03 | Phase 11 | Pending |
+| MOD-08 | Phase 11 | Complete |
+| MOD-10 | Phase 11 | Complete |
+| PRIV-03 | Phase 11 | Complete |
 | REPORT-01 | Phase 12 | Pending |
 | REPORT-02 | Phase 12 | Pending |
 | REPORT-03 | Phase 12 | Pending |

@@ -614,6 +614,44 @@ async def compile_segment(cluster_id: str) -> None:
         # frontends that don't iterate video_urls.
         video_url = run_video_urls[0] if run_video_urls else None
 
+        # Phase 11 (D-08, D-14): broadened soft-flag policy. Read each cluster
+        # member's moderation_decisions; if ANY member shows hate or violence
+        # category with verdict in (flag, block), write segments.soft_flag=true.
+        # Decoupled from corroboration count (no >=2-parent gate here -- D-08).
+        # Defensive: never let a soft-flag derivation failure prevent the segment
+        # from shipping. Default to False on any exception (visible-by-default
+        # for ops; missing soft-flag is preferable to a missing montage).
+        #
+        # WR-07: single batched query (one DB roundtrip) replaces the previous
+        # N+1 pattern (one get_moderation_decisions per cluster member). On
+        # postgres this saves N pool-acquire + roundtrip pairs; on SQLite it
+        # collapses N file-locked queries into one.
+        soft_flag = False
+        try:
+            members = await db.fetch_cluster_clips(cluster_id)
+            member_ids = [m["id"] for m in members]
+            decisions = await db.get_moderation_decisions_for_clips(member_ids)
+            for d in decisions:
+                raw = d.get("raw_response") or {}
+                if isinstance(raw, str):
+                    # SQLite TEXT path or postgres without WR-04 codec — defensive parse.
+                    try:
+                        raw = json.loads(raw)
+                    except (TypeError, ValueError):
+                        raw = {}
+                for cat in ("hate", "violence"):
+                    cat_signal = raw.get(cat) or {}
+                    if isinstance(cat_signal, dict) and cat_signal.get("verdict") in ("flag", "block"):
+                        soft_flag = True
+                        break
+                if soft_flag:
+                    break
+        except Exception as exc:
+            log.warning(
+                "soft_flag derivation failed cluster_id=%s: %s -- defaulting false",
+                cluster_id, exc,
+            )
+
         # Phase 3: re-insert with all updates landed.
         seg = await db.get_segment_for_cluster(cluster_id)
         if seg is not None:
@@ -631,6 +669,7 @@ async def compile_segment(cluster_id: str) -> None:
                 location=(caption_result["location"] if caption_result else seg.get("location") or "Pasadena, CA"),
                 source_count=distinct_parents or seg.get("source_count", 1),
                 video_url=video_url or seg.get("video_url"),
+                soft_flag=soft_flag,
             )
 
         elapsed_ms = int((time.time() - started_at) * 1000)

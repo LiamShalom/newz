@@ -52,6 +52,10 @@ __all__ = [
     "insert_child_clip", "get_children_by_parent",
     # Admin
     "reset_all", "delete_recent_clips",
+    # Phase 11 (D-13): moderation gate writes/reads
+    "write_moderation_decision", "write_reported_csam", "set_clip_hidden",
+    "get_moderation_decisions", "get_moderation_decisions_for_clips",
+    "aggregate_verdict",
 ]
 
 # CLIPS_DIR is still consumed by /media StaticFiles when STORAGE_BACKEND=local.
@@ -77,6 +81,24 @@ def get_pool() -> asyncpg.Pool:
     return _pool
 
 
+async def _set_jsonb_codec(conn: asyncpg.Connection) -> None:
+    """WR-04: register a per-connection jsonb codec so get_moderation_decisions
+    returns raw_response as a Python dict (not the raw JSON string asyncpg
+    surfaces by default). Without this codec the doc-comment claim on
+    get_moderation_decisions is a lie and compile.py:631-636's defensive
+    json.loads(raw) branch becomes the LIVE path on postgres.
+
+    Registered via pool init=, so every connection acquired from the pool
+    has the codec installed before first use.
+    """
+    await conn.set_type_codec(
+        "jsonb",
+        encoder=json.dumps,
+        decoder=json.loads,
+        schema="pg_catalog",
+    )
+
+
 async def init_pool() -> None:
     """Create the process-wide asyncpg pool (D-16). Called from app.lifespan startup.
 
@@ -87,6 +109,9 @@ async def init_pool() -> None:
       - min_size=1: allow scale-to-zero of idle connections.
       - max_size=10: L-02 / DB-07. --workers 1 makes process-singleton sufficient.
       - statement_cache_size: leave at default (100). Setting 0 only needed against -pooler.
+      - init=_set_jsonb_codec: WR-04, registers the jsonb→dict codec on every
+        new connection so get_moderation_decisions returns dicts, matching its
+        documented contract.
     """
     global _pool
     if _pool is not None:
@@ -102,8 +127,9 @@ async def init_pool() -> None:
             dsn=config.DATABASE_URL,
             min_size=1,
             max_size=10,
+            init=_set_jsonb_codec,
         )
-        log.info("asyncpg pool created min=1 max=10")
+        log.info("asyncpg pool created min=1 max=10 (jsonb codec registered)")
     except Exception as exc:
         # Sanitize: never log the DSN itself (RESEARCH §Security: DATABASE_URL leak via log).
         log.error("asyncpg pool init failed: %s (DSN redacted)", type(exc).__name__)
@@ -318,26 +344,34 @@ async def insert_segment(
     source_count: int,
     video_url: str | None = None,
     title: str | None = None,
+    soft_flag: bool = False,
 ) -> str:
-    """Idempotent: one segment per cluster. ON CONFLICT(cluster_id) updates. CMP-09."""
+    """Idempotent: one segment per cluster. ON CONFLICT(cluster_id) updates. CMP-09.
+
+    Phase 11 (D-08, D-14, D-15): soft_flag boolean threads through to the
+    segments.soft_flag column added in migration 0005. Default False preserves
+    backward compatibility for callers that pre-date Phase 11. ON CONFLICT
+    refresh ensures re-compiles update the flag rather than stale-pinning it.
+    """
     seg_id = uuid.uuid4().hex
     now = time.time()
     pool = get_pool()
     row = await pool.fetchrow(
         """INSERT INTO segments
              (id, cluster_id, ordered_clip_ids, title, caption, location,
-              source_count, created_at, video_url)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+              source_count, created_at, video_url, soft_flag)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
            ON CONFLICT(cluster_id) DO UPDATE SET
              ordered_clip_ids = EXCLUDED.ordered_clip_ids,
              title            = EXCLUDED.title,
              caption          = EXCLUDED.caption,
              location         = EXCLUDED.location,
              source_count     = EXCLUDED.source_count,
-             video_url        = EXCLUDED.video_url
+             video_url        = EXCLUDED.video_url,
+             soft_flag        = EXCLUDED.soft_flag
            RETURNING id""",
         seg_id, cluster_id, json.dumps(ordered_clip_ids),
-        title, caption, location, source_count, now, video_url,
+        title, caption, location, source_count, now, video_url, soft_flag,
     )
     return row["id"]
 
@@ -349,7 +383,8 @@ async def fetch_recent_segments(limit: int = 50) -> list[dict]:
     rows = await pool.fetch(
         """SELECT s.id, s.cluster_id, s.ordered_clip_ids, s.title, s.caption,
                   s.location, c.member_count AS source_count, s.created_at,
-                  c.centroid_lat, c.centroid_lng, s.video_url AS stored_video_url
+                  c.centroid_lat, c.centroid_lng, s.video_url AS stored_video_url,
+                  s.soft_flag
            FROM segments s
            JOIN clusters c ON c.id = s.cluster_id
            ORDER BY s.created_at DESC LIMIT $1""",
@@ -405,6 +440,10 @@ async def fetch_recent_segments(limit: int = 50) -> list[dict]:
             "centroid_lng": r["centroid_lng"],
             "video_url": r["stored_video_url"] if r["stored_video_url"] else (video_urls[0] if video_urls else None),
             "video_urls": video_urls,
+            # Phase 11 MOD-08: D-15 boolean-only contract. Postgres column is
+            # already BOOLEAN (migration 0005); coerce defensively in case of
+            # NULL on legacy rows that pre-date the column default.
+            "soft_flag": bool(r["soft_flag"]) if r["soft_flag"] is not None else False,
         })
     return out
 
@@ -895,3 +934,139 @@ async def delete_recent_clips(
                     )
 
     return {"counts": counts, "paths_to_delete": paths_to_delete}
+
+
+# ---------------------------------------------------------------------------
+# Phase 11 (D-13, post-reconciliation): moderation gate writes/reads
+#
+# UNIQUE(clip_id, provider) on moderation_decisions (Plan 02 / migration 0004)
+# is what makes write_moderation_decision idempotent under retries — the
+# ON CONFLICT DO UPDATE clause refreshes decision/reason/raw_response/
+# latency_ms/prompt_version (treat the most recent run as authoritative).
+#
+# write_reported_csam uses the existing UNIQUE INDEX on reported_csam.content_hash
+# (Phase 9 / migration 0001) → ON CONFLICT DO NOTHING for silent dedup. § 2258A
+# 1-year retention is owned by the caller (Plan 04 computes preserved_until).
+# ---------------------------------------------------------------------------
+
+async def write_moderation_decision(
+    clip_id: str,
+    provider: str,
+    decision: str,
+    reason: str | None,
+    raw_response: dict | None,
+    latency_ms: int | None,
+    prompt_version: str | None,
+) -> str:
+    """Idempotent: UNIQUE(clip_id, provider) — retries produce one row per provider per clip.
+
+    On conflict, refresh decision/reason/raw_response/latency_ms/prompt_version (treat
+    the most recent run as authoritative). Returns the row id.
+    """
+    dec_id = uuid.uuid4().hex
+    pool = get_pool()
+    row = await pool.fetchrow(
+        """INSERT INTO moderation_decisions
+             (id, clip_id, provider, decision, reason, raw_response, latency_ms, prompt_version)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+           ON CONFLICT(clip_id, provider) DO UPDATE SET
+             decision       = EXCLUDED.decision,
+             reason         = EXCLUDED.reason,
+             raw_response   = EXCLUDED.raw_response,
+             latency_ms     = EXCLUDED.latency_ms,
+             prompt_version = EXCLUDED.prompt_version
+           RETURNING id""",
+        dec_id, clip_id, provider, decision, reason,
+        json.dumps(raw_response) if raw_response is not None else None,
+        latency_ms, prompt_version,
+    )
+    return row["id"]
+
+
+async def write_reported_csam(content_hash: str, preserved_until: float) -> str:
+    """1-year retention per 2024 REPORT Act amendment to 18 U.S.C. § 2258A (D-19).
+
+    UNIQUE INDEX on content_hash (Phase 9 baseline) → ON CONFLICT DO NOTHING for
+    silent dedup. `preserved_until` is a POSIX timestamp; the SQL boundary uses
+    to_timestamp() to convert into TIMESTAMPTZ.
+
+    On conflict (existing preserved hash) the existing row is kept; this writer
+    returns the freshly-generated id (caller doesn't get the prior id, but the
+    dedup is silent + acceptable for the audit-trail use case).
+    """
+    rep_id = uuid.uuid4().hex
+    pool = get_pool()
+    row = await pool.fetchrow(
+        """INSERT INTO reported_csam (id, content_hash, content_preserved_until)
+           VALUES ($1, $2, to_timestamp($3))
+           ON CONFLICT(content_hash) DO NOTHING
+           RETURNING id""",
+        rep_id, content_hash, preserved_until,
+    )
+    return row["id"] if row else rep_id
+
+
+async def set_clip_hidden(clip_id: str, hidden: bool) -> None:
+    """Phase 11 D-06: write path for clips.is_hidden. Block path → True, admin clear → False."""
+    pool = get_pool()
+    await pool.execute("UPDATE clips SET is_hidden = $1 WHERE id = $2", hidden, clip_id)
+
+
+async def get_moderation_decisions(clip_id: str) -> list[dict]:
+    """Returns rows ordered by created_at DESC.
+
+    raw_response is returned as a Python dict — the asyncpg jsonb codec is
+    registered on every pool connection via init_pool's init=_set_jsonb_codec
+    (WR-04). provider/decision/reason/latency_ms/prompt_version come through
+    as native types.
+    """
+    pool = get_pool()
+    rows = await pool.fetch(
+        """SELECT provider, decision, reason, raw_response, latency_ms, prompt_version, created_at
+           FROM moderation_decisions WHERE clip_id = $1 ORDER BY created_at DESC""",
+        clip_id,
+    )
+    return [dict(r) for r in rows]
+
+
+async def get_moderation_decisions_for_clips(clip_ids: list[str]) -> list[dict]:
+    """Batched read of moderation_decisions rows for multiple clip_ids.
+
+    WR-07: replaces N+1 sequential calls in compile.py:624-650 (one
+    get_moderation_decisions per cluster member) with a single ANY() query.
+    Returns a flat list of decision rows (any clip → all its decisions).
+    Empty input yields an empty list (no DB roundtrip).
+
+    raw_response is decoded as a Python dict via the WR-04 jsonb codec.
+    """
+    if not clip_ids:
+        return []
+    pool = get_pool()
+    rows = await pool.fetch(
+        """SELECT clip_id, provider, decision, reason, raw_response, latency_ms,
+                  prompt_version, created_at
+           FROM moderation_decisions
+           WHERE clip_id = ANY($1::text[])
+           ORDER BY created_at DESC""",
+        clip_ids,
+    )
+    return [dict(r) for r in rows]
+
+
+async def aggregate_verdict(clip_id: str) -> str:
+    """Pure-Python aggregator over get_moderation_decisions rows.
+
+    D-10 reconciled: post-reconciliation Phase 11 writes one row per clip (Gemini),
+    but the function is forward-compatible with future per-provider rows (e.g. when
+    a real CSAM hash vendor lights up post-pilot). Verdict precedence:
+      any row decision='blocked' → 'blocked'
+      else any decision='unknown' → 'unknown'
+      else 'passed'
+    """
+    rows = await get_moderation_decisions(clip_id)
+    decisions = {r["decision"] for r in rows}
+    if "blocked" in decisions:
+        return "blocked"
+    if "unknown" in decisions:
+        return "unknown"
+    return "passed"

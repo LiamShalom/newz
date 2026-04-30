@@ -37,3 +37,50 @@ async def test_offline_demo_firewall_no_blob_calls(monkeypatch):
 
     paths = [r.path for r in backend.app.app.routes if hasattr(r, "path")]
     assert any(p.startswith("/media") for p in paths), "/media mount missing under OFFLINE_DEMO=true"
+
+
+@pytest.mark.asyncio
+async def test_offline_demo_no_moderation_calls(monkeypatch, respx_mock):
+    """Phase 11 MOD-10: OFFLINE_DEMO=true bypasses every external moderation API.
+
+    Asserts respx routers see ZERO calls to Gemini Files (upload + poll),
+    generateContent, or files-cleanup. moderate_clip's OFFLINE_DEMO short-circuit
+    returns BEFORE any SDK client is constructed.
+    """
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setenv("OFFLINE_DEMO", "true")
+    monkeypatch.setenv("GEMINI_MODERATION_MODEL", "gemini-2.5-flash-lite")
+
+    import backend.config
+    import backend.pipeline.moderate
+    importlib.reload(backend.config)
+    importlib.reload(backend.pipeline.moderate)
+
+    # Mock db.write_moderation_decision so the OFFLINE_DEMO row write doesn't
+    # require a live Postgres connection in unit-test mode.
+    write_decision = AsyncMock(return_value="dec_id_1")
+    monkeypatch.setattr(backend.pipeline.moderate.db, "write_moderation_decision", write_decision)
+
+    # Register Gemini routes — every call_count must be zero after moderate_clip.
+    upload_route = respx_mock.post(
+        "https://generativelanguage.googleapis.com/upload/v1beta/files"
+    ).respond(json={})
+    poll_route = respx_mock.get(
+        "https://generativelanguage.googleapis.com/v1beta/files/test"
+    ).respond(json={})
+    generate_route = respx_mock.post(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
+    ).respond(json={})
+    delete_route = respx_mock.delete(
+        "https://generativelanguage.googleapis.com/v1beta/files/test"
+    ).respond(json={})
+
+    result = await backend.pipeline.moderate.moderate_clip("clip_offline_demo_test")
+
+    assert result.decision == "passed"
+    assert result.provider == "stub"
+    assert upload_route.call_count == 0, "Gemini upload was called under OFFLINE_DEMO=true (MOD-10 violation)"
+    assert poll_route.call_count == 0, "Gemini files-poll was called under OFFLINE_DEMO=true (MOD-10 violation)"
+    assert generate_route.call_count == 0, "Gemini generateContent was called under OFFLINE_DEMO=true (MOD-10 violation)"
+    assert delete_route.call_count == 0, "Gemini files-cleanup was called under OFFLINE_DEMO=true (MOD-10 violation)"

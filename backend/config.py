@@ -64,3 +64,12 @@ STORAGE_BACKEND: str = os.environ.get("STORAGE_BACKEND", "local").strip().lower(
 #   Never logged, never sent to browser (L-02). Empty when STORAGE_BACKEND=blob
 #   AND OFFLINE_DEMO=false fails fast at lifespan startup (D-19).
 BLOB_READ_WRITE_TOKEN: str = os.environ.get("BLOB_READ_WRITE_TOKEN", "").strip()
+
+# Phase 11: Moderation gate (post-reconciliation D-24 — classifier-only CSAM detection)
+# GEMINI_MODERATION_MODEL: separate from GEMINI_MODEL (L18) so the moderation
+#   classifier model can iterate independently of the caption pipeline model.
+GEMINI_MODERATION_MODEL: str = os.environ.get("GEMINI_MODERATION_MODEL", "gemini-2.5-flash-lite")
+# MODERATION_MAX_BUDGET_S: absolute upper-bound on the gate (D-03). Default 20s.
+#   Cancel-when-embed-finishes is the typical primitive (Marengo's elapsed time
+#   bounds Gemini); this is the safety floor when both tasks exceed Marengo p99.
+MODERATION_MAX_BUDGET_S: float = float(os.environ.get("MODERATION_MAX_BUDGET_S", "20.0"))
