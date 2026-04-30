@@ -23,8 +23,9 @@ Hardens the v1.0 monolith for public launch without disturbing load-bearing deci
 | 11 | 7/7 | Complete    | 2026-04-30 |
 | 12 | Reactive reporting + admin queue (anonymous reports; UNIQUE(segment, ip_hash) brigading defense) | ⬜ Open | TBD |
 | 13 | Observability deepening + OFFLINE_DEMO audit (Logfire spans across pipeline; anonymity regression test; firewalled CI smoke test) | ⬜ Open | TBD |
+| 14 | 2/2 | Complete   | 2026-04-30 |
 
-**Execution order:** 8 → 9 → 10 → (11 ∥ 12) → 13. Phase 11 and 12 share schema but operate on disjoint columns — can parallelize after Phase 10 ships.
+**Execution order:** 8 → 9 → 10 → (11 ∥ 12) → 13 → 14. Phase 11 and 12 share schema but operate on disjoint columns — can parallelize after Phase 10 ships. Phase 14 is appended after the chain because moderation re-flow design depends on Phase 11.
 
 ### Track B: Feature track (Roan, per-feature phases)
 
@@ -41,7 +42,7 @@ Per-feature GSD: each backlog item becomes its own phase under `phases/<NN>-<slu
 | 5 | **Anonymous comments + shares** | Feature | Roan | ✅ Shipped (pending real-iPhone verification) | `phases/01-comments-and-sharing/` |
 | 6 | Video censoring (UI side; pairs with Phase 11 backbone) | Feature | Roan | 🟡 Open — depends on backbone Phase 11 | — |
 | 7 | Permissions gate (mic + cam + location flow) | Feature | Roan | 🟡 Open — depends on #4 | — |
-| 8 | Adding videorecordings to existing montages | Bug | Liam | 🟡 Open — feature exists but doesn't work | — |
+| 8 | Adding videorecordings to existing montages | Bug | Liam | 🟡 Open — promoted to backbone Phase 14 (2026-04-30) | `phases/14-recompile-on-cluster-update/` |
 | 9 | Real test suite | Infra | Either | 🟡 Open | — |
 
 #### Non-mando
@@ -70,6 +71,7 @@ Per-feature GSD: each backlog item becomes its own phase under `phases/<NN>-<slu
 - [ ] Phase 11: Moderation gate — open · Liam
 - [ ] Phase 12: Reactive reporting + admin queue — open · Liam
 - [ ] Phase 13: Observability deepening + OFFLINE_DEMO audit — open · Liam
+- [ ] Phase 14: Recompile montage on new parent in existing cluster — open · Liam
 - [x] Phase 01: Anonymous comments + shares — shipped (pending real-iPhone verification) · Roan
 
 ### v1.0 Hackathon MVP (shipped)
@@ -151,6 +153,24 @@ Plans:
 **Requirements**: OBS-05 through OBS-09, DEMO-01, DEMO-02
 **Success Criteria**: Single Logfire trace covers ingest → embed → moderate → cluster → compile → stitch → SSE; per-subagent token counts via `instrument_anthropic`; firewalled CI smoke test asserts OFFLINE_DEMO startup; PII regression test green on every PR; whitelisted span attributes only; Sentry `traces_sample_rate=0`, Logfire owns spans.
 **Plans**: TBD
+
+### Phase 14: Recompile Montage on New Parent in Existing Cluster
+**Goal**: When a new videorecording joins an existing cluster that already has a published montage, the montage is re-stitched (or replaced via SSE) so the new angle is reflected in the feed. Resolves v1.0-deferred `montage-not-updating` debug item and Feature-track Mando #8.
+**Depends on**: Phase 9 (Postgres), Phase 10 (Blob), Phase 11 (Moderation gate — re-flow semantics)
+**Root cause**: 30s TTL on `last_compile_at` (`db_postgres.py:560-576`) gates `_should_compile` (`run.py:42-53`); after first compile, no path re-evaluates compile-readiness for already-compiled clusters when a new distinct parent joins (`cluster.py:148-179`). Segment upsert (`compile.py:664-673`) is already idempotent — gap is purely orchestration.
+**Success Criteria**:
+  1. New distinct parent joining a compiled cluster triggers a recompile; segment row reflects all parents within one debounce window.
+  2. Recompile path respects the Phase 11 moderation gate (re-emitted content flows through moderation if materially changed).
+  3. Frontend feed updates the existing card (no duplicate cards) within one SSE refresh.
+  4. Repeated joins within a debounce window coalesce into a single recompile (no thrashing).
+  5. Adding a new *child* to an existing parent does NOT trigger recompile (out-of-scope for this fix).
+  6. OFFLINE_DEMO=true survives end-to-end.
+**Plans**: 2 plans
+**UI hint**: no — Path B-lite recommended (per 14-RESEARCH.md), reuses existing segment_published SSE event with no frontend change
+
+Plans:
+- [x] 14-01-PLAN.md — config + run.py _should_recompile gate + compile.py recompile counter + SSE recompile field
+- [x] 14-02-PLAN.md — backend/tests/pipeline/test_recompile.py (6 integration tests)
 
 ## Progress Summary
 
