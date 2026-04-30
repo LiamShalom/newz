@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Pilot MVP for funding (Public-Launch-Ready Backbone)
 status: in_progress
-last_updated: "2026-04-30T03:59:01.419Z"
+last_updated: "2026-04-30T04:10:04.000Z"
 progress:
   total_phases: 6
   completed_phases: 3
@@ -18,13 +18,15 @@ progress:
 
 **Core Value:** Multi-angle event clustering must work — show the same event captured by different people, automatically grouped and compiled into one coherent montage.
 
-**Current Focus:** v1.1 Pilot MVP for funding — two parallel tracks:
+**Current Focus:** Phase 11 — moderation-gate-gemini-flash-lite-csam-hash
 
 - **Backbone (Liam):** Phase 9 (Postgres) shipped; Phase 10 (Vercel Blob) up next.
 - **Feature (Roan):** Phase `01-comments-and-sharing` shipped 2026-04-28 (pending real-iPhone UAT — T4.1–T4.4).
 
 ## Current Position
 
+Phase: 11 (moderation-gate-gemini-flash-lite-csam-hash) — EXECUTING
+Plan: 1 of 7
 | Field | Value |
 |-------|-------|
 | Active Milestone | v1.1 Pilot MVP for funding (Public-Launch-Ready Backbone) |
