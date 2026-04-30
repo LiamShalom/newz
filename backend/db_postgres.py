@@ -56,6 +56,9 @@ __all__ = [
     "insert_child_clip", "get_children_by_parent",
     # Admin
     "reset_all", "delete_recent_clips",
+    # Phase 11 (D-13): moderation gate writes/reads
+    "write_moderation_decision", "write_reported_csam", "set_clip_hidden",
+    "get_moderation_decisions", "aggregate_verdict",
 ]
 
 # Stubbed for db_sqlite parity. CLIPS_DIR is still consumed by /media StaticFiles
@@ -865,3 +868,113 @@ async def delete_recent_clips(
                     )
 
     return {"counts": counts, "paths_to_delete": paths_to_delete}
+
+
+# ---------------------------------------------------------------------------
+# Phase 11 (D-13, post-reconciliation): moderation gate writes/reads
+#
+# UNIQUE(clip_id, provider) on moderation_decisions (Plan 02 / migration 0004)
+# is what makes write_moderation_decision idempotent under retries — the
+# ON CONFLICT DO UPDATE clause refreshes decision/reason/raw_response/
+# latency_ms/prompt_version (treat the most recent run as authoritative).
+#
+# write_reported_csam uses the existing UNIQUE INDEX on reported_csam.content_hash
+# (Phase 9 / migration 0001) → ON CONFLICT DO NOTHING for silent dedup. § 2258A
+# 1-year retention is owned by the caller (Plan 04 computes preserved_until).
+# ---------------------------------------------------------------------------
+
+async def write_moderation_decision(
+    clip_id: str,
+    provider: str,
+    decision: str,
+    reason: str | None,
+    raw_response: dict | None,
+    latency_ms: int | None,
+    prompt_version: str | None,
+) -> str:
+    """Idempotent: UNIQUE(clip_id, provider) — retries produce one row per provider per clip.
+
+    On conflict, refresh decision/reason/raw_response/latency_ms/prompt_version (treat
+    the most recent run as authoritative). Returns the row id.
+    """
+    dec_id = uuid.uuid4().hex
+    pool = get_pool()
+    row = await pool.fetchrow(
+        """INSERT INTO moderation_decisions
+             (id, clip_id, provider, decision, reason, raw_response, latency_ms, prompt_version)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+           ON CONFLICT(clip_id, provider) DO UPDATE SET
+             decision       = EXCLUDED.decision,
+             reason         = EXCLUDED.reason,
+             raw_response   = EXCLUDED.raw_response,
+             latency_ms     = EXCLUDED.latency_ms,
+             prompt_version = EXCLUDED.prompt_version
+           RETURNING id""",
+        dec_id, clip_id, provider, decision, reason,
+        json.dumps(raw_response) if raw_response is not None else None,
+        latency_ms, prompt_version,
+    )
+    return row["id"]
+
+
+async def write_reported_csam(content_hash: str, preserved_until: float) -> str:
+    """1-year retention per 2024 REPORT Act amendment to 18 U.S.C. § 2258A (D-19).
+
+    UNIQUE INDEX on content_hash (Phase 9 baseline) → ON CONFLICT DO NOTHING for
+    silent dedup. `preserved_until` is a POSIX timestamp; the SQL boundary uses
+    to_timestamp() to convert into TIMESTAMPTZ.
+
+    On conflict (existing preserved hash) the existing row is kept; this writer
+    returns the freshly-generated id (caller doesn't get the prior id, but the
+    dedup is silent + acceptable for the audit-trail use case).
+    """
+    rep_id = uuid.uuid4().hex
+    pool = get_pool()
+    row = await pool.fetchrow(
+        """INSERT INTO reported_csam (id, content_hash, content_preserved_until)
+           VALUES ($1, $2, to_timestamp($3))
+           ON CONFLICT(content_hash) DO NOTHING
+           RETURNING id""",
+        rep_id, content_hash, preserved_until,
+    )
+    return row["id"] if row else rep_id
+
+
+async def set_clip_hidden(clip_id: str, hidden: bool) -> None:
+    """Phase 11 D-06: write path for clips.is_hidden. Block path → True, admin clear → False."""
+    pool = get_pool()
+    await pool.execute("UPDATE clips SET is_hidden = $1 WHERE id = $2", hidden, clip_id)
+
+
+async def get_moderation_decisions(clip_id: str) -> list[dict]:
+    """Returns rows ordered by created_at DESC.
+
+    raw_response is returned as a Python dict (asyncpg jsonb codec auto-decodes);
+    provider/decision/reason/latency_ms/prompt_version come through as native types.
+    """
+    pool = get_pool()
+    rows = await pool.fetch(
+        """SELECT provider, decision, reason, raw_response, latency_ms, prompt_version, created_at
+           FROM moderation_decisions WHERE clip_id = $1 ORDER BY created_at DESC""",
+        clip_id,
+    )
+    return [dict(r) for r in rows]
+
+
+async def aggregate_verdict(clip_id: str) -> str:
+    """Pure-Python aggregator over get_moderation_decisions rows.
+
+    D-10 reconciled: post-reconciliation Phase 11 writes one row per clip (Gemini),
+    but the function is forward-compatible with future per-provider rows (e.g. when
+    a real CSAM hash vendor lights up post-pilot). Verdict precedence:
+      any row decision='blocked' → 'blocked'
+      else any decision='unknown' → 'unknown'
+      else 'passed'
+    """
+    rows = await get_moderation_decisions(clip_id)
+    decisions = {r["decision"] for r in rows}
+    if "blocked" in decisions:
+        return "blocked"
+    if "unknown" in decisions:
+        return "unknown"
+    return "passed"
