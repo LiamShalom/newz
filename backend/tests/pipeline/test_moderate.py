@@ -248,6 +248,39 @@ async def test_moderate_hard_block_csam(patched_moderate):
 
 
 # ---------------------------------------------------------------------------
+# Test 3b — CR-02 regression: cleanup is gated on preservation success
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_moderate_csam_preservation_failure_skips_cleanup(patched_moderate):
+    """CR-02 regression: when write_reported_csam raises (DB outage, JSONB
+    encoder failure, etc.) on a CSAM-block path, cleanup_blocked_clip MUST
+    NOT run — § 2258A 1-year retention requires the bytes stay on disk for
+    manual reconciliation, never silently deleted."""
+    pm = patched_moderate
+    csam_block = dict(_ALL_PASS)
+    csam_block["csam"] = {"verdict": "block", "score": 0.99, "rationale": "blocked"}
+    pm.gemini_classify.return_value = csam_block
+
+    async def _csam_raises(*a, **kw):
+        raise RuntimeError("simulated DB outage on reported_csam write")
+
+    pm.write_reported_csam.side_effect = _csam_raises
+
+    result = await pm.mod.moderate_clip("clip_abc")
+
+    # Decision is still blocked (the gate fired correctly).
+    assert result.decision == "blocked"
+    assert result.reason == "gemini_csam_block"
+
+    # Preservation write was attempted (and failed — error logged).
+    pm.write_reported_csam.assert_awaited_once()
+
+    # CRITICAL: cleanup MUST NOT have run. Bytes preserved for manual reconciliation.
+    pm.cleanup_blocked_clip.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
 # Test 4 — Soft-flag (violence flag, no hard-block)
 # ---------------------------------------------------------------------------
 

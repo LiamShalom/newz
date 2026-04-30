@@ -552,9 +552,15 @@ async def _moderate_real(clip_id: str) -> ModerationResult:
 
         # ----- Stage 7: hard-block side effects -----
         if decision == "blocked":
-            # csam-hit: write reported_csam BEFORE cleanup_blocked_clip (audit-trail
-            # ordering, T-11-16). The hash must be persisted while the bytes are
-            # still readable on disk; cleanup_blocked_clip removes the blob.
+            # CR-02: § 2258A audit-trail integrity. On a CSAM hit, cleanup
+            # MUST NOT run unless the reported_csam preservation write
+            # succeeded — otherwise we destroy the only copy of the bytes
+            # the 1-year retention obligation depends on. If the preservation
+            # write fails, log loudly and leave the blob on disk for manual
+            # reconciliation; a non-CSAM hard-block (sexual / extremist /
+            # self_harm / classifier_timeout / max_budget_exceeded) has no
+            # preservation requirement and proceeds to cleanup unconditionally.
+            safe_to_cleanup = True
             if reason == "gemini_csam_block" and clip_bytes is not None:
                 try:
                     await db.write_reported_csam(
@@ -562,12 +568,19 @@ async def _moderate_real(clip_id: str) -> ModerationResult:
                         preserved_until=_one_year_from_now_unix(),
                     )
                 except Exception:
-                    log.exception("moderate write_reported_csam failed clip_id=%s", clip_id)
-            # All hard-blocks: idempotent cleanup of the stored blob/file.
-            try:
-                await cleanup_blocked_clip(clip_id)
-            except Exception:
-                log.exception("moderate cleanup_blocked_clip failed clip_id=%s", clip_id)
+                    log.exception(
+                        "moderate write_reported_csam FAILED clip_id=%s — "
+                        "preserving bytes (cleanup deferred for manual reconciliation)",
+                        clip_id,
+                    )
+                    safe_to_cleanup = False
+            # All hard-blocks (gated on preservation success for CSAM):
+            # idempotent cleanup of the stored blob/file.
+            if safe_to_cleanup:
+                try:
+                    await cleanup_blocked_clip(clip_id)
+                except Exception:
+                    log.exception("moderate cleanup_blocked_clip failed clip_id=%s", clip_id)
 
         # ----- Stage 8: unknown side effects -----
         if decision == "unknown":
