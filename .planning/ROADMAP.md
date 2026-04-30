@@ -20,7 +20,7 @@ Hardens the v1.0 monolith for public launch without disturbing load-bearing deci
 | 8 | Observability scaffolding (structlog + Sentry + Logfire + Prometheus + PII scrubbers) | ✅ Shipped | `phases/08-observability-scaffolding/` |
 | 9 | Postgres migration to Neon (asyncpg + Alembic, METADATA_BACKEND dispatcher) | ✅ Shipped | `phases/09-postgres-migration-neon-asyncpg-alembic/` |
 | 10 | Vercel Blob migration for clip media (server-mediated; signed URLs; `STORAGE_BACKEND` flag) | 🟡 Planning next | TBD |
-| 11 | 6/7 | In Progress|  |
+| 11 | 7/7 | Complete   | 2026-04-30 |
 | 12 | Reactive reporting + admin queue (anonymous reports; UNIQUE(segment, ip_hash) brigading defense) | ⬜ Open | TBD |
 | 13 | Observability deepening + OFFLINE_DEMO audit (Logfire spans across pipeline; anonymity regression test; firewalled CI smoke test) | ⬜ Open | TBD |
 
@@ -135,7 +135,7 @@ Plans:
 - [x] 11-04-PLAN.md — backend/pipeline/moderate.py (moderate_clip + Gemini classifier + cancel-when-embed-finishes + verdict routing) + Sentry scrubber extension
 - [x] 11-05-PLAN.md — run.py gate orchestrator at L79 + _resume_pipeline + lifespan WARN + metrics docstring
 - [x] 11-06-PLAN.md — compile.py soft_flag derivation + insert_segment kwarg + frontend Segment.soft_flag
-- [ ] 11-07-PLAN.md — test suite (test_moderate.py + conftest gemini_moderation_mock + test_offline_demo_firewall.py + test_feed_segments.py extensions) + Wave-0 smoke deploy
+- [x] 11-07-PLAN.md — test suite (test_moderate.py + conftest gemini_moderation_mock + test_offline_demo_firewall.py + test_feed_segments.py extensions) + Wave-0 smoke deploy
 
 ### Phase 12: Reactive Reporting + Admin Queue
 **Goal**: Anonymous post-publish report flow + token-guarded admin queue with embedded clip playback; reports table never carries session_uuid; brigading-defense via UNIQUE(segment, ip_hash); admin actions hide segments and optionally block underlying clips.
