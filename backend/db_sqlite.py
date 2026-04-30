@@ -348,26 +348,37 @@ async def insert_segment(
     source_count: int,
     video_url: str | None = None,
     title: str | None = None,
+    soft_flag: bool = False,
 ) -> str:
-    """Idempotent: one segment per cluster. ON CONFLICT(cluster_id) updates. CMP-09."""
+    """Idempotent: one segment per cluster. ON CONFLICT(cluster_id) updates. CMP-09.
+
+    Phase 11 (D-08, D-14, D-15): soft_flag parity with db_postgres.insert_segment.
+    Default False preserves backward compatibility. NOTE: the SQLite SCHEMA_SQL
+    in this module does NOT yet declare segments.soft_flag (Plan 03 Deferred
+    Issue tracked under SQLite-backend retirement); the parameter is accepted
+    here for D-07 dispatcher signature parity, but writing it through requires
+    the column to exist in the runtime SQLite DB.
+    """
     seg_id = uuid.uuid4().hex
     now = time.time()
     async with aiosqlite.connect(DB_PATH) as conn:
         cur = await conn.execute(
             """INSERT INTO segments
                  (id, cluster_id, ordered_clip_ids, title, caption, location,
-                  source_count, created_at, video_url)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  source_count, created_at, video_url, soft_flag)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(cluster_id) DO UPDATE SET
                  ordered_clip_ids = excluded.ordered_clip_ids,
                  title            = excluded.title,
                  caption          = excluded.caption,
                  location         = excluded.location,
                  source_count     = excluded.source_count,
-                 video_url        = excluded.video_url
+                 video_url        = excluded.video_url,
+                 soft_flag        = excluded.soft_flag
                RETURNING id""",
             (seg_id, cluster_id, json.dumps(ordered_clip_ids),
-             title, caption, location, source_count, now, video_url),
+             title, caption, location, source_count, now, video_url,
+             1 if soft_flag else 0),
         )
         row = await cur.fetchone()
         await conn.commit()
