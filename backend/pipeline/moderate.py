@@ -215,9 +215,396 @@ async def moderate_clip(clip_id: str) -> ModerationResult:
 
 
 # ---------------------------------------------------------------------------
-# Real path — Task 2 fills in
+# Real classifier path
 # ---------------------------------------------------------------------------
 
+async def _fetch_clip_bytes(clip_id: str) -> tuple[bytes, str]:
+    """Read clip bytes once and return (bytes, local_path_for_gemini_upload).
+
+    Mirrors backend/pipeline/embed.py:113-152. In Blob mode the bytes are
+    streamed from Vercel Blob (private, bearer-auth) into a tempfile so the
+    Gemini SDK has a real fd to upload + so we can compute the SHA-256 hash.
+    In local mode the row's path is read directly.
+
+    Returns:
+      clip_bytes — the full video payload (used for hashlib.sha256)
+      local_path — a path on disk the caller can hand to client.files.upload(file=...)
+
+    The caller MUST unlink local_path when done (we mirror embed_worker's
+    finally-block pattern at the call site).
+    """
+    import tempfile
+    from pathlib import Path
+
+    clip = await db.get_clip(clip_id)
+    if clip is None:
+        raise ValueError(f"_fetch_clip_bytes: clip {clip_id!r} not found")
+
+    blob_url = clip.get("blob_url")
+    db_path = clip.get("path")
+
+    if blob_url:
+        # Blob mode: stream the private blob to a tempfile.
+        from ..storage import blob_client
+        client = blob_client.get_client()
+        headers = {"Authorization": f"Bearer {config.BLOB_READ_WRITE_TOKEN}"}
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+            tmp_path = tmp.name
+            async with client.stream("GET", blob_url, headers=headers) as resp:
+                resp.raise_for_status()
+                async for chunk in resp.aiter_bytes(chunk_size=64 * 1024):
+                    tmp.write(chunk)
+        clip_bytes = Path(tmp_path).read_bytes()
+        return clip_bytes, tmp_path
+
+    if db_path and Path(db_path).exists():
+        # Local-FS mode. We do NOT copy the file — the Gemini upload reads it
+        # directly from its canonical location and we never unlink it.
+        clip_bytes = Path(db_path).read_bytes()
+        return clip_bytes, db_path
+
+    raise FileNotFoundError(
+        f"_fetch_clip_bytes: clip {clip_id!r} has no readable source "
+        f"(path={db_path!r}, blob_url={'set' if blob_url else 'unset'})"
+    )
+
+
+async def _gemini_classify(clip_local_path: str) -> dict:
+    """Gemini 2.5 Flash-Lite call: upload-poll-generate-cleanup.
+
+    Mirrors backend/pipeline/caption_pipeline.py:424-499 with four parameter swaps:
+      - model=config.GEMINI_MODERATION_MODEL
+      - system_instruction=SYSTEM_PROMPT
+      - response_schema=ModerationResponse (TypedDict)
+      - temperature=0.0
+      - inner asyncio.wait_for(..., timeout=config.MODERATION_MAX_BUDGET_S)
+
+    Returns the parsed JSON dict (json.loads(response.text)).
+
+    Raises:
+      asyncio.TimeoutError    — wait_for ceiling exceeded
+      httpx.HTTPStatusError   — Gemini control-plane 4xx / 5xx surfaced via SDK
+      httpx.ConnectError      — network unreachable
+      httpx.ReadError         — network read interrupted
+      httpx.TransportError    — other transport failure
+    Any other exception is re-raised; the caller's typed-exception ladder routes
+    it into decision='unknown'.
+    """
+    if not config.GEMINI_API_KEY:
+        # Without an API key there is no way to make the call. Surface as a
+        # transport-class error so the caller routes to decision='unknown'
+        # rather than 'blocked'. (The OFFLINE_DEMO short-circuit is upstream.)
+        raise httpx.ConnectError("GEMINI_API_KEY unset")
+
+    from google import genai
+    from google.genai import types
+
+    client = genai.Client(
+        api_key=config.GEMINI_API_KEY,
+        http_options=types.HttpOptions(timeout=120_000),  # ms
+    )
+
+    loop = asyncio.get_running_loop()
+    uploaded = None
+    try:
+        # 1. Upload (sync SDK call wrapped in executor).
+        uploaded = await asyncio.wait_for(
+            loop.run_in_executor(None, lambda: client.files.upload(file=clip_local_path)),
+            timeout=config.MODERATION_MAX_BUDGET_S,
+        )
+
+        # 2. Poll until ACTIVE (~30s ceiling, but capped overall by MODERATION_MAX_BUDGET_S
+        #    via the surrounding asyncio.wait outer cap in _moderate_real).
+        for _ in range(30):
+            if uploaded.state.name == "ACTIVE":
+                break
+            await asyncio.sleep(1)
+            uploaded = await loop.run_in_executor(
+                None, lambda: client.files.get(name=uploaded.name)
+            )
+        if uploaded.state.name != "ACTIVE":
+            raise asyncio.TimeoutError(
+                f"gemini file did not reach ACTIVE state (state={uploaded.state.name})"
+            )
+
+        # 3. generate_content with system_instruction + structured JSON.
+        response = await asyncio.wait_for(
+            loop.run_in_executor(
+                None,
+                lambda: client.models.generate_content(
+                    model=config.GEMINI_MODERATION_MODEL,
+                    contents=[uploaded, USER_PROMPT],
+                    config=types.GenerateContentConfig(
+                        system_instruction=SYSTEM_PROMPT,
+                        temperature=0.0,
+                        response_mime_type="application/json",
+                        response_schema=ModerationResponse,
+                    ),
+                ),
+            ),
+            timeout=config.MODERATION_MAX_BUDGET_S,
+        )
+
+        # 4. Parse JSON. Schema enforcement is server-side — but if Gemini still
+        #    returns malformed JSON, json.loads raises and the caller routes to
+        #    decision='unknown'.
+        parsed = json.loads(response.text)
+        return parsed
+    finally:
+        # Best-effort cleanup of the uploaded Gemini file (PRIV-03 / D-26).
+        if uploaded is not None:
+            try:
+                await loop.run_in_executor(
+                    None, lambda: client.files.delete(name=uploaded.name)
+                )
+            except Exception as exc:
+                log.warning("gemini file cleanup failed: %s", type(exc).__name__)
+
+
+def _route_verdict(parsed: dict) -> tuple[str, str | None, list[str]]:
+    """Map a Gemini ModerationResponse dict → (decision, reason, soft_flag_categories).
+
+    Precedence:
+      1. Any HARD_BLOCK_CATEGORIES verdict in {flag, block} → ('blocked', f'gemini_{cat}_block', [])
+         csam first (for reported_csam preservation precedence).
+      2. Else build SOFT_FLAG_CATEGORIES list of any verdict in {flag, block};
+         if non-empty → ('passed', f'soft_flag_{first_cat}', soft_flag_categories).
+      3. Else → ('passed', None, []).
+    """
+    for cat in HARD_BLOCK_CATEGORIES:
+        node = parsed.get(cat) or {}
+        v = node.get("verdict")
+        if v in ("flag", "block"):
+            return ("blocked", f"gemini_{cat}_block", [])
+
+    soft_flag_categories = [
+        cat for cat in SOFT_FLAG_CATEGORIES
+        if (parsed.get(cat) or {}).get("verdict") in ("flag", "block")
+    ]
+    if soft_flag_categories:
+        return ("passed", f"soft_flag_{soft_flag_categories[0]}", soft_flag_categories)
+
+    return ("passed", None, [])
+
+
+def _classify_exception(exc: BaseException) -> tuple[str, str]:
+    """D-05: typed-exception → (decision, reason).
+
+    asyncio.TimeoutError + 4xx → 'blocked'
+    5xx + httpx.ConnectError + httpx.ReadError + httpx.TransportError → 'unknown'
+    Anything else → 'unknown' (defense-in-depth).
+    """
+    if isinstance(exc, asyncio.TimeoutError):
+        return ("blocked", "classifier_timeout")
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code if exc.response is not None else 0
+        if 400 <= status < 500:
+            return ("blocked", f"classifier_4xx_{status}")
+        if 500 <= status < 600:
+            return ("unknown", f"classifier_5xx_{status}")
+        return ("unknown", "classifier_network_error")
+    # ConnectError / ReadError both subclass TransportError; ConnectError check first
+    # is purely cosmetic. The reason string is unified.
+    if isinstance(exc, (httpx.ConnectError, httpx.ReadError, httpx.TransportError)):
+        return ("unknown", "classifier_network_error")
+    return ("unknown", "classifier_unknown_error")
+
+
+async def _drain_task(task: asyncio.Task) -> None:
+    """Re-await a cancelled task; suppress CancelledError + everything else.
+
+    asyncio.wait FIRST_COMPLETED leaves pending tasks alive — they MUST be
+    cancelled and awaited or Python emits "Task was destroyed but it is
+    pending!" warnings and may leak resources (RESEARCH § asyncio.wait).
+    """
+    if not task.done():
+        task.cancel()
+    try:
+        await task
+    except (asyncio.CancelledError, BaseException):
+        pass
+
+
 async def _moderate_real(clip_id: str) -> ModerationResult:
-    """Real classifier path. Replaced fully by Task 2 — currently a placeholder."""
-    raise NotImplementedError("filled in by Task 2")
+    """Classifier-only moderation path (D-02 reconciled).
+
+    Sequence:
+      1. Fetch clip bytes (and a local path for Gemini upload).
+      2. Spawn embed_task + gemini_task in parallel.
+      3. asyncio.wait FIRST_COMPLETED with outer cap = MODERATION_MAX_BUDGET_S.
+      4. Branch on which finished first; cancel + drain the other.
+      5. Map Gemini verdict → decision + reason.
+      6. Write moderation_decisions row (always).
+      7. On hard-block: csam-hit → write reported_csam BEFORE cleanup_blocked_clip
+         (audit-trail ordering, T-11-16). All hard-blocks → cleanup_blocked_clip.
+      8. On unknown: also call set_clip_hidden(clip_id, hidden=True) so the
+         clip doesn't surface in the feed while Plan 05 short-circuits clustering.
+      9. On passed: ModerationResult includes embed_result for Plan 05 to use.
+
+    Defense-in-depth: any unhandled exception falls through to decision='unknown'.
+    """
+    from pathlib import Path
+    from .embed import embed_worker
+
+    t0 = time.monotonic()
+    clip_bytes: bytes | None = None
+    clip_local_path: str | None = None
+    blob_tempfile_to_unlink: str | None = None
+
+    try:
+        # ----- Stage 1: fetch clip bytes -----
+        clip_bytes, clip_local_path = await _fetch_clip_bytes(clip_id)
+        # If _fetch_clip_bytes returned a tempfile (blob mode), we own its lifecycle.
+        clip_row = await db.get_clip(clip_id)
+        if clip_row and clip_row.get("blob_url"):
+            blob_tempfile_to_unlink = clip_local_path
+
+        # ----- Stage 2: spawn parallel tasks -----
+        embed_task = asyncio.create_task(embed_worker(clip_id))
+        gemini_task = asyncio.create_task(_gemini_classify(clip_local_path))
+
+        # ----- Stage 3: race them with outer cap -----
+        done, pending = await asyncio.wait(
+            {embed_task, gemini_task},
+            return_when=asyncio.FIRST_COMPLETED,
+            timeout=config.MODERATION_MAX_BUDGET_S,
+        )
+
+        decision: str
+        reason: str | None
+        soft_flag_categories: list[str] = []
+        raw_response: dict | None = None
+        embed_result: tuple[str, Any] | None = None
+
+        # ----- Stage 4: branch on race outcome -----
+        if not done:
+            # Branch C — wait timed out, both still pending.
+            await _drain_task(embed_task)
+            await _drain_task(gemini_task)
+            decision = "blocked"
+            reason = "max_budget_exceeded"
+            log.info(
+                "moderate gate decision=%s provider=%s reason=%s latency_ms=%d",
+                decision, "gemini_flash_lite", reason,
+                int((time.monotonic() - t0) * 1000),
+            )
+        elif embed_task in done and gemini_task not in done:
+            # Branch A — embed finished first; gemini still pending.
+            # Cancel-when-embed-finishes (D-03) → classifier_timeout.
+            try:
+                embed_result = embed_task.result()
+            except BaseException:
+                embed_result = None
+            await _drain_task(gemini_task)
+            decision = "blocked"
+            reason = "classifier_timeout"
+        else:
+            # Branch B — gemini finished first (with or without embed already done).
+            # Drain embed: re-await it to get the real result if not done; if it's
+            # also done, .result() / await returns immediately.
+            try:
+                embed_result = await embed_task
+            except BaseException:
+                embed_result = None
+
+            # Inspect gemini outcome.
+            gemini_exc = gemini_task.exception()
+            if gemini_exc is not None:
+                decision, reason = _classify_exception(gemini_exc)
+            else:
+                parsed = gemini_task.result()
+                raw_response = parsed
+                decision, reason, soft_flag_categories = _route_verdict(parsed)
+
+        latency_ms = int((time.monotonic() - t0) * 1000)
+        STAGE_DURATION.labels(stage="moderate").observe(latency_ms / 1000.0)
+
+        # ----- Stage 6: persist moderation_decisions row (always) -----
+        # _strip_anonymity_metadata is a defense-in-depth no-op against the
+        # Gemini-shaped raw_response (it never carries session_uuid keys), but
+        # we apply it before persisting so any future change to upstream
+        # response shape can't leak metadata into the JSONB column.
+        sanitized_raw = _strip_anonymity_metadata(raw_response) if raw_response else None
+        await db.write_moderation_decision(
+            clip_id=clip_id,
+            provider="gemini_flash_lite",
+            decision=decision,
+            reason=reason,
+            raw_response=sanitized_raw,
+            latency_ms=latency_ms,
+            prompt_version=PROMPT_VERSION,
+        )
+
+        # ----- Stage 7: hard-block side effects -----
+        if decision == "blocked":
+            # csam-hit: write reported_csam BEFORE cleanup_blocked_clip (audit-trail
+            # ordering, T-11-16). The hash must be persisted while the bytes are
+            # still readable on disk; cleanup_blocked_clip removes the blob.
+            if reason == "gemini_csam_block" and clip_bytes is not None:
+                try:
+                    await db.write_reported_csam(
+                        content_hash=_content_hash(clip_bytes),
+                        preserved_until=_one_year_from_now_unix(),
+                    )
+                except Exception:
+                    log.exception("moderate write_reported_csam failed clip_id=%s", clip_id)
+            # All hard-blocks: idempotent cleanup of the stored blob/file.
+            try:
+                await cleanup_blocked_clip(clip_id)
+            except Exception:
+                log.exception("moderate cleanup_blocked_clip failed clip_id=%s", clip_id)
+
+        # ----- Stage 8: unknown side effects -----
+        if decision == "unknown":
+            try:
+                await db.set_clip_hidden(clip_id, hidden=True)
+            except Exception:
+                log.exception("moderate set_clip_hidden failed clip_id=%s", clip_id)
+
+        # ----- Stage 9: structured INFO log (D-26) — never log raw_response/prompt_version (L-10) -----
+        log.info(
+            "moderate gate decision=%s provider=%s reason=%s latency_ms=%d",
+            decision, "gemini_flash_lite", reason, latency_ms,
+        )
+
+        return ModerationResult(
+            decision=decision,  # type: ignore[arg-type]
+            provider="gemini_flash_lite",
+            reason=reason,
+            raw_response=raw_response,
+            latency_ms=latency_ms,
+            embed_result=embed_result if decision == "passed" else None,
+            soft_flag_categories=soft_flag_categories,
+        )
+    except Exception:
+        # Defense in depth: any unhandled error → decision='unknown' + hide clip.
+        log.exception("moderate _moderate_real unhandled exception clip_id=%s", clip_id)
+        latency_ms = int((time.monotonic() - t0) * 1000)
+        try:
+            await db.write_moderation_decision(
+                clip_id=clip_id,
+                provider="gemini_flash_lite",
+                decision="unknown",
+                reason="classifier_unknown_error",
+                raw_response=None,
+                latency_ms=latency_ms,
+                prompt_version=PROMPT_VERSION,
+            )
+            await db.set_clip_hidden(clip_id, hidden=True)
+        except Exception:
+            log.exception("moderate fallback decision write failed clip_id=%s", clip_id)
+        return ModerationResult(
+            decision="unknown",
+            provider="gemini_flash_lite",
+            reason="classifier_unknown_error",
+            latency_ms=latency_ms,
+        )
+    finally:
+        # Only unlink tempfiles we created (blob mode). Local-mode clip_local_path
+        # IS the canonical row.path — never delete that here. cleanup_blocked_clip
+        # owns the canonical blob delete.
+        if blob_tempfile_to_unlink:
+            try:
+                Path(blob_tempfile_to_unlink).unlink(missing_ok=True)
+            except Exception:
+                pass
