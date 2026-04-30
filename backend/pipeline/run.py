@@ -53,6 +53,43 @@ async def _should_compile(cluster_id: str) -> bool:
     return await db.set_compile_in_flight(cluster_id, True, ttl_seconds=30.0)
 
 
+async def _should_recompile(cluster_id: str, new_clip_id: str) -> bool:
+    """Phase 14 recompile gate: fire compile_segment when a NEW DISTINCT PARENT
+    joins a cluster that ALREADY has a published segment.
+
+    Negative cases (intentionally do nothing — short-circuit before CAS):
+      1. Feature flag off (config.RECOMPILE_ON_NEW_PARENT=False) -> v1.0 behavior preserved.
+      2. new_clip is a child of an existing parent (clip.parent_id is not None) -> no new
+         angle, just slicing metadata; the existing compile already had access.
+      3. cluster has no segment yet (get_segment_for_cluster returns None) -> first compile
+         path; _should_compile owns this case.
+      4. Defensive: distinct parent count < 2 (impossible if seg exists, but cheap to check).
+
+    On match, acquires the same CAS lock as _should_compile but with the longer
+    RECOMPILE_DEBOUNCE_S TTL so bursts of new parents within the window coalesce
+    into exactly one recompile (R1 mitigation per 14-RESEARCH.md).
+
+    Per Phase 11 contract (MOD-01, MOD-06): does NOT re-run moderation. Each clip
+    in the cluster individually passed the gate at ingest; soft_flag re-derivation
+    runs inside compile_segment (compile.py:629-648) so hate/violence aggregates
+    update on the re-emitted segment row.
+    """
+    if not config.RECOMPILE_ON_NEW_PARENT:
+        return False
+    clip = await db.get_clip(new_clip_id)
+    if clip is None or clip.get("parent_id") is not None:
+        return False
+    seg = await db.get_segment_for_cluster(cluster_id)
+    if seg is None:
+        return False
+    parent_count = await db.count_distinct_parents_in_cluster(cluster_id)
+    if parent_count < 2:
+        return False
+    return await db.set_compile_in_flight(
+        cluster_id, True, ttl_seconds=config.RECOMPILE_DEBOUNCE_S,
+    )
+
+
 async def run_pipeline(clip_id: str) -> None:
     """Background pipeline. Fire-and-forget from POST /clips.
 
@@ -149,6 +186,9 @@ async def run_pipeline(clip_id: str) -> None:
         if await _should_compile(cluster_id):
             asyncio.create_task(compile_segment(cluster_id))
             log.info("compile triggered cluster_id=%s", cluster_id)
+        elif await _should_recompile(cluster_id, clip_id):
+            asyncio.create_task(compile_segment(cluster_id))
+            log.info("recompile triggered cluster_id=%s parent_id=%s", cluster_id, clip_id)
 
     except Exception as exc:
         log.exception("pipeline failed")
@@ -196,6 +236,9 @@ async def _resume_pipeline(clip_id: str) -> None:
         if await _should_compile(cluster_id):
             asyncio.create_task(compile_segment(cluster_id))
             log.info("resume compile triggered cluster_id=%s", cluster_id)
+        elif await _should_recompile(cluster_id, clip_id):
+            asyncio.create_task(compile_segment(cluster_id))
+            log.info("resume recompile triggered cluster_id=%s parent_id=%s", cluster_id, clip_id)
     except Exception as exc:
         log.exception("resume_pipeline failed")
         await events.broadcast({

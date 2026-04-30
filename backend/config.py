@@ -73,3 +73,16 @@ GEMINI_MODERATION_MODEL: str = os.environ.get("GEMINI_MODERATION_MODEL", "gemini
 #   Cancel-when-embed-finishes is the typical primitive (Marengo's elapsed time
 #   bounds Gemini); this is the safety floor when both tasks exceed Marengo p99.
 MODERATION_MAX_BUDGET_S: float = float(os.environ.get("MODERATION_MAX_BUDGET_S", "20.0"))
+
+# Phase 14: Recompile gate
+# RECOMPILE_DEBOUNCE_S: cooldown window after a compile completes during which
+#   subsequent new-parent joins do not trigger a fresh recompile. 60s coalesces
+#   typical 4-parent burst from a single hot event into one recompile while
+#   keeping per-cluster recompile rate <=60/hr at steady state. Distinct from
+#   the 30s first-publish TTL in set_compile_in_flight.
+RECOMPILE_DEBOUNCE_S: float = float(os.environ.get("RECOMPILE_DEBOUNCE_S", "60.0"))
+# RECOMPILE_ON_NEW_PARENT: feature flag for gradual rollout. When False, the
+#   _should_recompile gate short-circuits and the legacy v1.0 behavior (compile
+#   fires only on first >=2-parent threshold cross) is preserved. Cheap rollback
+#   if recompile-storm scenarios manifest in pilot traffic.
+RECOMPILE_ON_NEW_PARENT: bool = os.environ.get("RECOMPILE_ON_NEW_PARENT", "true").strip().lower() == "true"

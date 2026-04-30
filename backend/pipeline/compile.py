@@ -97,6 +97,16 @@ async def stitch_multi_source(refs: list[dict], run_id: str) -> str | None:
 
 log = logging.getLogger(__name__)
 
+# Phase 14: per-cluster recompile counter (process-local, resets on restart).
+# Single-process FastAPI + --workers 1 makes module-local state authoritative
+# for the pilot. NOT persisted — a Railway redeploy zeroes the counter, which
+# is fine for the soft-warn observability use case (the goal is "did this
+# cluster trip the warn threshold during this process lifecycle"). Revisit
+# post-pilot if a hard cap is needed (then add clusters.compile_count column
+# per RESEARCH § R4).
+_RECOMPILE_COUNTS: dict[str, int] = {}
+_RECOMPILE_WARN_THRESHOLD: int = 5
+
 
 ANGLE_SELECTOR_PROMPT_TEMPLATE = """You are picking the best 2-4 RUNS from cluster {cluster_id}.
 
@@ -548,11 +558,29 @@ async def compile_segment(cluster_id: str) -> None:
     Phase 3: single insert_segment combines both phases atomically.
     """
     started_at = time.time()
+    # Phase 14: detect recompile vs first-publish for the SSE payload + soft-warn.
+    # An existing segment row means this is a recompile pass (D-NEW-01 in 14-PLAN).
+    seg_existing = await db.get_segment_for_cluster(cluster_id)
+    is_recompile = seg_existing is not None
     await events.broadcast({
         "type": "compile_started",
         "cluster_id": cluster_id,
         "started_at": started_at,
+        "recompile": is_recompile,
     })
+
+    if is_recompile:
+        # Module-local counter; dict mutation is atomic at the asyncio scheduling
+        # boundary, no asyncio.Lock needed (counter is approximate-by-design — a
+        # missed increment under contention is acceptable; we only soft-warn at
+        # >=_RECOMPILE_WARN_THRESHOLD).
+        recompile_count = _RECOMPILE_COUNTS.get(cluster_id, 0) + 1
+        _RECOMPILE_COUNTS[cluster_id] = recompile_count
+        if recompile_count >= _RECOMPILE_WARN_THRESHOLD:
+            log.warning(
+                "compile recompile_count_high cluster_id=%s count=%d -- investigate hot-event behavior",
+                cluster_id, recompile_count,
+            )
 
     segment_id: str = ""
     video_url: str | None = None
