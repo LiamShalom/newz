@@ -53,7 +53,8 @@ __all__ = [
     "reset_all", "delete_recent_clips",
     # Phase 11 (D-13): moderation gate writes/reads (parity with db_postgres)
     "write_moderation_decision", "write_reported_csam", "set_clip_hidden",
-    "get_moderation_decisions", "aggregate_verdict",
+    "get_moderation_decisions", "get_moderation_decisions_for_clips",
+    "aggregate_verdict",
 ]
 
 SCHEMA_SQL = """
@@ -1068,6 +1069,41 @@ async def get_moderation_decisions(clip_id: str) -> list[dict]:
         d = dict(r)
         if d.get("raw_response") is not None:
             d["raw_response"] = json.loads(d["raw_response"])
+        out.append(d)
+    return out
+
+
+async def get_moderation_decisions_for_clips(clip_ids: list[str]) -> list[dict]:
+    """Batched read of moderation_decisions rows for multiple clip_ids — parity
+    with db_postgres.get_moderation_decisions_for_clips.
+
+    WR-07: replaces N+1 sequential calls in compile.py with one IN(...) query.
+    SQLite has no array-bind, so we render placeholders for each clip_id and
+    bind the list as positional args. raw_response is JSON-decoded on read.
+    Empty input yields an empty list (no DB roundtrip).
+    """
+    if not clip_ids:
+        return []
+    placeholders = ",".join("?" * len(clip_ids))
+    sql = (
+        "SELECT clip_id, provider, decision, reason, raw_response, latency_ms, "
+        "prompt_version, created_at "
+        f"FROM moderation_decisions WHERE clip_id IN ({placeholders}) "
+        "ORDER BY created_at DESC"
+    )
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(sql, tuple(clip_ids)) as cur:
+            rows = await cur.fetchall()
+    out: list[dict] = []
+    for r in rows:
+        d = dict(r)
+        if d.get("raw_response") is not None:
+            try:
+                d["raw_response"] = json.loads(d["raw_response"])
+            except (TypeError, ValueError):
+                # Defensive: leave the raw string in place if it's not parseable.
+                pass
         out.append(d)
     return out
 

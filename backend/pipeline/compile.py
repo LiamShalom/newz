@@ -621,25 +621,28 @@ async def compile_segment(cluster_id: str) -> None:
         # Defensive: never let a soft-flag derivation failure prevent the segment
         # from shipping. Default to False on any exception (visible-by-default
         # for ops; missing soft-flag is preferable to a missing montage).
+        #
+        # WR-07: single batched query (one DB roundtrip) replaces the previous
+        # N+1 pattern (one get_moderation_decisions per cluster member). On
+        # postgres this saves N pool-acquire + roundtrip pairs; on SQLite it
+        # collapses N file-locked queries into one.
         soft_flag = False
         try:
             members = await db.fetch_cluster_clips(cluster_id)
-            for member in members:
-                decisions = await db.get_moderation_decisions(member["id"])
-                for d in decisions:
-                    raw = d.get("raw_response") or {}
-                    if isinstance(raw, str):
-                        # SQLite stores raw_response as TEXT; deserialize on the read side.
-                        try:
-                            raw = json.loads(raw)
-                        except (TypeError, ValueError):
-                            raw = {}
-                    for cat in ("hate", "violence"):
-                        cat_signal = raw.get(cat) or {}
-                        if isinstance(cat_signal, dict) and cat_signal.get("verdict") in ("flag", "block"):
-                            soft_flag = True
-                            break
-                    if soft_flag:
+            member_ids = [m["id"] for m in members]
+            decisions = await db.get_moderation_decisions_for_clips(member_ids)
+            for d in decisions:
+                raw = d.get("raw_response") or {}
+                if isinstance(raw, str):
+                    # SQLite TEXT path or postgres without WR-04 codec — defensive parse.
+                    try:
+                        raw = json.loads(raw)
+                    except (TypeError, ValueError):
+                        raw = {}
+                for cat in ("hate", "violence"):
+                    cat_signal = raw.get(cat) or {}
+                    if isinstance(cat_signal, dict) and cat_signal.get("verdict") in ("flag", "block"):
+                        soft_flag = True
                         break
                 if soft_flag:
                     break

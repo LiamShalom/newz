@@ -58,7 +58,8 @@ __all__ = [
     "reset_all", "delete_recent_clips",
     # Phase 11 (D-13): moderation gate writes/reads
     "write_moderation_decision", "write_reported_csam", "set_clip_hidden",
-    "get_moderation_decisions", "aggregate_verdict",
+    "get_moderation_decisions", "get_moderation_decisions_for_clips",
+    "aggregate_verdict",
 ]
 
 # Stubbed for db_sqlite parity. CLIPS_DIR is still consumed by /media StaticFiles
@@ -994,6 +995,30 @@ async def get_moderation_decisions(clip_id: str) -> list[dict]:
         """SELECT provider, decision, reason, raw_response, latency_ms, prompt_version, created_at
            FROM moderation_decisions WHERE clip_id = $1 ORDER BY created_at DESC""",
         clip_id,
+    )
+    return [dict(r) for r in rows]
+
+
+async def get_moderation_decisions_for_clips(clip_ids: list[str]) -> list[dict]:
+    """Batched read of moderation_decisions rows for multiple clip_ids.
+
+    WR-07: replaces N+1 sequential calls in compile.py:624-650 (one
+    get_moderation_decisions per cluster member) with a single ANY() query.
+    Returns a flat list of decision rows (any clip → all its decisions).
+    Empty input yields an empty list (no DB roundtrip).
+
+    raw_response is decoded as a Python dict via the WR-04 jsonb codec.
+    """
+    if not clip_ids:
+        return []
+    pool = get_pool()
+    rows = await pool.fetch(
+        """SELECT clip_id, provider, decision, reason, raw_response, latency_ms,
+                  prompt_version, created_at
+           FROM moderation_decisions
+           WHERE clip_id = ANY($1::text[])
+           ORDER BY created_at DESC""",
+        clip_ids,
     )
     return [dict(r) for r in rows]
 
