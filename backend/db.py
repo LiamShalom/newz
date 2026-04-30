@@ -1,24 +1,11 @@
-"""Phase 9 (D-08): METADATA_BACKEND dispatcher — module-import-time selection.
+"""Single backend — Neon Postgres via asyncpg.
 
-OFFLINE_DEMO=true hard-overrides to SQLite regardless of METADATA_BACKEND (D-11).
-Mirrors backend/observability/sentry.py:25 graceful-skip pattern (empty env var
-short-circuits to safe default).
-
-Per-request branching is FORBIDDEN (D-08 / RESEARCH Anti-Patterns). The if/elif
-below runs once at import; downstream callers see exactly one function table.
+Phase 9 originally introduced a METADATA_BACKEND dispatcher that could route
+to either SQLite (legacy v1.0 path) or Postgres. Once Neon stabilized in
+production, the SQLite path was retired (this commit) and the dispatcher
+collapsed to a single import. METADATA_BACKEND env var is no longer read.
+OFFLINE_DEMO retains its non-DB effects (pre-warm skip, Sentry skip, /media
+local mode override) but no longer affects DB routing — apps with
+OFFLINE_DEMO=true and no DATABASE_URL fail at pool init.
 """
-import logging
-
-from . import config
-
-log = logging.getLogger(__name__)
-
-if config.METADATA_BACKEND == "postgres" and not config.OFFLINE_DEMO:
-    from .db_postgres import *  # noqa: F401, F403
-    log.info("metadata_backend=postgres")
-elif config.METADATA_BACKEND == "postgres" and config.OFFLINE_DEMO:
-    from .db_sqlite import *  # noqa: F401, F403
-    log.info("metadata_backend=sqlite (forced by OFFLINE_DEMO=true; D-11)")
-else:
-    from .db_sqlite import *  # noqa: F401, F403
-    log.info("metadata_backend=sqlite")
+from .db_postgres import *  # noqa: F401, F403

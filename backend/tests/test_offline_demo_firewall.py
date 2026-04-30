@@ -45,7 +45,7 @@ async def test_offline_demo_no_moderation_calls(monkeypatch, respx_mock):
 
     Asserts respx routers see ZERO calls to Gemini Files (upload + poll),
     generateContent, or files-cleanup. moderate_clip's OFFLINE_DEMO short-circuit
-    (Plan 04 line 199) returns BEFORE any SDK client is constructed.
+    returns BEFORE any SDK client is constructed.
     """
     from unittest.mock import AsyncMock
 
@@ -58,8 +58,7 @@ async def test_offline_demo_no_moderation_calls(monkeypatch, respx_mock):
     importlib.reload(backend.pipeline.moderate)
 
     # Mock db.write_moderation_decision so the OFFLINE_DEMO row write doesn't
-    # require the moderation_decisions table to exist in SQLite SCHEMA_SQL
-    # (Plan 03 deferred issue under SQLite-backend retirement).
+    # require a live Postgres connection in unit-test mode.
     write_decision = AsyncMock(return_value="dec_id_1")
     monkeypatch.setattr(backend.pipeline.moderate.db, "write_moderation_decision", write_decision)
 
@@ -85,53 +84,3 @@ async def test_offline_demo_no_moderation_calls(monkeypatch, respx_mock):
     assert poll_route.call_count == 0, "Gemini files-poll was called under OFFLINE_DEMO=true (MOD-10 violation)"
     assert generate_route.call_count == 0, "Gemini generateContent was called under OFFLINE_DEMO=true (MOD-10 violation)"
     assert delete_route.call_count == 0, "Gemini files-cleanup was called under OFFLINE_DEMO=true (MOD-10 violation)"
-
-
-@pytest.mark.asyncio
-async def test_offline_demo_writes_moderation_row_to_sqlite(monkeypatch, tmp_path):
-    """CR-04 regression: OFFLINE_DEMO=true must end-to-end persist a moderation_decisions
-    row to a real SQLite DB — no mocks. SCHEMA_SQL + init() must declare every Phase 11
-    table/column the OFFLINE_DEMO write path touches.
-    """
-    monkeypatch.setenv("OFFLINE_DEMO", "true")
-    monkeypatch.setenv("METADATA_BACKEND", "sqlite")
-    monkeypatch.setenv("DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("GEMINI_MODERATION_MODEL", "gemini-2.5-flash-lite")
-
-    import backend.config
-    importlib.reload(backend.config)
-    import backend.db_sqlite
-    importlib.reload(backend.db_sqlite)
-    import backend.db
-    importlib.reload(backend.db)
-    import backend.pipeline.moderate as mod
-    importlib.reload(mod)
-
-    # Initialize the schema in the fresh tmp_path DB. CR-04 fix: this now
-    # creates moderation_decisions + reported_csam + clips.is_hidden alongside
-    # the v1.0 tables, so the OFFLINE_DEMO write path doesn't crash.
-    await mod.db.init()
-
-    # Run the gate end-to-end (no mocks of write_moderation_decision).
-    result = await mod.moderate_clip("clip_offline_sqlite_test")
-
-    assert result.decision == "passed"
-    assert result.provider == "stub"
-    assert result.reason == "offline_demo"
-
-    # Verify the row actually landed in SQLite.
-    import aiosqlite
-    async with aiosqlite.connect(mod.db.DB_PATH) as conn:
-        conn.row_factory = aiosqlite.Row
-        async with conn.execute(
-            "SELECT clip_id, provider, decision, reason, prompt_version "
-            "FROM moderation_decisions WHERE clip_id = ?",
-            ("clip_offline_sqlite_test",),
-        ) as cur:
-            row = await cur.fetchone()
-
-    assert row is not None, "moderation_decisions row missing in SQLite under OFFLINE_DEMO"
-    assert row["provider"] == "stub"
-    assert row["decision"] == "passed"
-    assert row["reason"] == "offline_demo"
-    assert row["prompt_version"] is None

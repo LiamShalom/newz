@@ -21,28 +21,30 @@ import { postClip } from "../api";
 import { enqueue } from "../uploadQueue";
 
 /**
- * Phase 1 capture loop state machine. Eight phases:
+ * Phase 1 capture loop state machine. Phases:
  *
- *   priming -> acquiring -> ready -> recording -> retake
- *                                              \-> retake -> gps-pending -> submitting -> nav("/")
- *                                                                       \-> error -> (retry edge)
+ *   uninitialized -> acquiring -> ready -> recording -> retake
+ *                                                    \-> retake -> gps-pending -> submitting -> nav("/")
+ *                                                                              \-> error -> (retry edge)
+ *
+ * Phase 02 change (2026-04-29): dropped PrimingModal. The record button itself
+ * is the gesture anchor — first tap fires getUserMedia + getCurrentPosition
+ * synchronously in the same gesture frame, so both browser dialogs chain
+ * back-to-back. Permissions settle before recording starts; the old
+ * "location-blocked at post" iPhone-Safari dead-end is no longer reachable on
+ * the happy path.
  *
  * Critical iOS Safari constraints (PITFALLS.md #3, #13):
- * - getUserMedia must be called inside the user-gesture stack frame. PrimingModal's
- *   onContinue runs synchronously from the click; the await on getUserMedia is the
- *   first microtask, which iOS still treats as inside the gesture window.
+ * - getUserMedia must be called inside the user-gesture stack frame. The
+ *   record button onClick is that frame; getUserMedia and getCurrentPosition
+ *   are both called synchronously inside it (no await between them).
  * - MIME ladder is consulted via pickMimeType(); when it returns undefined the
  *   constructor option is omitted entirely (CAP-10 / Pitfall #3).
- * - <video> elements all carry autoPlay + muted + playsInline; missing playsInline
- *   makes iOS open native fullscreen and break the UX.
+ * - <video> elements all carry autoPlay + muted + playsInline; missing
+ *   playsInline makes iOS open native fullscreen and break the UX.
  *
- * D-07 conflict resolution: GPS lookup BLOCKS submit. CAP-07 ("never blocks") is
- * overridden in Phase 1 — null-GPS clips are not accepted.
- *
- * Location sample point: GPS is requested at record-tap (startRecording), not at
- * submit. This pins the clip's location to where the user was when they pressed
- * record, not where they happened to be when they tapped submit. The lookup runs
- * in parallel with recording; submit awaits the in-flight result.
+ * D-07 conflict resolution: GPS lookup BLOCKS submit. CAP-07 ("never blocks")
+ * is overridden in Phase 1 — null-GPS clips are not accepted.
  */
 
 type Phase =
@@ -58,23 +60,31 @@ type Phase =
 const RECORD_CAP_SEC = 30; // CAP-05 hard cap
 const MIN_RECORD_SEC = 5; // Marengo requires >=4s; 5 leaves a buffer for trim/encoding
 
+// Session-scoped flag: once both permissions are granted in this tab, skip the
+// priming popup on subsequent feed→camera navigations. Cleared on a hard reload
+// (sessionStorage is per-tab) so a stale flag can't trap a user whose permissions
+// were revoked.
+const PERMS_GRANTED_KEY = "perms_granted";
+
 export function Recorder() {
   const navigate = useNavigate();
-  const [phase, setPhase] = useState<Phase>({ kind: "priming" });
-  const [progress, setProgress] = useState(0); // 0..1 for ring fill
+  const [phase, setPhase] = useState<Phase>(() =>
+    sessionStorage.getItem(PERMS_GRANTED_KEY) === "1"
+      ? { kind: "acquiring", facing: "environment" }
+      : { kind: "priming" },
+  );
+  const [progress, setProgress] = useState(0);
 
   // Refs for things React must not re-render against.
   const streamRef = useRef<MediaStream | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  // GPS sampled at record-tap. Submit awaits this — by the time min-record
-  // (5s) elapses the 5s lookup is normally settled, so submit feels instant.
+  // GPS sampled at record-tap. By the time min-record (5s) elapses the lookup
+  // is normally settled, so submit feels instant. Permission was granted in
+  // initializePermissions() so this read is dialog-free.
   const gpsPromiseRef = useRef<Promise<PositionResult> | null>(null);
 
-  // Cleanup helpers — called on every transition out of an active stream/recorder state
-  // and on unmount. Without the stream cleanup, iOS keeps the camera indicator on after
-  // the user navigates away (T-04-01).
   const cleanupStream = () => {
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
@@ -84,13 +94,70 @@ export function Recorder() {
     tickRef.current = null;
   };
 
-  // Acquire camera + audio (D-04: audio ON, rear default).
+  /**
+   * First-tap permission acquisition. Fired from the record button when phase
+   * is "uninitialized". Both browser dialogs (camera/mic, then location) fire
+   * synchronously inside this single gesture frame.
+   *
+   * Why synchronous (no await between getUserMedia and getCurrentPosition):
+   * iOS Safari only honors permission dialogs within the user-gesture stack.
+   * `await` introduces a microtask boundary — by the time it resolves, we may
+   * be outside the gesture window and the second dialog gets blocked. So we
+   * fire both promises synchronously, then await both in parallel.
+   */
+  const initializePermissions = () => {
+    setPhase({ kind: "acquiring", facing: "environment" });
+
+    // Both calls fire synchronously here — same gesture frame.
+    const camPromise = navigator.mediaDevices.getUserMedia({
+      video: { facingMode: "environment" },
+      audio: true,
+    });
+    const geoPromise = getPositionWithTimeout(10000);
+
+    void Promise.allSettled([camPromise, geoPromise]).then(([camResult, geoResult]) => {
+      if (camResult.status === "rejected") {
+        setPhase({ kind: "error", error: "camera-blocked" });
+        // If the location promise still resolves, it's harmless — we already
+        // routed to the error screen.
+        return;
+      }
+      if (geoResult.status === "rejected") {
+        // getPositionWithTimeout never rejects (always resolves with a tagged
+        // union). Defensive — treat as unavailable.
+        cleanupStream();
+        camResult.value.getTracks().forEach((t) => t.stop());
+        setPhase({ kind: "error", error: "location-unavailable" });
+        return;
+      }
+
+      const pos = geoResult.value;
+      if (pos.kind === "denied") {
+        camResult.value.getTracks().forEach((t) => t.stop());
+        setPhase({ kind: "error", error: "location-blocked" });
+        return;
+      }
+      if (pos.kind === "unavailable" || pos.kind === "timeout" || pos.kind === "unsupported") {
+        camResult.value.getTracks().forEach((t) => t.stop());
+        setPhase({ kind: "error", error: "location-unavailable" });
+        return;
+      }
+
+      // Both granted — attach stream, transition to ready. User taps record
+      // again to actually start recording.
+      sessionStorage.setItem(PERMS_GRANTED_KEY, "1");
+      cleanupStream();
+      streamRef.current = camResult.value;
+      setPhase({ kind: "ready", facing: "environment" });
+    });
+  };
+
+  // Re-acquire camera (e.g. after retake or flip, or on mount when permissions
+  // were already granted in this session). Granted permissions don't re-prompt,
+  // so this is dialog-free on the warm path.
   const acquire = async (facing: "environment" | "user"): Promise<void> => {
     setPhase({ kind: "acquiring", facing });
     try {
-      // STACK.md: getUserMedia must be called from the same gesture stack as the user tap.
-      // PrimingModal's onContinue runs synchronously; this await is the first microtask
-      // and iOS Safari accepts it inside the gesture window.
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: facing },
         audio: true,
@@ -98,14 +165,11 @@ export function Recorder() {
       cleanupStream();
       streamRef.current = stream;
       setPhase({ kind: "ready", facing });
-    } catch (err) {
-      const name = (err as Error & { name?: string })?.name;
-      if (name === "NotAllowedError") {
-        setPhase({ kind: "error", error: "camera-blocked" });
-      } else {
-        // NotFoundError, OverconstrainedError, etc. — same screen for Phase 1 simplicity.
-        setPhase({ kind: "error", error: "camera-blocked" });
-      }
+    } catch {
+      // Cached perms got revoked between sessions, or hardware error.
+      // Clear the cache flag so the next visit re-shows priming.
+      sessionStorage.removeItem(PERMS_GRANTED_KEY);
+      setPhase({ kind: "error", error: "camera-blocked" });
     }
   };
 
@@ -118,7 +182,6 @@ export function Recorder() {
   const startRecording = () => {
     if (phase.kind !== "ready" || !streamRef.current) return;
     const mimeType = pickMimeType();
-    // CAP-10: omit the option entirely when nothing matches (Safari is happier with no mimeType).
     const recorder = new MediaRecorder(
       streamRef.current,
       mimeType ? { mimeType } : {},
@@ -137,8 +200,7 @@ export function Recorder() {
     };
     recorderRef.current = recorder;
     recorder.start();
-    // Sample GPS NOW — record-tap is the location of record. Runs in parallel
-    // with the recording; submit awaits the stored promise.
+    // Sample GPS now (no dialog — permission already granted at init).
     gpsPromiseRef.current = getPositionWithTimeout(5000);
     const startedAt = performance.now();
     setPhase({ kind: "recording", facing: phase.facing, startedAt });
@@ -147,7 +209,6 @@ export function Recorder() {
       const elapsed = (performance.now() - startedAt) / 1000;
       const p = Math.min(elapsed / RECORD_CAP_SEC, 1);
       setProgress(p);
-      // CAP-05: hard 30s cap. Recorder.stop() fires onstop -> retake transition.
       if (elapsed >= RECORD_CAP_SEC && recorder.state === "recording") {
         recorder.stop();
       }
@@ -170,10 +231,6 @@ export function Recorder() {
       mimeType: phase.mimeType,
     });
 
-    // D-07: GPS is BLOCKING. CAP-07 conflict resolved in favor of D-07.
-    // Lookup was kicked off at record-tap; await the in-flight promise here.
-    // Fallback to a fresh lookup only if the user somehow reached submit
-    // without going through startRecording (defensive — should not happen).
     const pos = await (gpsPromiseRef.current ?? getPositionWithTimeout(5000));
     if (pos.kind === "denied") {
       setPhase({ kind: "error", error: "location-blocked" });
@@ -219,17 +276,12 @@ export function Recorder() {
         lng: pos.lng,
         ts,
       });
-      navigate("/feed"); // feed will show prior clips; queue retries on next visit
+      navigate("/feed");
     }
   };
 
-  // After priming continue, kick off acquire (D-04 rear default).
-  const onPrimingDone = () => {
-    void acquire("environment");
-  };
-
-  // Kill stream/timer on unmount. Without this the iOS camera indicator stays on
-  // after the user navigates away mid-recording (T-04-01).
+  // Kill stream/timer on unmount. Without this the iOS camera indicator stays
+  // on after the user navigates away mid-recording (T-04-01).
   useEffect(() => {
     return () => {
       cleanupTimer();
@@ -237,19 +289,31 @@ export function Recorder() {
     };
   }, []);
 
+  // Warm-path: when we initialize the phase as "acquiring" (because permissions
+  // were already granted earlier in this session), kick off the camera fetch
+  // automatically. This skips the priming popup on feed→camera navigations.
+  useEffect(() => {
+    if (phase.kind === "acquiring" && !streamRef.current) {
+      void acquire(phase.facing);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Render —————————————————————————————————————————————
 
   if (phase.kind === "priming") {
-    return <PrimingModal onContinue={onPrimingDone} />;
+    return <PrimingModal onContinue={initializePermissions} />;
   }
 
   if (phase.kind === "error") {
+    // For permission-denied states, only a full page reload reliably picks up
+    // a Settings change on iOS Safari — the in-page permissions cache lags.
+    // For "location-unavailable" (transient GPS failure), an in-page retry
+    // is fine and avoids tearing down the React tree.
     const onRetry =
       phase.error === "location-unavailable"
-        ? () => {
-            void acquire("environment");
-          }
-        : undefined;
+        ? () => initializePermissions()
+        : () => window.location.reload();
     return <PermissionErrorScreen kind={phase.error} onRetry={onRetry} />;
   }
 
@@ -280,6 +344,7 @@ export function Recorder() {
       ? phase.facing
       : "environment";
   const isRecording = phase.kind === "recording";
+  const onRecordTap = isRecording ? stopRecording : startRecording;
 
   return (
     <div className="fixed inset-0 bg-[#0A0A0A]" style={{ height: "100dvh" }}>
@@ -295,12 +360,14 @@ export function Recorder() {
           <CameraUploadButton />
         </>
       )}
-      <RecordButton
-        recording={isRecording}
-        progress={progress}
-        canStop={!isRecording || progress >= MIN_RECORD_SEC / RECORD_CAP_SEC}
-        onTap={isRecording ? stopRecording : startRecording}
-      />
+      {phase.kind === "ready" || phase.kind === "recording" ? (
+        <RecordButton
+          recording={isRecording}
+          progress={progress}
+          canStop={!isRecording || progress >= MIN_RECORD_SEC / RECORD_CAP_SEC}
+          onTap={onRecordTap}
+        />
+      ) : null}
       <AddToHomeScreenHint dismiss={isRecording} />
       {!isRecording && <BottomTabBar />}
     </div>

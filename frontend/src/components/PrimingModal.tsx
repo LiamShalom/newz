@@ -1,52 +1,38 @@
-import { useEffect, useState } from "react";
-
 interface Props {
   onContinue: () => void;
 }
 
 /**
- * D-02: gating, once per session via sessionStorage("priming_shown") key.
- * Skipped (immediately calls onContinue) if the flag is already set.
+ * Phase 02 (2026-04-29): single-tap priming. Tapping "Allow and continue"
+ * fires getUserMedia + getCurrentPosition synchronously in the same gesture
+ * frame (see Recorder.tsx initializePermissions). Both browser permission
+ * dialogs chain back-to-back from this one tap.
  *
- * Interaction contract item 5: no backdrop dismiss, no Escape key. The Allow-and-continue
- * button is the only exit. iOS Safari has no keyboard, so Escape is a non-issue.
+ * Copy is honest about what's coming next so the two system dialogs read as
+ * step 2 of a single flow, not duplicate asks.
  */
 export function PrimingModal({ onContinue }: Props) {
-  const [open, setOpen] = useState(
-    () => sessionStorage.getItem("priming_shown") !== "1",
-  );
-
-  useEffect(() => {
-    if (!open) onContinue();
-  }, [open, onContinue]);
-
-  if (!open) return null;
-
-  const proceed = () => {
-    sessionStorage.setItem("priming_shown", "1");
-    setOpen(false);
-    onContinue();
-  };
-
   return (
     <div
       className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 px-6"
       style={{ minHeight: "100dvh" }}
     >
       <div className="bg-[#1A1A1A] rounded-2xl p-6 max-w-sm w-full border border-[#262626]">
-        <h2 className="text-2xl font-semibold leading-[1.2] text-[#FAFAFA]">
-          Allow camera and location
+        <h2 className="text-2xl font-semibold leading-[1.1] whitespace-nowrap text-[#FAFAFA]">
+          Location and Camera
         </h2>
         <p className="mt-4 text-base leading-[1.5] text-[#FAFAFA]">
-          Newz needs your camera to record and your location to group clips by event. Nothing is tied to you — there&apos;s no account.
+          Camera and location is used to record and group clips by event. Nothing is tied to you.
+        </p>
+        <p className="mt-3 text-xs leading-[1.4] text-[#B5B5B5]">
+          Tap <span className="text-[#FAFAFA] font-semibold">Allow</span> on the next two prompts.
         </p>
         <button
-          autoFocus
           type="button"
-          onClick={proceed}
-          className="mt-6 w-full h-14 rounded-full bg-gradient-to-r from-coral-light to-coral text-white font-semibold text-base"
+          onClick={onContinue}
+          className="no-blue-focus mt-6 w-full h-12 rounded-full bg-gradient-to-r from-coral-light to-coral text-white font-semibold text-lg"
         >
-          Allow and continue
+          Continue
         </button>
       </div>
     </div>

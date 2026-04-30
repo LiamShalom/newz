@@ -1,34 +1,18 @@
+"""Phase 11 MOD-08 — soft_flag visibility in /feed JSON.
+
+Only Phase 11's MOD-08 round-trip test survives here. The v1.0 dispatcher-era
+tests in this file were retired in PR #11 alongside db_sqlite.py.
+
+Uses main's `fresh_db` fixture (postgres-only — skips locally when
+`DATABASE_URL` is unset, runs against a Neon test branch in CI).
 """
-Tests for GET /feed endpoint — returns segments (not clips), with proximity sort.
-"""
-import asyncio
-import io
 import types
 import uuid
 from unittest.mock import AsyncMock, patch
 
 import numpy as np
 import pytest
-import pytest_asyncio
 from fastapi.testclient import TestClient
-
-from backend import config, db
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-@pytest_asyncio.fixture
-async def tmp_db(tmp_path, monkeypatch):
-    """Point DB_PATH and DATA_DIR at a temporary directory; init schema."""
-    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
-    new_db_path = tmp_path / "newz.db"
-    monkeypatch.setattr(db, "DB_PATH", new_db_path)
-    monkeypatch.setattr(db, "CLIPS_DIR", tmp_path / "clips")
-    (tmp_path / "clips").mkdir(parents=True, exist_ok=True)
-    await db.init()
-    return tmp_path
 
 
 def _make_cluster(cluster_id: str | None = None):
@@ -46,79 +30,8 @@ def _make_cluster(cluster_id: str | None = None):
     )
 
 
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
-
 @pytest.mark.asyncio
-async def test_feed_returns_segments_key(tmp_db, monkeypatch):
-    """GET /feed must return {"segments": [...]} not {"clips": [...]}."""
-    # Insert a cluster and segment directly via db helpers
-    cluster = _make_cluster()
-    await db.upsert_cluster(cluster)
-    await db.insert_segment(
-        cluster_id=cluster.id,
-        ordered_clip_ids=["clip-1", "clip-2"],
-        caption="Test segment caption",
-        location="Pasadena, CA",
-        source_count=2,
-    )
-
-    # Import app after monkeypatching db so it uses the tmp db
-    # Patch lifespan to skip real startup side-effects
-    with patch("backend.app.db.init", new_callable=AsyncMock), \
-         patch("backend.app.db.fetch_recent_segments",
-               new_callable=AsyncMock,
-               return_value=await db.fetch_recent_segments(limit=50)), \
-         patch("backend.pipeline.cluster.rebuild_cache", new_callable=AsyncMock), \
-         patch("backend.app._pre_warm_marengo", new_callable=AsyncMock), \
-         patch("backend.app._pre_warm_sdk", new_callable=AsyncMock):
-
-        from backend.app import app
-        client = TestClient(app, raise_server_exceptions=True)
-        response = client.get("/feed")
-
-    assert response.status_code == 200
-    data = response.json()
-    assert "segments" in data, f"Expected 'segments' key, got {list(data.keys())}"
-    assert "clips" not in data, "Old 'clips' key must not be present in /feed response"
-    assert len(data["segments"]) >= 1
-
-
-@pytest.mark.asyncio
-async def test_feed_with_lat_lng_returns_segments(tmp_db, monkeypatch):
-    """GET /feed?lat=34.1&lng=-118.1 returns segments (proximity sort active)."""
-    cluster = _make_cluster()
-    await db.upsert_cluster(cluster)
-    await db.insert_segment(
-        cluster_id=cluster.id,
-        ordered_clip_ids=["clip-1"],
-        caption="Proximity test",
-        location="Pasadena, CA",
-        source_count=1,
-    )
-
-    segs = await db.fetch_recent_segments(limit=50)
-
-    with patch("backend.app.db.init", new_callable=AsyncMock), \
-         patch("backend.app.db.fetch_recent_segments",
-               new_callable=AsyncMock, return_value=segs), \
-         patch("backend.pipeline.cluster.rebuild_cache", new_callable=AsyncMock), \
-         patch("backend.app._pre_warm_marengo", new_callable=AsyncMock), \
-         patch("backend.app._pre_warm_sdk", new_callable=AsyncMock):
-
-        from backend.app import app
-        client = TestClient(app, raise_server_exceptions=True)
-        response = client.get("/feed?lat=34.1&lng=-118.1")
-
-    assert response.status_code == 200
-    data = response.json()
-    assert "segments" in data
-    assert len(data["segments"]) >= 1
-
-
-@pytest.mark.asyncio
-async def test_feed_includes_soft_flag(tmp_db, monkeypatch):
+async def test_feed_includes_soft_flag(fresh_db, monkeypatch):
     """Phase 11 MOD-08: every segment in /feed JSON carries a soft_flag boolean.
 
     Seeds two segments — one with soft_flag=True, one without — via
@@ -128,6 +41,8 @@ async def test_feed_includes_soft_flag(tmp_db, monkeypatch):
       2. `soft_flag` is a Python bool (json.true / json.false on the wire).
       3. The flagged segment surfaces soft_flag=True; the unflagged one is False.
     """
+    db = fresh_db
+
     flagged_cluster = _make_cluster()
     await db.upsert_cluster(flagged_cluster)
     await db.insert_segment(

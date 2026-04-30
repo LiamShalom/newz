@@ -89,23 +89,26 @@ async def _neon_keepalive(pool) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Phase 9 (D-16, D-17, RESEARCH Pitfall 7): asyncpg pool init + Neon keepalive task.
-    # Order: init_pool → db.init (postgres no-op / sqlite schema) → cluster rebuild
+    # asyncpg pool init + Neon keepalive task.
+    # Order: init_pool → db.init (no-op; schema owned by Alembic) → cluster rebuild
     #        → keepalive task → pre-warm tasks → yield. Shutdown reverses with cancel + close.
+    # OFFLINE_DEMO=true skips every step that would touch Neon/Blob — preserves
+    # the firewalled-CI smoke test posture without a SQLite fallback.
     keepalive_task: asyncio.Task | None = None
+    db_live = not config.OFFLINE_DEMO
 
-    # 1. asyncpg pool (postgres branch only). hasattr() is the dispatcher contract:
-    #    db.init_pool exists iff METADATA_BACKEND=postgres AND OFFLINE_DEMO=false.
-    if hasattr(db, "init_pool"):
+    # 1. asyncpg pool — skipped under OFFLINE_DEMO.
+    if db_live:
         await db.init_pool()
 
-    # 2. db.init() — no-op for postgres (schema owned by Alembic); creates schema for sqlite.
+    # 2. db.init() — no-op (schema owned by Alembic). Just ensures CLIPS_DIR
+    #    exists for /media StaticFiles and emits a startup log line.
     await db.init()
 
-    # 3. CLUSTERS rebuild — must complete before pre-warm so first ingest sees populated cache.
-    #    Reads from whichever backend is active (DB-04 across both branches).
-    from .pipeline import cluster as cluster_mod
-    await cluster_mod.rebuild_cache()
+    # 3. CLUSTERS rebuild — needs a live pool. Skip when no pool was init'd.
+    if db_live:
+        from .pipeline import cluster as cluster_mod
+        await cluster_mod.rebuild_cache()
 
     # 3.5. Phase 10 (D-02, D-19): httpx Blob client init — only when blob mode active.
     # OFFLINE_DEMO=true short-circuits to local at the dispatcher (D-18), so this
@@ -114,9 +117,8 @@ async def lifespan(app: FastAPI):
         from .storage import blob_client
         await blob_client.init_client()
 
-    # 4. Neon keepalive (postgres branch only). Started AFTER rebuild so the rebuild
-    #    gets a clean pool slot first (Pitfall 7).
-    if hasattr(db, "get_pool"):
+    # 4. Neon keepalive. Started AFTER rebuild so the rebuild gets a clean pool slot first.
+    if db_live:
         keepalive_task = asyncio.create_task(_neon_keepalive(db.get_pool()))
 
     # 5. Existing pre-warms (unchanged) — fire-and-forget.
@@ -135,18 +137,15 @@ async def lifespan(app: FastAPI):
         )
 
     # 6b. WR-05: fail-loud on missing GEMINI_API_KEY when the moderation gate
-    # WILL be exercised (postgres + non-OFFLINE_DEMO). Without this, every
-    # clip's _gemini_classify raises httpx.ConnectError("GEMINI_API_KEY unset"),
-    # the typed-exception ladder routes to decision='unknown', and every clip
+    # WILL be exercised (non-OFFLINE_DEMO). Without this, every clip's
+    # _gemini_classify raises httpx.ConnectError("GEMINI_API_KEY unset"), the
+    # typed-exception ladder routes to decision='unknown', and every clip
     # silently disappears from the feed via set_clip_hidden. Mirrors the
-    # DATABASE_URL fail-loud at db_postgres.init_pool. Skipped under OFFLINE_DEMO
-    # (the gate short-circuits before any Gemini call) and under SQLite-only
-    # local dev (no production traffic).
-    if (not config.OFFLINE_DEMO
-            and config.METADATA_BACKEND == "postgres"
-            and not config.GEMINI_API_KEY):
+    # DATABASE_URL fail-loud at db.init_pool. Skipped under OFFLINE_DEMO
+    # (the gate short-circuits before any Gemini call).
+    if not config.OFFLINE_DEMO and not config.GEMINI_API_KEY:
         raise RuntimeError(
-            "GEMINI_API_KEY is empty but METADATA_BACKEND=postgres and OFFLINE_DEMO=false. "
+            "GEMINI_API_KEY is empty and OFFLINE_DEMO=false. "
             "The moderation gate cannot reach Gemini and every clip will be hidden. "
             "Set GEMINI_API_KEY or flip OFFLINE_DEMO=true."
         )
@@ -164,7 +163,7 @@ async def lifespan(app: FastAPI):
         if config.STORAGE_BACKEND == "blob" and not config.OFFLINE_DEMO:
             from .storage import blob_client
             await blob_client.close_client()
-        if hasattr(db, "close_pool"):
+        if not config.OFFLINE_DEMO:
             await db.close_pool()
 
 
@@ -351,18 +350,11 @@ async def sse_events(request: Request):
 
 async def _segment_exists(segment_id: str) -> bool:
     """Existence check via get_segment_for_cluster reverse-lookup is awkward; use raw query.
-
-    No FK enforcement on SQLite path (PRAGMA foreign_keys not enabled), so we 404 explicitly
-    instead of relying on IntegrityError discrimination across backends.
-    """
-    if config.METADATA_BACKEND == "postgres" and not config.OFFLINE_DEMO:
-        pool = db.get_pool()
-        row = await pool.fetchrow("SELECT 1 FROM segments WHERE id = $1", segment_id)
-        return row is not None
-    import aiosqlite
-    async with aiosqlite.connect(db.DB_PATH) as conn:
-        async with conn.execute("SELECT 1 FROM segments WHERE id = ?", (segment_id,)) as cur:
-            return (await cur.fetchone()) is not None
+    Returns True iff a row in `segments` matches the given id."""
+    row = await db.get_pool().fetchrow(
+        "SELECT 1 FROM segments WHERE id = $1", segment_id,
+    )
+    return row is not None
 
 
 @app.post("/segments/{segment_id}/comments", status_code=201)
@@ -614,36 +606,24 @@ async def debug_trigger_compile(cluster_id: str):
 
 @app.get("/debug/dbstate")
 async def debug_dbstate():
-    """Dev-only: counts and sample IDs straight from sqlite, no in-memory.
-
-    Phase 9: this endpoint is sqlite-only — postgres branch returns 503.
-    db.DB_PATH is None in the postgres branch (db_postgres.py stub).
-    """
-    if db.DB_PATH is None:
-        raise HTTPException(
-            status_code=503,
-            detail=f"debug/dbstate is sqlite-only; current backend is {config.METADATA_BACKEND}",
-        )
-    import aiosqlite as _aios
-    async with _aios.connect(db.DB_PATH) as conn:
-        conn.row_factory = _aios.Row
-        cur = await conn.execute("SELECT COUNT(*) FROM clips")
-        n_clips = (await cur.fetchone())[0]
-        cur = await conn.execute("SELECT COUNT(*) FROM clips WHERE cluster_id IS NOT NULL")
-        n_clipped = (await cur.fetchone())[0]
-        cur = await conn.execute("SELECT COUNT(*) FROM clusters")
-        n_clusters = (await cur.fetchone())[0]
-        cur = await conn.execute("SELECT id, cluster_id FROM clips ORDER BY created_at DESC LIMIT 5")
-        sample_clips = [dict(r) for r in await cur.fetchall()]
-        cur = await conn.execute("SELECT id, member_count FROM clusters")
-        cluster_rows = [dict(r) for r in await cur.fetchall()]
+    """Dev-only: counts + sample IDs straight from Postgres."""
+    pool = db.get_pool()
+    n_clips = await pool.fetchval("SELECT COUNT(*) FROM clips")
+    n_clipped = await pool.fetchval(
+        "SELECT COUNT(*) FROM clips WHERE cluster_id IS NOT NULL",
+    )
+    n_clusters = await pool.fetchval("SELECT COUNT(*) FROM clusters")
+    sample_rows = await pool.fetch(
+        "SELECT id, cluster_id FROM clips ORDER BY created_at DESC LIMIT 5",
+    )
+    cluster_rows = await pool.fetch("SELECT id, member_count FROM clusters")
     return {
-        "db_path": str(db.DB_PATH),
+        "backend": "postgres",
         "clips_total": n_clips,
         "clips_with_cluster_id": n_clipped,
         "clusters_total": n_clusters,
-        "sample_clips": sample_clips,
-        "clusters": cluster_rows,
+        "sample_clips": [dict(r) for r in sample_rows],
+        "clusters": [dict(r) for r in cluster_rows],
     }
 
 

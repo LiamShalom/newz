@@ -3,7 +3,6 @@ uvicorn[standard]==0.32.1
 python-multipart==0.0.18
 pydantic==2.10.3
 python-dotenv==1.0.1
-aiosqlite==0.20.0
 numpy>=2.4.0
 httpx==0.28.1
 tenacity==9.1.4
