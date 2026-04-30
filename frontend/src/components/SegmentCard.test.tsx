@@ -45,6 +45,7 @@ const segment: Segment & { url: string | null } = {
   centroid_lng: null,
   video_url: "/media/test.mp4",
   video_urls: ["/media/test.mp4"],
+  soft_flag: false,
   url: "/media/test.mp4",
 };
 
