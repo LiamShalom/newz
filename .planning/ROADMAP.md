@@ -20,7 +20,7 @@ Hardens the v1.0 monolith for public launch without disturbing load-bearing deci
 | 8 | Observability scaffolding (structlog + Sentry + Logfire + Prometheus + PII scrubbers) | ✅ Shipped | `phases/08-observability-scaffolding/` |
 | 9 | Postgres migration to Neon (asyncpg + Alembic, METADATA_BACKEND dispatcher) | ✅ Shipped | `phases/09-postgres-migration-neon-asyncpg-alembic/` |
 | 10 | Vercel Blob migration for clip media (server-mediated; signed URLs; `STORAGE_BACKEND` flag) | 🟡 Planning next | TBD |
-| 11 | 7/7 | Complete   | 2026-04-30 |
+| 11 | 7/7 | Complete    | 2026-04-30 |
 | 12 | Reactive reporting + admin queue (anonymous reports; UNIQUE(segment, ip_hash) brigading defense) | ⬜ Open | TBD |
 | 13 | Observability deepening + OFFLINE_DEMO audit (Logfire spans across pipeline; anonymity regression test; firewalled CI smoke test) | ⬜ Open | TBD |
 

@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Pilot MVP for funding (Public-Launch-Ready Backbone)
-status: in_progress
+status: ready_to_plan
 last_updated: "2026-04-30T04:10:04.000Z"
 progress:
   total_phases: 6
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 20
   completed_plans: 13
-  percent: 65
+  percent: 67
 ---
 
 # Project State: Newz
@@ -25,8 +25,8 @@ progress:
 
 ## Current Position
 
-Phase: 11 (moderation-gate-gemini-flash-lite-csam-hash) — EXECUTING
-Plan: 1 of 7
+Phase: 12
+Plan: Not started
 | Field | Value |
 |-------|-------|
 | Active Milestone | v1.1 Pilot MVP for funding (Public-Launch-Ready Backbone) |
