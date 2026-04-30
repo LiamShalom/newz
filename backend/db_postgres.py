@@ -329,26 +329,34 @@ async def insert_segment(
     source_count: int,
     video_url: str | None = None,
     title: str | None = None,
+    soft_flag: bool = False,
 ) -> str:
-    """Idempotent: one segment per cluster. ON CONFLICT(cluster_id) updates. CMP-09."""
+    """Idempotent: one segment per cluster. ON CONFLICT(cluster_id) updates. CMP-09.
+
+    Phase 11 (D-08, D-14, D-15): soft_flag boolean threads through to the
+    segments.soft_flag column added in migration 0005. Default False preserves
+    backward compatibility for callers that pre-date Phase 11. ON CONFLICT
+    refresh ensures re-compiles update the flag rather than stale-pinning it.
+    """
     seg_id = uuid.uuid4().hex
     now = time.time()
     pool = get_pool()
     row = await pool.fetchrow(
         """INSERT INTO segments
              (id, cluster_id, ordered_clip_ids, title, caption, location,
-              source_count, created_at, video_url)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+              source_count, created_at, video_url, soft_flag)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
            ON CONFLICT(cluster_id) DO UPDATE SET
              ordered_clip_ids = EXCLUDED.ordered_clip_ids,
              title            = EXCLUDED.title,
              caption          = EXCLUDED.caption,
              location         = EXCLUDED.location,
              source_count     = EXCLUDED.source_count,
-             video_url        = EXCLUDED.video_url
+             video_url        = EXCLUDED.video_url,
+             soft_flag        = EXCLUDED.soft_flag
            RETURNING id""",
         seg_id, cluster_id, json.dumps(ordered_clip_ids),
-        title, caption, location, source_count, now, video_url,
+        title, caption, location, source_count, now, video_url, soft_flag,
     )
     return row["id"]
 
