@@ -64,7 +64,7 @@ progress:
 - asyncpg + Alembic; **no SQLAlchemy ORM** during migration
 - Vercel Blob for clip media; **no direct browser PUT** — server-mediated only
 - Gemini 2.5 Flash-Lite for inline moderation classifier (same google-genai SDK already in stack)
-- Cloudflare CSAM Scanning Tool for hash check (statutory 18 U.S.C. § 2258A)
+- CSAM detection: classifier-only for pilot (Gemini `csam` category routes to hard-block + `reported_csam` preservation per § 2258A). Real hash vendor (Thorn / PhotoDNA / Hive) + automated NCMEC CyberTipline reporting deferred post-pilot. Cloudflare CSAM Scanning Tool DROPPED (CDN-cache-passive image-only feature, not a programmatic video API — Phase 11 research finding 2026-04-29).
 - Logfire owns span tracing; Sentry `traces_sample_rate=0` to prevent double-instrumented spans
 - Single Uvicorn worker locked (`--workers 1`); asyncpg pool max_size=10
 - BYTEA for centroid storage (identical bytes round-trip as v1.0 BLOB) — **no pgvector** at v1.1
@@ -83,7 +83,7 @@ progress:
 
 - [ ] Run Vercel Blob AsyncBlobClient (vercel 0.5.8) spike before Phase 10 planning — bleeding-edge SDK
 - [ ] Benchmark Gemini 2.5 Flash-Lite latency on actual v1.0 staged demo dataset before Phase 11 planning
-- [ ] Start Cloudflare CSAM Scanning Tool / NCMEC approval application (unknown lead time) before Phase 11 scheduling
+- [ ] (POST-PILOT, before public launch) Pick CSAM hash vendor (Thorn Safer Match for video / PhotoDNA Cloud Service for images / Hive) and wire automated NCMEC CyberTipline reporting. Pilot ships classifier-only detection per Phase 11 reconciliation 2026-04-29.
 - [ ] Retire SQLite (`db_sqlite.py`) once Neon cutover stabilizes. Mechanical: delete file, simplify `backend/db.py` to direct Postgres import, drop `aiosqlite` from requirements. Strategic: decide what `OFFLINE_DEMO=true` does without SQLite — in-memory stub vs. retire the flag entirely. Owner: Liam. Phase 01 (comments) added parallel SQLite + Postgres CRUD per current dispatcher contract; both go away together.
 
 **Carry-overs:**
@@ -113,9 +113,9 @@ None blocking the active phase (`01-comments-and-sharing` ready to execute; Phas
 
 ## Session Continuity
 
-**Last session ended:** 2026-04-29 — Phase 11 (Moderation Gate) context gathered. CONTEXT.md captures 29 decisions across pipeline shape (CSAM-first sequential → asyncio.gather embed+gemini), failure-mode tier classification (typed exceptions, 4xx blocks, 5xx unknown), policy taxonomy (hard-block: csam/sexual/extremist/self_harm; soft-flag: hate/violence; off-topic safe → pass), schema (per-provider rows in moderation_decisions, fixed Gemini category enum, full JSONB raw_response), CSAM (1-year retention per 2024 REPORT Act, stub-and-ship via CSAM_PROVIDER env var with lifespan production guard), and OFFLINE_DEMO bypass mirroring Phase 9/10 patterns. **Three Liam todos owed before plan execution:** (1) amend REQUIREMENTS.md MOD-07 to broaden soft-flag to all hate + all violence (drop corroboration gating); (2) amend REQUIREMENTS.md MOD-09 + STATE.md to lock 1-year retention (drop stale 90-day); (3) STATE.md Pending Todos verifications still apply (Gemini Flash-Lite latency benchmark, Cloudflare CSAM/NCMEC approval status). Phase 10 carry-overs (SC-5 cleanup_blocked_clip live caller, SC-6 env-flip rollback) get exercised by Phase 11.
+**Last session ended:** 2026-04-29 — Phase 11 plan-phase researcher discovered Cloudflare CSAM Scanning Tool is a CDN-cache-passive image-only feature, not a programmatic video API. User confirmed Option 4 reconciliation: classifier-only CSAM detection for pilot (Gemini `csam` category in locked taxonomy → hard-block + `reported_csam` preservation per § 2258A). Real hash vendor + automated NCMEC reporting deferred post-pilot. CONTEXT.md L-02 / D-02 / D-16..18 / D-20 / D-22..28 reconciled to drop the CSAM-arm dispatcher; gate shape simplifies from CSAM-first-sequential-then-parallel to just parallel embed+gemini with cancel-when-embed-finishes. REQUIREMENTS.md MOD-04 amended (classifier-only acceptable for pilot), MOD-07 broadened (all hate + all violence soft-flag, no corroboration gating), MOD-09 corrected (1-year retention per 2024 REPORT Act, drop stale 90-day).
 
-**Next action (backbone track):** `/gsd-plan-phase 11` — research-informed plan for Phase 11 (Moderation Gate). Phase researcher must produce: Gemini Flash-Lite latency benchmark on demo dataset, Cloudflare CSAM API contract (hash algorithm, response shape, NCMEC reporting ownership), proposed SYSTEM_PROMPT + JSON response_schema for the classifier.
+**Next action (backbone track):** Re-spawn `gsd-planner` for Phase 11 with reconciled CONTEXT.md (in-flight in current session).
 
 **Next action (feature track):** Run Wave 4 verification (T4.1–T4.4) on a real iPhone + desktop browser for Phase 01 (comments + shares). See `phases/01-comments-and-sharing/01-SUMMARY.md`.
 

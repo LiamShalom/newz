@@ -1,7 +1,59 @@
 # Phase 11: Moderation Gate (Gemini Flash-Lite + CSAM hash) - Context
 
 **Gathered:** 2026-04-29
+**Reconciled:** 2026-04-29 (Option 4 — classifier-only CSAM detection)
 **Status:** Ready for planning
+
+> ## ⚠ RECONCILIATION (2026-04-29) — read this before any other section
+>
+> Phase 11 plan-phase researcher (see `11-RESEARCH.md` § "Cloudflare CSAM Scanning Tool") confirmed that Cloudflare CSAM Scanning Tool is a **CDN-cache-passive image-only feature** that emails the customer when matches are found in CDN-cached content. It is **not** a programmatic POST-a-hash API, does **not** support video, does **not** run on Vercel-hosted blobs, and does **not** report to NCMEC on the customer's behalf. The original CONTEXT.md L-02 + D-17 + D-20 assumption that we POST a hash to a Cloudflare CSAM API is structurally invalid.
+>
+> **User decision (2026-04-29):** Ship Phase 11 with **classifier-only CSAM detection** for the pilot. The Gemini Flash-Lite classifier's locked `csam` category (D-11) routes to hard-block (D-07) and writes a `reported_csam` preservation row. No CSAM hash dispatcher, no `CSAM_PROVIDER` env var, no `csam_check()` function, no Cloudflare httpx client, no automated NCMEC reporting. Real CSAM hash vendor (Thorn Safer Match for video / PhotoDNA Cloud Service / Hive) and automated NCMEC CyberTipline reporting deferred to post-pilot, before public launch.
+>
+> **Decisions superseded by this reconciliation (each is annotated `[SUPERSEDED]` in-place below — read both the original text AND the reconciliation note for full context):**
+> - **L-02** — Cloudflare CSAM Scanning Tool is no longer a locked decision; CSAM detection is the Gemini classifier's `csam` category.
+> - **D-02** — Sequence simplifies from 7 steps to 4: hash compute (SHA-256 for `reported_csam` preservation only), parallel `embed_task` + `gemini_task`, `asyncio.wait` FIRST_COMPLETED, route on Gemini verdict. **CSAM-first sequential is removed.**
+> - **D-10** — Per-provider rows in `moderation_decisions` collapse to one row per clip (`provider='gemini_flash_lite'`). UNIQUE(clip_id, provider) still enforces idempotency.
+> - **D-13** — Migration content unchanged (`decision`, `reason`, `provider`, `raw_response`, `latency_ms`, `prompt_version`, UNIQUE INDEX). Naming changes from `0003_moderation_decisions_columns` to `0004_moderation_columns` because Phase 11 must descend from the current head `20260429_0003_merge_comments_blob` per researcher finding.
+> - **D-16** — CSAM-first sequential dropped.
+> - **D-17** — Cloudflare hash algorithm research item dropped. SHA-256 of clip bytes is sufficient for `reported_csam` preservation (de-dup fingerprint, not perceptual hash).
+> - **D-18** — `CSAM_PROVIDER` env var dropped. Lifespan production-guard becomes a non-blocking `WARN` log line: "Phase 11 pilot ships classifier-only CSAM detection. Real hash vendor + NCMEC reporting deferred." emitted when `OFFLINE_DEMO=false` AND production-like env (`SENTRY_ENVIRONMENT=production` or similar). Goal: visible reminder, not a startup-refusal.
+> - **D-20** — NCMEC CyberTipline report API ownership: pilot defers automated reporting. Manual workflow: Liam files via report.cybertip.org when admin queue surfaces `reason='gemini_csam_block'`. `reported_csam.ncmec_report_id BIGINT` column is **still added** in the migration (additive; nullable; populated when the manual report receipt comes back so we have an audit trail per § 2258A). Cheaper to add now than ALTER later.
+> - **D-21** — OFFLINE_DEMO bypass simplifies: only Gemini client init is conditional on `not OFFLINE_DEMO`. No Cloudflare client to skip.
+> - **D-22** — Module location stays `backend/pipeline/moderate.py`. Drops `csam_check(clip_id, hash)` function. Keeps `moderate_clip(clip_id) -> ModerationResult`, `SYSTEM_PROMPT`, `PROMPT_VERSION`, internal Gemini classifier helper. **No** `csam_client.py` split.
+> - **D-23** — httpx Cloudflare client lifecycle dropped (no client to manage). Gemini SDK client lifecycle continues to mirror `caption_pipeline.py`.
+> - **D-24** — `CSAM_PROVIDER`, `CLOUDFLARE_CSAM_API_KEY` dropped. `GEMINI_MODERATION_MODEL` and `MODERATION_MAX_BUDGET_S` retained.
+> - **D-25** — Test conftest `MODERATION_PROVIDER` parametrize collapses to a single Gemini-mock fixture using respx (already in stack from Phase 10). No CSAM provider parametrize needed.
+> - **D-27** — Sentry scrubber extension drops `csam_hash` (no separate hash field). Keeps `raw_response`, `prompt_version` redaction.
+> - **D-28** — Wave-0 smoke deploy validates only the Gemini arm (one classifier call → one `moderation_decisions` row → correct verdict routing).
+> - **D-29** — "Cloudflare CSAM/NCMEC approval status" pre-flight TODO dropped from blocking list. "Gemini Flash-Lite latency benchmark on demo dataset" remains load-bearing per researcher finding (cancel-when-embed-finishes is the latency primitive — only valid if Flash-Lite p50 < Marengo p50 on actual corpus).
+>
+> **Decisions UNCHANGED by this reconciliation:**
+> - **L-01, L-03..L-12** — all locked-elsewhere decisions stand.
+> - **D-01** — gate insertion at `run.py:79`; `STAGE_DURATION(stage="moderate")` wrap unchanged.
+> - **D-03** — cancel-when-embed-finishes is the load-bearing latency primitive. Now governs the whole gate (no CSAM-first prefix).
+> - **D-04** — no pre-ingest sync gate; 202 fire-and-forget preserved.
+> - **D-05** — typed-exception tier classification unchanged.
+> - **D-06** — unknown-tier handling: `decision='unknown'`, `is_hidden=true`, clustering paused, admin queue surface, `_resume_pipeline(clip_id)` re-entry on admin clear.
+> - **D-07** — hard-block categories (`csam`, `sexual`, `extremist`, `self_harm`) — `csam` is the operative CSAM detection signal under Option 4.
+> - **D-08** — soft-flag categories (`hate`, `violence`), broadened per the broadening rationale; REQUIREMENTS.md MOD-07 now reflects this.
+> - **D-09** — off-topic safe content passes the gate.
+> - **D-11** — Gemini response schema (locked taxonomy + verdict + score + rationale per category).
+> - **D-12** — `SYSTEM_PROMPT` + `PROMPT_VERSION` constants in `moderate.py`. The researcher provides a copy-paste-ready prompt in RESEARCH.md.
+> - **D-14** — `segments.soft_flag BOOLEAN NOT NULL DEFAULT FALSE` column ALTER. Compile-time write when any cluster member's `moderation_decisions` row has a soft-flag-category signal.
+> - **D-15** — `/feed` JSON ships `soft_flag: boolean`; Roan owns the UI under feature-track #6.
+> - **D-19** — `reported_csam.content_preserved_until = NOW() + INTERVAL '1 year'` per 2024 REPORT Act. REQUIREMENTS.md MOD-09 now reflects this.
+> - **D-26** — structured INFO log per gate stage; raw responses in JSONB only.
+>
+> **Behavioral consequences for the planner:**
+> - File set shrinks: no `csam_client.py`, no Cloudflare wiring in `lifespan()`, no `CSAM_PROVIDER` dispatcher tests.
+> - `moderation_decisions` writes one row per clip (Gemini), not two. Latency drops by ~1s on the happy path (no CSAM-first prefix).
+> - On classifier `csam` hit: write `reported_csam` row (SHA-256 hash + 1-year retention), write `moderation_decisions` row (`provider='gemini_flash_lite'`, `decision='blocked'`, `reason='gemini_csam_block'`), call `cleanup_blocked_clip(clip_id)`. Manual NCMEC reporting via admin queue.
+> - `ncmec_report_id BIGINT` nullable column on `reported_csam` is added in the same migration so manual report receipts can be persisted without a follow-up ALTER.
+> - Wave-0 smoke deploy is simpler: spin up backend, upload one clip, confirm one `moderation_decisions` row + correct routing.
+> - Phase 11 ships **fewer plans** than the original CONTEXT.md envisioned. Latency is **lower** by removing the CSAM-first prefix.
+
+
 
 <domain>
 ## Phase Boundary
