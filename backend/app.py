@@ -134,6 +134,23 @@ async def lifespan(app: FastAPI):
             "Real hash vendor + NCMEC reporting deferred post-pilot."
         )
 
+    # 6b. WR-05: fail-loud on missing GEMINI_API_KEY when the moderation gate
+    # WILL be exercised (postgres + non-OFFLINE_DEMO). Without this, every
+    # clip's _gemini_classify raises httpx.ConnectError("GEMINI_API_KEY unset"),
+    # the typed-exception ladder routes to decision='unknown', and every clip
+    # silently disappears from the feed via set_clip_hidden. Mirrors the
+    # DATABASE_URL fail-loud at db_postgres.init_pool. Skipped under OFFLINE_DEMO
+    # (the gate short-circuits before any Gemini call) and under SQLite-only
+    # local dev (no production traffic).
+    if (not config.OFFLINE_DEMO
+            and config.METADATA_BACKEND == "postgres"
+            and not config.GEMINI_API_KEY):
+        raise RuntimeError(
+            "GEMINI_API_KEY is empty but METADATA_BACKEND=postgres and OFFLINE_DEMO=false. "
+            "The moderation gate cannot reach Gemini and every clip will be hidden. "
+            "Set GEMINI_API_KEY or flip OFFLINE_DEMO=true."
+        )
+
     try:
         yield
     finally:
