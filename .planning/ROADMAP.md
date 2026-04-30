@@ -120,13 +120,22 @@ Plans:
 - [x] 10-01-PLAN.md — Vercel Blob migration: storage package, lifespan integration, ffmpeg + private Blob auth headers, tempdir-stitch, frontend absolute-URL guard, BLOB-08 cleanup hook
 **UI hint**: yes
 
-### Phase 11: Moderation Gate (Gemini Flash-Lite + CSAM hash)
-**Goal**: Every uploaded clip passes through a moderation gate before entering cluster/compile; gate runs parallel-with-Marengo so common-case latency does not regress; tiered failure policy (timeout fail-CLOSED, 5xx outage fail-OPEN to admin queue, CSAM fail-CLOSED); newsworthy corroboration via ≥2-parent + violence-signal soft-flag.
+### Phase 11: Moderation Gate (Gemini Flash-Lite + classifier-only CSAM)
+**Goal**: Every uploaded clip passes through a moderation gate before entering cluster/compile; gate runs parallel-with-Marengo so common-case latency does not regress; tiered failure policy (timeout fail-CLOSED, 5xx outage fail-OPEN to admin queue); CSAM detection via Gemini classifier `csam` category → hard-block + `reported_csam` preservation per § 2258A (1-year retention per 2024 REPORT Act); soft-flag for hate/violence regardless of corroboration count (broadened per Phase 11 reconciliation 2026-04-29).
 **Depends on**: Phase 9, Phase 10
 **Requirements**: MOD-01 through MOD-08, MOD-10, PRIV-03
-**Success Criteria**: Disallowed content never reaches public feed; common-case latency within 10% of v1.0 baseline; fail-CLOSED on timeout; OFFLINE_DEMO produces `passed` with no external call; ≥2-parent violence soft-flag → tap-to-view; outbound payload contains video bytes only.
-**Plans**: TBD
+**Success Criteria**: Disallowed content never reaches public feed; common-case latency within 10% of v1.0 baseline; fail-CLOSED on timeout; OFFLINE_DEMO produces `passed` with no external call; hate/violence soft-flag → tap-to-view; outbound payload contains video bytes only; classifier-only CSAM detection with manual NCMEC reporting workflow (real hash vendor + automated CyberTipline reporting deferred post-pilot).
+**Plans**: 7 plans
 **UI hint**: yes (pairs with feature-track censoring)
+
+Plans:
+- [ ] 11-01-PLAN.md — config + .env.example: GEMINI_MODERATION_MODEL + MODERATION_MAX_BUDGET_S
+- [ ] 11-02-PLAN.md — migrations 0004 (moderation_columns + ncmec_report_id) + 0005 (segments.soft_flag)
+- [ ] 11-03-PLAN.md — [BLOCKING] alembic upgrade head + DB write functions (write_moderation_decision, write_reported_csam, set_clip_hidden, get_moderation_decisions, aggregate_verdict) in both backends
+- [ ] 11-04-PLAN.md — backend/pipeline/moderate.py (moderate_clip + Gemini classifier + cancel-when-embed-finishes + verdict routing) + Sentry scrubber extension
+- [ ] 11-05-PLAN.md — run.py gate orchestrator at L79 + _resume_pipeline + lifespan WARN + metrics docstring
+- [ ] 11-06-PLAN.md — compile.py soft_flag derivation + insert_segment kwarg + frontend Segment.soft_flag
+- [ ] 11-07-PLAN.md — test suite (test_moderate.py + conftest gemini_moderation_mock + test_offline_demo_firewall.py + test_feed_segments.py extensions) + Wave-0 smoke deploy
 
 ### Phase 12: Reactive Reporting + Admin Queue
 **Goal**: Anonymous post-publish report flow + token-guarded admin queue with embedded clip playback; reports table never carries session_uuid; brigading-defense via UNIQUE(segment, ip_hash); admin actions hide segments and optionally block underlying clips.
