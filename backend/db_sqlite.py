@@ -173,6 +173,15 @@ async def init() -> None:
             await conn.execute(
                 "ALTER TABLE segments ADD COLUMN title TEXT"
             )
+        # Phase 11 (Plan 06 → 07): segments.soft_flag column. Plan 06 documented
+        # this as a deferred SQLite SCHEMA_SQL extension (tracked under
+        # SQLite-backend retirement). Plan 07 needs it to land Task 3's MOD-08
+        # /feed assertion (rule 3 blocking-issue auto-fix). Stored as INTEGER
+        # 0/1 per Plan 06 db_sqlite.insert_segment binding convention.
+        if "soft_flag" not in seg_cols:
+            await conn.execute(
+                "ALTER TABLE segments ADD COLUMN soft_flag INTEGER NOT NULL DEFAULT 0"
+            )
         await conn.commit()
     log.info("db.init: schema ready at %s", DB_PATH)
 
@@ -393,7 +402,8 @@ async def fetch_recent_segments(limit: int = 50) -> list[dict]:
         cursor = await conn.execute(
             """SELECT s.id, s.cluster_id, s.ordered_clip_ids, s.title, s.caption,
                       s.location, c.member_count AS source_count, s.created_at,
-                      c.centroid_lat, c.centroid_lng, s.video_url AS stored_video_url
+                      c.centroid_lat, c.centroid_lng, s.video_url AS stored_video_url,
+                      s.soft_flag
                FROM segments s
                JOIN clusters c ON c.id = s.cluster_id
                ORDER BY s.created_at DESC LIMIT ?""",
@@ -447,6 +457,9 @@ async def fetch_recent_segments(limit: int = 50) -> list[dict]:
             "centroid_lng": r["centroid_lng"],
             "video_url": r["stored_video_url"] if r["stored_video_url"] else (video_urls[0] if video_urls else None),
             "video_urls": video_urls,
+            # Phase 11 MOD-08: D-15 boolean-only contract. SQLite stores INTEGER
+            # 0/1 — coerce back to bool for the JSON surface.
+            "soft_flag": bool(r["soft_flag"]) if r["soft_flag"] is not None else False,
         })
     return out
 

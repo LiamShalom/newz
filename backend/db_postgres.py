@@ -368,7 +368,8 @@ async def fetch_recent_segments(limit: int = 50) -> list[dict]:
     rows = await pool.fetch(
         """SELECT s.id, s.cluster_id, s.ordered_clip_ids, s.title, s.caption,
                   s.location, c.member_count AS source_count, s.created_at,
-                  c.centroid_lat, c.centroid_lng, s.video_url AS stored_video_url
+                  c.centroid_lat, c.centroid_lng, s.video_url AS stored_video_url,
+                  s.soft_flag
            FROM segments s
            JOIN clusters c ON c.id = s.cluster_id
            ORDER BY s.created_at DESC LIMIT $1""",
@@ -424,6 +425,10 @@ async def fetch_recent_segments(limit: int = 50) -> list[dict]:
             "centroid_lng": r["centroid_lng"],
             "video_url": r["stored_video_url"] if r["stored_video_url"] else (video_urls[0] if video_urls else None),
             "video_urls": video_urls,
+            # Phase 11 MOD-08: D-15 boolean-only contract. Postgres column is
+            # already BOOLEAN (migration 0005); coerce defensively in case of
+            # NULL on legacy rows that pre-date the column default.
+            "soft_flag": bool(r["soft_flag"]) if r["soft_flag"] is not None else False,
         })
     return out
 

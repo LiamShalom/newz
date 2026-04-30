@@ -107,3 +107,53 @@ def storage_backend(request, monkeypatch, respx_mock):
     importlib.reload(backend.config)
     importlib.reload(backend.storage)
     yield backend
+
+
+# ---------------------------------------------------------------------------
+# Phase 11 (D-25 reconciled): single Gemini-mock fixture for moderation tests
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def gemini_moderation_mock(respx_mock, monkeypatch):
+    """Phase 11 (D-25 reconciled): single Gemini-mock fixture for moderation tests.
+
+    Default response is all-pass for every category. Tests that need a different
+    verdict re-register the same generateContent route with their own .respond(...)
+    payload (respx allows route override; the last registration wins for matching
+    paths — verified inline before fixture authorship).
+
+    NO per-provider parametrize per the 2026-04-29 reconciliation: classifier-
+    only CSAM detection collapses any imagined per-provider matrix to a single
+    Gemini route. See .planning/phases/11-moderation-gate-gemini-flash-lite-csam-hash/
+    11-CONTEXT.md (D-25 reconciled).
+    """
+    import json
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key-not-real")
+    monkeypatch.setenv("GEMINI_MODERATION_MODEL", "gemini-2.5-flash-lite")
+    monkeypatch.setenv("MODERATION_MAX_BUDGET_S", "20.0")
+    monkeypatch.setenv("OFFLINE_DEMO", "false")
+
+    all_pass = {
+        cat: {"verdict": "pass", "score": 0.0, "rationale": "no signal"}
+        for cat in ("csam", "sexual", "hate", "extremist", "violence", "self_harm")
+    }
+
+    # Files API upload (default — tests can override).
+    respx_mock.post(
+        "https://generativelanguage.googleapis.com/upload/v1beta/files"
+    ).respond(json={"file": {"name": "files/test", "state": "ACTIVE",
+                              "uri": "https://generativelanguage.googleapis.com/v1beta/files/test"}})
+    # Files API poll.
+    respx_mock.get(
+        "https://generativelanguage.googleapis.com/v1beta/files/test"
+    ).respond(json={"name": "files/test", "state": "ACTIVE"})
+    # generateContent (default: all-pass).
+    respx_mock.post(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
+    ).respond(json={"candidates": [{"content": {"parts": [{"text": json.dumps(all_pass)}]}}]})
+    # Files API cleanup.
+    respx_mock.delete(
+        "https://generativelanguage.googleapis.com/v1beta/files/test"
+    ).respond(json={})
+
+    yield respx_mock
