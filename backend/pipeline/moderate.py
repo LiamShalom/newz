@@ -218,8 +218,8 @@ async def moderate_clip(clip_id: str) -> ModerationResult:
 # Real classifier path
 # ---------------------------------------------------------------------------
 
-async def _fetch_clip_bytes(clip_id: str) -> tuple[bytes, str]:
-    """Read clip bytes once and return (bytes, local_path_for_gemini_upload).
+async def _fetch_clip_bytes(clip_id: str) -> tuple[bytes, str, bool]:
+    """Read clip bytes once and return (bytes, local_path, is_owned_tempfile).
 
     Mirrors backend/pipeline/embed.py:113-152. In Blob mode the bytes are
     streamed from Vercel Blob (private, bearer-auth) into a tempfile so the
@@ -229,9 +229,15 @@ async def _fetch_clip_bytes(clip_id: str) -> tuple[bytes, str]:
     Returns:
       clip_bytes — the full video payload (used for hashlib.sha256)
       local_path — a path on disk the caller can hand to client.files.upload(file=...)
+      is_owned_tempfile — True iff the local_path is a tempfile this function
+                          created (blob mode) and the caller MUST unlink at
+                          end-of-task. Local-FS mode returns False — the path
+                          is the canonical row.path and cleanup_blocked_clip
+                          owns its lifecycle.
 
-    The caller MUST unlink local_path when done (we mirror embed_worker's
-    finally-block pattern at the call site).
+    WR-02: returning the ownership flag avoids a duplicate db.get_clip()
+    roundtrip in _moderate_real (the caller used to fetch the row a SECOND
+    time just to inspect blob_url for the same purpose).
     """
     import tempfile
     from pathlib import Path
@@ -244,7 +250,7 @@ async def _fetch_clip_bytes(clip_id: str) -> tuple[bytes, str]:
     db_path = clip.get("path")
 
     if blob_url:
-        # Blob mode: stream the private blob to a tempfile.
+        # Blob mode: stream the private blob to a tempfile (we own it; caller unlinks).
         from ..storage import blob_client
         client = blob_client.get_client()
         headers = {"Authorization": f"Bearer {config.BLOB_READ_WRITE_TOKEN}"}
@@ -255,13 +261,13 @@ async def _fetch_clip_bytes(clip_id: str) -> tuple[bytes, str]:
                 async for chunk in resp.aiter_bytes(chunk_size=64 * 1024):
                     tmp.write(chunk)
         clip_bytes = Path(tmp_path).read_bytes()
-        return clip_bytes, tmp_path
+        return clip_bytes, tmp_path, True
 
     if db_path and Path(db_path).exists():
         # Local-FS mode. We do NOT copy the file — the Gemini upload reads it
         # directly from its canonical location and we never unlink it.
         clip_bytes = Path(db_path).read_bytes()
-        return clip_bytes, db_path
+        return clip_bytes, db_path, False
 
     raise FileNotFoundError(
         f"_fetch_clip_bytes: clip {clip_id!r} has no readable source "
@@ -497,10 +503,10 @@ async def _moderate_real(clip_id: str) -> ModerationResult:
 
     try:
         # ----- Stage 1: fetch clip bytes -----
-        clip_bytes, clip_local_path = await _fetch_clip_bytes(clip_id)
-        # If _fetch_clip_bytes returned a tempfile (blob mode), we own its lifecycle.
-        clip_row = await db.get_clip(clip_id)
-        if clip_row and clip_row.get("blob_url"):
+        # WR-02: _fetch_clip_bytes now returns is_owned_tempfile, so we don't
+        # have to do a second db.get_clip() round-trip just to check blob_url.
+        clip_bytes, clip_local_path, is_owned_tempfile = await _fetch_clip_bytes(clip_id)
+        if is_owned_tempfile:
             blob_tempfile_to_unlink = clip_local_path
 
         # ----- Stage 2: spawn parallel tasks -----
@@ -546,9 +552,26 @@ async def _moderate_real(clip_id: str) -> ModerationResult:
             # Branch B — gemini finished first (with or without embed already done).
             # Drain embed: re-await it to get the real result if not done; if it's
             # also done, .result() / await returns immediately.
+            #
+            # WR-01: when embed fails (Marengo 5xx, file vanished, etc.) under
+            # Branch B, surface a structured warning so ops can see the retry
+            # that run_pipeline.py:124 will perform OUTSIDE the moderate stage
+            # span. We don't change the decision routing — Gemini's verdict is
+            # the gate, embed is a parallel cache-fill — but we DO log the
+            # failure type so the metric muddling (embed retry attributed to
+            # stage="embed" in run.py vs the in-gate failure under stage="moderate")
+            # is at least visible.
             try:
                 embed_result = await embed_task
-            except BaseException:
+            except asyncio.CancelledError:
+                # Outer-scope cancel — propagate (mirrors CR-01 _drain_task posture).
+                raise
+            except Exception as exc:
+                log.warning(
+                    "moderate embed_worker failed under gemini-done branch clip_id=%s: %s — "
+                    "run_pipeline will retry embed_worker outside moderation stage",
+                    clip_id, type(exc).__name__,
+                )
                 embed_result = None
 
             # Inspect gemini outcome.

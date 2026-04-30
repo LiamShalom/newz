@@ -62,11 +62,15 @@ def patched_moderate(monkeypatch):
     import backend.config
     importlib.reload(backend.config)
 
-    fetch_mock = AsyncMock(return_value=(b"fake-video-bytes", "/tmp/fake.mp4"))
+    # WR-02: _fetch_clip_bytes now returns 3-tuple (bytes, path, is_owned_tempfile).
+    # is_owned_tempfile=False matches the v1.0 local-FS path — the row.path is
+    # the canonical file and we never unlink it.
+    fetch_mock = AsyncMock(return_value=(b"fake-video-bytes", "/tmp/fake.mp4", False))
     monkeypatch.setattr(mod, "_fetch_clip_bytes", fetch_mock)
 
-    # db.get_clip is hit at the start of _moderate_real to determine if blob_tempfile
-    # cleanup is required. Return a non-blob row so we never try to unlink anything.
+    # db.get_clip is no longer called inside _moderate_real after WR-02; keep the
+    # mock available in case any other code path (or future test) hits it, but
+    # it should never be awaited under the moderate happy/block paths.
     get_clip_mock = AsyncMock(return_value={"id": "clip_abc", "path": "/tmp/fake.mp4", "blob_url": None})
     monkeypatch.setattr(mod.db, "get_clip", get_clip_mock)
 
