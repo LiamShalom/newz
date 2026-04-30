@@ -182,6 +182,46 @@ async def init() -> None:
             await conn.execute(
                 "ALTER TABLE segments ADD COLUMN soft_flag INTEGER NOT NULL DEFAULT 0"
             )
+        # CR-04 (REVIEW.md): Phase 11 moderation gate tables/columns must exist
+        # for the OFFLINE_DEMO path to work — moderate_clip's first action under
+        # OFFLINE_DEMO=true is db.write_moderation_decision, which fails fatally
+        # against a missing table. Parity with Alembic 0001 + 0004 + 0005 on
+        # postgres. SQLite has no JSONB; raw_response is TEXT. SQLite has no
+        # TIMESTAMPTZ; content_preserved_until is REAL (Unix seconds).
+        await conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS moderation_decisions (
+              id TEXT PRIMARY KEY,
+              clip_id TEXT NOT NULL,
+              provider TEXT NOT NULL DEFAULT 'stub',
+              decision TEXT NOT NULL DEFAULT 'passed',
+              reason TEXT,
+              raw_response TEXT,
+              latency_ms INTEGER,
+              prompt_version TEXT,
+              created_at REAL NOT NULL DEFAULT (unixepoch())
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_moderation_decisions_clip_provider
+              ON moderation_decisions(clip_id, provider);
+
+            CREATE TABLE IF NOT EXISTS reported_csam (
+              id TEXT PRIMARY KEY,
+              content_hash TEXT NOT NULL,
+              content_preserved_until REAL NOT NULL,
+              ncmec_report_id INTEGER,
+              created_at REAL NOT NULL DEFAULT (unixepoch())
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_reported_csam_content_hash
+              ON reported_csam(content_hash);
+            """
+        )
+        # clips.is_hidden (Alembic 0004 parity). PRAGMA-gated ALTER for idempotency.
+        async with conn.execute("PRAGMA table_info(clips)") as cur:
+            clip_cols2 = {row[1] for row in await cur.fetchall()}
+        if "is_hidden" not in clip_cols2:
+            await conn.execute(
+                "ALTER TABLE clips ADD COLUMN is_hidden INTEGER NOT NULL DEFAULT 0"
+            )
         await conn.commit()
     log.info("db.init: schema ready at %s", DB_PATH)
 
@@ -926,15 +966,14 @@ async def get_children_by_parent(parent_id: str) -> list[dict]:
 #   - ON CONFLICT(...) DO UPDATE / DO NOTHING is SQLite 3.24+ syntax (works in
 #     modern aiosqlite).
 #
-# Note: db_sqlite.SCHEMA_SQL does not yet declare moderation_decisions /
-# reported_csam / clips.is_hidden / segments.soft_flag (the SQLite schema is
-# inline-managed via init() rather than Alembic). These functions will fail at
-# runtime against an OFFLINE_DEMO SQLite DB until those tables are added — that
-# is out-of-scope for Plan 03 (which adds the function surface only). The
-# dispatcher contract (D-07) only requires byte-identical signatures + import
-# success, which is what this plan delivers. SQLite schema parity is a
-# downstream concern (and the SQLite backend is slated for retirement per
-# STATE.md Pending Todos).
+# Phase 11 schema parity: moderation_decisions / reported_csam tables and
+# clips.is_hidden / segments.soft_flag columns are now patched into init()
+# above (REVIEW CR-04 — required for the OFFLINE_DEMO contract). The SQLite
+# schema remains inline-managed via init() rather than Alembic (the SQLite
+# backend is slated for retirement per STATE.md Pending Todos), but parity
+# with Alembic 0001 + 0004 + 0005 is now sufficient for OFFLINE_DEMO end-to-
+# end runs. The dispatcher contract (D-07) requires byte-identical signatures
+# + import success.
 # ---------------------------------------------------------------------------
 
 async def write_moderation_decision(
