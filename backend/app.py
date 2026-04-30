@@ -123,6 +123,17 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(_pre_warm_marengo())
     asyncio.create_task(_pre_warm_sdk())
 
+    # 6. Phase 11 (D-18 reconciled): non-blocking production-environment notice.
+    # Pilot ships classifier-only CSAM detection (Gemini csam-category → hard-block +
+    # reported_csam preservation). Real hash vendor (Thorn / PhotoDNA / Hive) and
+    # automated NCMEC CyberTipline reporting are deferred post-pilot. This is a
+    # visible reminder for ops, not a startup-refusal — mirrors _pre_warm_sdk WARN posture.
+    if not config.OFFLINE_DEMO and config.SENTRY_ENVIRONMENT == "production":
+        log.warning(
+            "Phase 11 ships classifier-only CSAM detection. "
+            "Real hash vendor + NCMEC reporting deferred post-pilot."
+        )
+
     try:
         yield
     finally:
