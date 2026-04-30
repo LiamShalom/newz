@@ -115,3 +115,71 @@ async def test_feed_with_lat_lng_returns_segments(tmp_db, monkeypatch):
     data = response.json()
     assert "segments" in data
     assert len(data["segments"]) >= 1
+
+
+@pytest.mark.asyncio
+async def test_feed_includes_soft_flag(tmp_db, monkeypatch):
+    """Phase 11 MOD-08: every segment in /feed JSON carries a soft_flag boolean.
+
+    Seeds two segments — one with soft_flag=True, one without — via
+    db.insert_segment, fetches the recent segments via the real
+    fetch_recent_segments path, hits /feed, and asserts that:
+      1. Every segment dict contains a `soft_flag` key.
+      2. `soft_flag` is a Python bool (json.true / json.false on the wire).
+      3. The flagged segment surfaces soft_flag=True; the unflagged one is False.
+    """
+    flagged_cluster = _make_cluster()
+    await db.upsert_cluster(flagged_cluster)
+    await db.insert_segment(
+        cluster_id=flagged_cluster.id,
+        ordered_clip_ids=["clip-flagged"],
+        caption="Soft-flagged segment",
+        location="Pasadena, CA",
+        source_count=1,
+        soft_flag=True,
+    )
+
+    plain_cluster = _make_cluster()
+    await db.upsert_cluster(plain_cluster)
+    await db.insert_segment(
+        cluster_id=plain_cluster.id,
+        ordered_clip_ids=["clip-plain"],
+        caption="Plain segment",
+        location="Pasadena, CA",
+        source_count=1,
+        # default soft_flag=False
+    )
+
+    segs = await db.fetch_recent_segments(limit=50)
+
+    with patch("backend.app.db.init", new_callable=AsyncMock), \
+         patch("backend.app.db.fetch_recent_segments",
+               new_callable=AsyncMock, return_value=segs), \
+         patch("backend.pipeline.cluster.rebuild_cache", new_callable=AsyncMock), \
+         patch("backend.app._pre_warm_marengo", new_callable=AsyncMock), \
+         patch("backend.app._pre_warm_sdk", new_callable=AsyncMock):
+
+        from backend.app import app
+        client = TestClient(app, raise_server_exceptions=True)
+        response = client.get("/feed")
+
+    assert response.status_code == 200
+    data = response.json()
+    segments = data["segments"]
+    assert len(segments) >= 2, f"test setup should have seeded 2 segments, got {len(segments)}"
+
+    # MOD-08: every segment carries soft_flag as a bool.
+    for seg in segments:
+        assert "soft_flag" in seg, f"segment {seg.get('id')!r} missing soft_flag (MOD-08 violation)"
+        assert isinstance(seg["soft_flag"], bool), (
+            f"segment {seg.get('id')!r} soft_flag must be bool, got {type(seg['soft_flag']).__name__}"
+        )
+
+    # The seeded flagged cluster must surface soft_flag=True; plain cluster False.
+    by_cluster = {s["cluster_id"]: s for s in segments}
+    assert by_cluster[flagged_cluster.id]["soft_flag"] is True, (
+        "flagged cluster's segment did not surface soft_flag=True"
+    )
+    assert by_cluster[plain_cluster.id]["soft_flag"] is False, (
+        "plain cluster's segment did not surface soft_flag=False"
+    )
