@@ -285,6 +285,31 @@ async def test_moderate_csam_preservation_failure_skips_cleanup(patched_moderate
 
 
 # ---------------------------------------------------------------------------
+# Test 3c — WR-06: hard-block preserves soft_flag_categories
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_moderate_hard_block_preserves_soft_flag_categories(patched_moderate):
+    """WR-06 regression: a CSAM-block + violence-flag verdict should populate
+    ModerationResult.soft_flag_categories with ['violence'], not drop it. The
+    persisted raw_response JSONB still contains the violence verdict (compile.py
+    reads from there), but the in-memory dataclass field must agree."""
+    pm = patched_moderate
+    csam_plus_violence = dict(_ALL_PASS)
+    csam_plus_violence["csam"] = {"verdict": "block", "score": 0.99, "rationale": "blocked"}
+    csam_plus_violence["violence"] = {"verdict": "flag", "score": 0.7, "rationale": "violent context"}
+    pm.gemini_classify.return_value = csam_plus_violence
+
+    result = await pm.mod.moderate_clip("clip_abc")
+
+    assert result.decision == "blocked"
+    assert result.reason == "gemini_csam_block"
+    assert "violence" in result.soft_flag_categories, (
+        f"hard-block must preserve soft_flag_categories; got {result.soft_flag_categories!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Test 4 — Soft-flag (violence flag, no hard-block)
 # ---------------------------------------------------------------------------
 

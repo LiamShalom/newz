@@ -371,22 +371,29 @@ def _route_verdict(parsed: dict) -> tuple[str, str | None, list[str]]:
     """Map a Gemini ModerationResponse dict → (decision, reason, soft_flag_categories).
 
     Precedence:
-      1. Any HARD_BLOCK_CATEGORIES verdict in {flag, block} → ('blocked', f'gemini_{cat}_block', [])
+      1. Any HARD_BLOCK_CATEGORIES verdict in {flag, block} → ('blocked', f'gemini_{cat}_block', soft_flag_categories)
          csam first (for reported_csam preservation precedence).
-      2. Else build SOFT_FLAG_CATEGORIES list of any verdict in {flag, block};
-         if non-empty → ('passed', f'soft_flag_{first_cat}', soft_flag_categories).
+      2. Else if SOFT_FLAG_CATEGORIES non-empty
+         → ('passed', f'soft_flag_{first_cat}', soft_flag_categories).
       3. Else → ('passed', None, []).
-    """
-    for cat in HARD_BLOCK_CATEGORIES:
-        node = parsed.get(cat) or {}
-        v = node.get("verdict")
-        if v in ("flag", "block"):
-            return ("blocked", f"gemini_{cat}_block", [])
 
+    WR-06: soft_flag_categories is now ALWAYS populated from the parsed JSON,
+    even on hard-block. Previously a CSAM-block + violence-flag verdict would
+    return [] for soft_flag_categories on the in-memory ModerationResult,
+    making the dataclass field inconsistent with the persisted raw_response
+    JSONB (which compile.py reads to derive segments.soft_flag).
+    """
     soft_flag_categories = [
         cat for cat in SOFT_FLAG_CATEGORIES
         if (parsed.get(cat) or {}).get("verdict") in ("flag", "block")
     ]
+
+    for cat in HARD_BLOCK_CATEGORIES:
+        node = parsed.get(cat) or {}
+        v = node.get("verdict")
+        if v in ("flag", "block"):
+            return ("blocked", f"gemini_{cat}_block", soft_flag_categories)
+
     if soft_flag_categories:
         return ("passed", f"soft_flag_{soft_flag_categories[0]}", soft_flag_categories)
 
