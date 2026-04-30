@@ -20,7 +20,7 @@ Hardens the v1.0 monolith for public launch without disturbing load-bearing deci
 | 8 | Observability scaffolding (structlog + Sentry + Logfire + Prometheus + PII scrubbers) | ✅ Shipped | `phases/08-observability-scaffolding/` |
 | 9 | Postgres migration to Neon (asyncpg + Alembic, METADATA_BACKEND dispatcher) | ✅ Shipped | `phases/09-postgres-migration-neon-asyncpg-alembic/` |
 | 10 | Vercel Blob migration for clip media (server-mediated; signed URLs; `STORAGE_BACKEND` flag) | 🟡 Planning next | TBD |
-| 11 | 4/7 | In Progress|  |
+| 11 | 6/7 | In Progress|  |
 | 12 | Reactive reporting + admin queue (anonymous reports; UNIQUE(segment, ip_hash) brigading defense) | ⬜ Open | TBD |
 | 13 | Observability deepening + OFFLINE_DEMO audit (Logfire spans across pipeline; anonymity regression test; firewalled CI smoke test) | ⬜ Open | TBD |
 
@@ -133,8 +133,8 @@ Plans:
 - [x] 11-02-PLAN.md — migrations 0004 (moderation_columns + ncmec_report_id) + 0005 (segments.soft_flag)
 - [x] 11-03-PLAN.md — [BLOCKING] alembic upgrade head + DB write functions (write_moderation_decision, write_reported_csam, set_clip_hidden, get_moderation_decisions, aggregate_verdict) in both backends
 - [x] 11-04-PLAN.md — backend/pipeline/moderate.py (moderate_clip + Gemini classifier + cancel-when-embed-finishes + verdict routing) + Sentry scrubber extension
-- [ ] 11-05-PLAN.md — run.py gate orchestrator at L79 + _resume_pipeline + lifespan WARN + metrics docstring
-- [ ] 11-06-PLAN.md — compile.py soft_flag derivation + insert_segment kwarg + frontend Segment.soft_flag
+- [x] 11-05-PLAN.md — run.py gate orchestrator at L79 + _resume_pipeline + lifespan WARN + metrics docstring
+- [x] 11-06-PLAN.md — compile.py soft_flag derivation + insert_segment kwarg + frontend Segment.soft_flag
 - [ ] 11-07-PLAN.md — test suite (test_moderate.py + conftest gemini_moderation_mock + test_offline_demo_firewall.py + test_feed_segments.py extensions) + Wave-0 smoke deploy
 
 ### Phase 12: Reactive Reporting + Admin Queue
