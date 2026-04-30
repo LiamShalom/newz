@@ -421,6 +421,52 @@ async def test_moderate_failure_tier_classification(
 
 
 # ---------------------------------------------------------------------------
+# Test 6b — CR-03 regression: real google.genai SDK errors classify correctly
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_moderate_genai_client_error_blocked(patched_moderate):
+    """CR-03 regression: production Gemini SDK raises google.genai.errors.ClientError
+    (4xx) / ServerError (5xx) — NOT raw httpx.HTTPStatusError. _classify_exception
+    must route ClientError → blocked and ServerError → unknown."""
+    pm = patched_moderate
+    from google.genai import errors as genai_errors
+
+    async def _raise_client_400(clip_local_path: str):
+        raise genai_errors.ClientError(400, {"error": {"message": "bad request"}})
+
+    pm.gemini_classify.side_effect = _raise_client_400
+
+    result = await pm.mod.moderate_clip("clip_abc")
+
+    assert result.decision == "blocked"
+    assert result.reason == "classifier_4xx_400", (
+        f"genai ClientError(400) must route to classifier_4xx_400, got {result.reason!r}"
+    )
+    pm.cleanup_blocked_clip.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_moderate_genai_server_error_unknown(patched_moderate):
+    """CR-03 regression: ServerError (5xx) → decision=unknown, reason=classifier_5xx_<code>."""
+    pm = patched_moderate
+    from google.genai import errors as genai_errors
+
+    async def _raise_server_503(clip_local_path: str):
+        raise genai_errors.ServerError(503, {"error": {"message": "unavailable"}})
+
+    pm.gemini_classify.side_effect = _raise_server_503
+
+    result = await pm.mod.moderate_clip("clip_abc")
+
+    assert result.decision == "unknown"
+    assert result.reason == "classifier_5xx_503", (
+        f"genai ServerError(503) must route to classifier_5xx_503, got {result.reason!r}"
+    )
+    pm.set_clip_hidden.assert_awaited()
+
+
+# ---------------------------------------------------------------------------
 # Test 7 — Idempotency (UNIQUE constraint via ON CONFLICT DO UPDATE)
 # ---------------------------------------------------------------------------
 

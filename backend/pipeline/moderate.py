@@ -393,10 +393,39 @@ def _classify_exception(exc: BaseException) -> tuple[str, str]:
     asyncio.TimeoutError + 4xx → 'blocked'
     5xx + httpx.ConnectError + httpx.ReadError + httpx.TransportError → 'unknown'
     Anything else → 'unknown' (defense-in-depth).
+
+    CR-03: the production Gemini path raises google.genai.errors.ClientError
+    (4xx) / ServerError (5xx), NOT raw httpx.HTTPStatusError. We branch on
+    the genai SDK exception types FIRST (real-prod path) and keep the httpx
+    branches for forward-compat / direct-callsite tests. Both genai errors
+    expose `code` (an int HTTP status) — see google/genai/errors.py.
     """
     if isinstance(exc, asyncio.TimeoutError):
         return ("blocked", "classifier_timeout")
+
+    # google.genai SDK errors — local import keeps this module load-safe under
+    # OFFLINE_DEMO (no genai dep needed in that branch). Defensive: if the
+    # SDK is somehow unavailable, fall through to the httpx ladder.
+    try:
+        from google.genai import errors as genai_errors  # type: ignore[import-untyped]
+    except ImportError:
+        genai_errors = None  # type: ignore[assignment]
+
+    if genai_errors is not None:
+        # ClientError covers 400-499 from the SDK's own error wrapping.
+        # ServerError covers 500-599. Both are subclasses of APIError; we
+        # check the more specific types first.
+        if isinstance(exc, genai_errors.ClientError):
+            status = getattr(exc, "code", 0) or 400
+            return ("blocked", f"classifier_4xx_{status}")
+        if isinstance(exc, genai_errors.ServerError):
+            status = getattr(exc, "code", 0) or 500
+            return ("unknown", f"classifier_5xx_{status}")
+
     if isinstance(exc, httpx.HTTPStatusError):
+        # Forward-compat / direct-callsite path. Real Gemini SDK calls do NOT
+        # surface raw httpx.HTTPStatusError — they are wrapped in genai.errors
+        # above. Kept for tests that synthesize httpx errors directly.
         status = exc.response.status_code if exc.response is not None else 0
         if 400 <= status < 500:
             return ("blocked", f"classifier_4xx_{status}")
