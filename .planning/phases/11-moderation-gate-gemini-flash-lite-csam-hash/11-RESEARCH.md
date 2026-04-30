@@ -1295,32 +1295,27 @@ async def _gemini_classify(clip_id: str) -> dict:
 
 **If user accepts the stub-only Phase 11 ship path, A1+A4+A5 reduce to "monitor Flash-Lite latency in production for the first N clips and tune budget."** The CSAM-specific assumptions disappear because we're not calling a real CSAM API yet.
 
-## Open Questions for Planner
+## Open Questions for Planner (RESOLVED 2026-04-29)
 
-1. **CSAM provider arm reconciliation (BLOCKING — answer before plan execution).**
-   - What we know: Cloudflare CSAM Scanning Tool does not match the use case described in CONTEXT.md L-02 / D-17 / D-20. It is image-only, CDN-passive, and does not report to NCMEC on our behalf.
-   - What's unclear: whether the user wants to (a) ship stub-only and rename the arm, (b) pick a real vendor (Thorn / PhotoDNA / Hive), or (c) defer CSAM detection entirely and rely on Gemini's `csam` category.
-   - Recommendation: **(a) ship stub-only with the lifespan production-guard.** Update STATE.md `Locked Decisions` and Phase 11 CONTEXT.md L-02 to read "Cloudflare CSAM Scanning Tool deferred — pilot ships with stub; vendor evaluation deferred to post-pilot." Plan Phase 11 with stub as the only validated arm. Document the Thorn/PhotoDNA options as alternatives in the deferred items.
+All open questions have been resolved by the 2026-04-29 reconciliation in CONTEXT.md (Option 4) and the planner's locked-in choices. Resolution status annotated below.
 
-2. **Pre-flight Gemini Flash-Lite latency benchmark (BLOCKING — answer before plan execution).**
-   - What we know: Flash-Lite TTFT 0.58s on text. Flash video p50 10-15s; spikes to 60s.
-   - What's unclear: Flash-Lite video p50 / p99 on Newz's actual 10-30s clips. Public benchmarks don't cover this.
-   - Recommendation: Liam runs the benchmark on `backend/seed/demo/*.mp4` (the staged demo dataset). Record p50, p95, p99 across N=20+ clips. Feed the result back into the planner as the locked `MODERATION_MAX_BUDGET_S` value. Until this happens, the gate is theoretical.
+1. **CSAM provider arm reconciliation — RESOLVED (superseded).**
+   - **Resolution:** User chose **Option 4 (classifier-only CSAM detection)**, not the recommended Option (a) (stub-only with dispatcher). The Gemini Flash-Lite classifier's `csam` category in the locked taxonomy is the operative detection. No CSAM dispatcher, no `CSAM_PROVIDER` env var, no Cloudflare client. Real hash vendor (Thorn / PhotoDNA / Hive) and automated NCMEC reporting deferred post-pilot, before public launch. See CONTEXT.md top-of-file reconciliation header for the authoritative diff. STATE.md `Locked Decisions` and REQUIREMENTS.md MOD-04 amended.
 
-3. **`_resume_pipeline(clip_id)` ownership (Phase 11 vs Phase 12) — non-blocking, planner pick.**
-   - What we know: Phase 12 owns the admin endpoint; the function lives somewhere and is called by the endpoint.
-   - What's unclear: which phase exposes the function.
-   - Recommendation: **Phase 11 exposes the function in `backend/pipeline/run.py`.** Phase 12 imports and calls. Single ownership = single test surface. CONTEXT.md `<deferred>` already recommends this; lock it.
+2. **Pre-flight Gemini Flash-Lite latency benchmark — RESOLVED (deferred, non-blocking).**
+   - **Resolution:** Liam still owes the benchmark per STATE.md `Pending Todos`, but `MODERATION_MAX_BUDGET_S=20` is the safe planner default per industry-typical Flash p95 with margin. Benchmark surfaces *after* implementation lands and feeds back as a tuning knob, not a planning blocker. Cancel-when-embed-finishes is robust to Flash-Lite latency variance — if Flash-Lite is genuinely slower than Marengo on a given clip, the gate fails-CLOSED (which is the correct posture).
 
-4. **soft_flag column placement (D-14) — non-blocking, planner pick.**
-   - Recommendation: **column over derived.** `ALTER TABLE segments ADD COLUMN soft_flag BOOLEAN NOT NULL DEFAULT FALSE`. Cheap feed-read; compile-time write determines value from the cluster's moderation_decisions rows. Already defaulted in CONTEXT.md.
+3. **`_resume_pipeline(clip_id)` ownership — RESOLVED.**
+   - **Resolution:** Phase 11 exposes the function in `backend/pipeline/run.py`. Phase 12's admin endpoint imports and calls it. Single ownership, single test surface. Plan 05 implements.
 
-5. **`SENTRY_ENVIRONMENT` heuristic for production-guard — minor.**
-   - What we know: D-18 says "production-like environment, planner picks signal."
-   - Recommendation: Use `config.SENTRY_ENVIRONMENT == "production"`. Allow `CSAM_STUB_ALLOW_PRODUCTION=true` env-var override. Document in `.env.example`. Set `CSAM_STUB_ALLOW_PRODUCTION=true` in CI to keep CI green.
+4. **`soft_flag` column placement — RESOLVED.**
+   - **Resolution:** Column (not derived). `ALTER TABLE segments ADD COLUMN soft_flag BOOLEAN NOT NULL DEFAULT FALSE` in migration `0005_segments_soft_flag.py`. Plan 02 implements; Plan 06 writes the value at compile time.
 
-6. **`reported_csam.ncmec_report_id` column — research recommendation, planner confirm.**
-   - Recommendation: **add the BIGINT nullable column now**, in the same `0004_moderation_columns.py` migration. Avoids a future ALTER. Population deferred to whichever phase actually calls NCMEC API. Cost is one nullable column.
+5. **`SENTRY_ENVIRONMENT` production heuristic — RESOLVED (simplified).**
+   - **Resolution:** Use `config.SENTRY_ENVIRONMENT == "production"`. The original `CSAM_STUB_ALLOW_PRODUCTION` env-var override is **dropped** under Option 4 because there is no stub-arm-in-prod scenario to guard against — the lifespan WARN log is informational, not a startup-refusal. Plan 05 implements the WARN line.
+
+6. **`reported_csam.ncmec_report_id` column — RESOLVED.**
+   - **Resolution:** `ALTER TABLE reported_csam ADD COLUMN ncmec_report_id BIGINT NULL` is included in migration `0004_moderation_columns.py`. Population deferred to whichever phase wires automated NCMEC reporting (post-pilot). Cost is one nullable column; cheaper than a follow-up ALTER. Plan 02 implements.
 
 ## Environment Availability
 

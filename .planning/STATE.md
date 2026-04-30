@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Pilot MVP for funding (Public-Launch-Ready Backbone)
 status: in_progress
-last_updated: "2026-04-30T02:13:12.070Z"
+last_updated: "2026-04-30T03:59:01.419Z"
 progress:
   total_phases: 6
   completed_phases: 3
-  total_plans: 13
+  total_plans: 20
   completed_plans: 13
-  percent: 100
+  percent: 65
 ---
 
 # Project State: Newz
@@ -94,6 +94,10 @@ progress:
 ### Blockers/Concerns
 
 None blocking the active phase (`01-comments-and-sharing` ready to execute; Phase 10 backbone awaiting spike).
+
+### Documented Overrides
+
+- **2026-04-29 — Phase 11 plan-phase Decision Coverage Gate (step 13a) override.** Gate reported `0/29` D-NN IDs covered because the planner cited decisions inline (109 D-NN citations across 7 PLAN.md bodies) rather than in `must_haves` / `truths` YAML frontmatter. Plan-checker independently verified all 14 phase-specific checks pass, all 10 phase requirement IDs (MOD-01..08, MOD-10, PRIV-03) are covered, and the 2026-04-29 reconciliation header in CONTEXT.md explicitly supersedes 16 of the 29 decisions. Override rationale: tooling format mismatch, not a correctness gap. **verify-phase will re-surface this.** If verify-phase flags it as a real gap, batch-edit plan must_haves blocks to add D-NN citations OR tag superseded decisions as `[informational]` inline in CONTEXT.md.
 
 ### Risks Being Tracked
 
