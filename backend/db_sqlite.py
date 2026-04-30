@@ -988,12 +988,17 @@ async def write_moderation_decision(
     """Idempotent: UNIQUE(clip_id, provider) — retries produce one row per provider per clip.
 
     Mirrors db_postgres.write_moderation_decision shape; serializes raw_response to
-    JSON text since SQLite has no JSONB. Returns the row id.
+    JSON text since SQLite has no JSONB.
+
+    WR-03: returns the actual row id from the DB via RETURNING id (matches the
+    Postgres branch's behavior). On conflict, the existing row's id is returned
+    rather than the freshly-generated dec_id; SQLite supports RETURNING since
+    3.35.0 (2021).
     """
     dec_id = uuid.uuid4().hex
     raw_json = json.dumps(raw_response) if raw_response is not None else None
     async with aiosqlite.connect(DB_PATH) as conn:
-        await conn.execute(
+        cur = await conn.execute(
             """INSERT INTO moderation_decisions
                  (id, clip_id, provider, decision, reason, raw_response, latency_ms, prompt_version)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -1002,11 +1007,13 @@ async def write_moderation_decision(
                  reason         = excluded.reason,
                  raw_response   = excluded.raw_response,
                  latency_ms     = excluded.latency_ms,
-                 prompt_version = excluded.prompt_version""",
+                 prompt_version = excluded.prompt_version
+               RETURNING id""",
             (dec_id, clip_id, provider, decision, reason, raw_json, latency_ms, prompt_version),
         )
+        row = await cur.fetchone()
         await conn.commit()
-    return dec_id
+    return row[0] if row else dec_id
 
 
 async def write_reported_csam(content_hash: str, preserved_until: float) -> str:
