@@ -51,6 +51,9 @@ __all__ = [
     "insert_child_clip", "get_children_by_parent",
     # Admin
     "reset_all", "delete_recent_clips",
+    # Phase 11 (D-13): moderation gate writes/reads (parity with db_postgres)
+    "write_moderation_decision", "write_reported_csam", "set_clip_hidden",
+    "get_moderation_decisions", "aggregate_verdict",
 ]
 
 SCHEMA_SQL = """
@@ -884,3 +887,133 @@ async def get_children_by_parent(parent_id: str) -> list[dict]:
         )
         rows = await cursor.fetchall()
     return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Phase 11 (D-13, post-reconciliation): moderation gate writes/reads — SQLite parity
+#
+# Mirrors db_postgres.py shape (D-07 byte-for-byte signature parity). Differences
+# from the Postgres branch:
+#   - SQLite has no JSONB; raw_response is stored as TEXT (json.dumps on write,
+#     json.loads on read).
+#   - SQLite has no to_timestamp(); preserved_until is stored as a Unix REAL
+#     (seconds since epoch) — Postgres' content_preserved_until column is
+#     TIMESTAMPTZ on Postgres but SQLite stores TEXT/REAL transparently.
+#   - ON CONFLICT(...) DO UPDATE / DO NOTHING is SQLite 3.24+ syntax (works in
+#     modern aiosqlite).
+#
+# Note: db_sqlite.SCHEMA_SQL does not yet declare moderation_decisions /
+# reported_csam / clips.is_hidden / segments.soft_flag (the SQLite schema is
+# inline-managed via init() rather than Alembic). These functions will fail at
+# runtime against an OFFLINE_DEMO SQLite DB until those tables are added — that
+# is out-of-scope for Plan 03 (which adds the function surface only). The
+# dispatcher contract (D-07) only requires byte-identical signatures + import
+# success, which is what this plan delivers. SQLite schema parity is a
+# downstream concern (and the SQLite backend is slated for retirement per
+# STATE.md Pending Todos).
+# ---------------------------------------------------------------------------
+
+async def write_moderation_decision(
+    clip_id: str,
+    provider: str,
+    decision: str,
+    reason: str | None,
+    raw_response: dict | None,
+    latency_ms: int | None,
+    prompt_version: str | None,
+) -> str:
+    """Idempotent: UNIQUE(clip_id, provider) — retries produce one row per provider per clip.
+
+    Mirrors db_postgres.write_moderation_decision shape; serializes raw_response to
+    JSON text since SQLite has no JSONB. Returns the row id.
+    """
+    dec_id = uuid.uuid4().hex
+    raw_json = json.dumps(raw_response) if raw_response is not None else None
+    async with aiosqlite.connect(DB_PATH) as conn:
+        await conn.execute(
+            """INSERT INTO moderation_decisions
+                 (id, clip_id, provider, decision, reason, raw_response, latency_ms, prompt_version)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(clip_id, provider) DO UPDATE SET
+                 decision       = excluded.decision,
+                 reason         = excluded.reason,
+                 raw_response   = excluded.raw_response,
+                 latency_ms     = excluded.latency_ms,
+                 prompt_version = excluded.prompt_version""",
+            (dec_id, clip_id, provider, decision, reason, raw_json, latency_ms, prompt_version),
+        )
+        await conn.commit()
+    return dec_id
+
+
+async def write_reported_csam(content_hash: str, preserved_until: float) -> str:
+    """1-year retention per 2024 REPORT Act (D-19). UNIQUE(content_hash) → DO NOTHING dedup.
+
+    SQLite stores `preserved_until` as a Unix REAL (seconds since epoch); the
+    Postgres branch uses to_timestamp() to convert into TIMESTAMPTZ. Caller
+    passes a POSIX timestamp in both backends.
+    """
+    rep_id = uuid.uuid4().hex
+    async with aiosqlite.connect(DB_PATH) as conn:
+        await conn.execute(
+            """INSERT INTO reported_csam (id, content_hash, content_preserved_until)
+               VALUES (?, ?, ?)
+               ON CONFLICT(content_hash) DO NOTHING""",
+            (rep_id, content_hash, preserved_until),
+        )
+        await conn.commit()
+    return rep_id
+
+
+async def set_clip_hidden(clip_id: str, hidden: bool) -> None:
+    """Phase 11 D-06: write path for clips.is_hidden. Block path → True, admin clear → False.
+
+    SQLite booleans are stored as INTEGER 0/1; the cast happens transparently
+    on bind because Python bool subclasses int.
+    """
+    async with aiosqlite.connect(DB_PATH) as conn:
+        await conn.execute(
+            "UPDATE clips SET is_hidden = ? WHERE id = ?",
+            (1 if hidden else 0, clip_id),
+        )
+        await conn.commit()
+
+
+async def get_moderation_decisions(clip_id: str) -> list[dict]:
+    """Returns rows ordered by created_at DESC.
+
+    Deserializes raw_response from TEXT → dict (SQLite has no JSONB codec).
+    Provider/decision/reason/latency_ms/prompt_version come through as native types.
+    """
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+            """SELECT provider, decision, reason, raw_response, latency_ms, prompt_version, created_at
+               FROM moderation_decisions WHERE clip_id = ? ORDER BY created_at DESC""",
+            (clip_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+    out: list[dict] = []
+    for r in rows:
+        d = dict(r)
+        if d.get("raw_response") is not None:
+            d["raw_response"] = json.loads(d["raw_response"])
+        out.append(d)
+    return out
+
+
+async def aggregate_verdict(clip_id: str) -> str:
+    """Pure-Python aggregator over get_moderation_decisions rows — parity with db_postgres.
+
+    Verdict precedence:
+      any row decision='blocked' → 'blocked'
+      else any decision='unknown' → 'unknown'
+      else 'passed'
+    """
+    rows = await get_moderation_decisions(clip_id)
+    decisions = {r["decision"] for r in rows}
+    if "blocked" in decisions:
+        return "blocked"
+    if "unknown" in decisions:
+        return "unknown"
+    return "passed"
