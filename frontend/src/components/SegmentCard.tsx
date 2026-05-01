@@ -23,7 +23,6 @@ function ShareArrowIcon({ className }: { className?: string }) {
 }
 import type { Segment } from "../types";
 import { relativeTime } from "../timeFormat";
-import { distanceLabel } from "../distance";
 import { LivePill } from "./LivePill";
 import { Comments } from "./Comments";
 import { API_BASE, fetchComments } from "../api";
@@ -40,13 +39,9 @@ function deriveSummary(s: Segment, locationStr: string | null): string {
 
 export function SegmentCard({
   segment,
-  viewerLat,
-  viewerLng,
   active = false,
 }: {
   segment: Segment & { url: string | null };
-  viewerLat?: number;
-  viewerLng?: number;
   /** True when this card is the most-visible one in the viewport. */
   active?: boolean;
 }) {
@@ -74,15 +69,9 @@ export function SegmentCard({
     }
   }, [active, currentUrl]);
 
-  const locationStr =
-    viewerLat !== undefined &&
-    viewerLng !== undefined &&
-    segment.centroid_lat !== null &&
-    segment.centroid_lng !== null
-      ? distanceLabel(viewerLat, viewerLng, segment.centroid_lat, segment.centroid_lng)
-      : segment.location;
+  const locationStr = segment.location || null;
 
-  const summary = deriveSummary(segment, locationStr ?? null);
+  const summary = deriveSummary(segment, locationStr);
 
   const [commentsOpen, setCommentsOpen] = useState(false);
   const [commentCount, setCommentCount] = useState<number | undefined>(undefined);

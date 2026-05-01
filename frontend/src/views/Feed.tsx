@@ -72,11 +72,7 @@ export function Feed() {
       ) : segments.length === 0 ? (
         <EmptyState />
       ) : (
-        <FeedShell
-          segments={segments}
-          viewerLat={coordsRef.current?.lat}
-          viewerLng={coordsRef.current?.lng}
-        />
+        <FeedShell segments={segments} />
       )}
       <BottomTabBar />
     </>
