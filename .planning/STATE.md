@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Pilot MVP for funding (Public-Launch-Ready Backbone)
 status: ready_to_plan
-last_updated: "2026-04-30T19:00:00.000Z"
-last_activity: 2026-04-30 -- shipped Phase 11 (Moderation Gate, Gemini Flash-Lite classifier-only CSAM); merged main into phase-11 branch (Roan retired SQLite + UI polish)
+last_updated: "2026-05-01T03:45:00.000Z"
+last_activity: 2026-05-01 -- Completed quick task 260430-smd: optimistic upload navigation + top-of-feed UploadProgressBar
 progress:
   total_phases: 7
   completed_phases: 6
@@ -103,6 +103,9 @@ None blocking the active phase (`01-comments-and-sharing` ready to execute; Phas
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 260430-qya | SegmentCard eyebrow now shows `segment.location` instead of distance label | 2026-05-01 | 9b28e2b | [260430-qya-location-name-not-distance](./quick/260430-qya-location-name-not-distance/) |
+| 260430-s4p | Masthead bumped to z-30 so SegmentCard h2 titles can't bleed under the NewZ logo | 2026-05-01 | 0d7be87 | [260430-s4p-fix-header-transparency](./quick/260430-s4p-fix-header-transparency/) |
+| 260430-smd | Optimistic navigation on upload — feed shows immediately with top-of-feed UploadProgressBar instead of blocking on recording screen | 2026-05-01 | c2c70b3 | [260430-smd-when-a-user-clicks-button-to-upload-vide](./quick/260430-smd-when-a-user-clicks-button-to-upload-vide/) |
+| 260501-bet | Caption pipeline split into per-parent structured-evidence Gemini extraction + cluster-level Claude intent synthesis (signs/audio/affiliations → topic/why-it-matters) | 2026-05-01 | 769acc9 | [260501-bet-structured-evidence-cluster-intent-synth](./quick/260501-bet-structured-evidence-cluster-intent-synth/) |
 
 ### Documented Overrides
 

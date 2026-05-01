@@ -345,6 +345,8 @@ async def insert_segment(
     video_url: str | None = None,
     title: str | None = None,
     soft_flag: bool = False,
+    evidence: list[dict] | None = None,
+    intent: dict | None = None,
 ) -> str:
     """Idempotent: one segment per cluster. ON CONFLICT(cluster_id) updates. CMP-09.
 
@@ -352,6 +354,12 @@ async def insert_segment(
     segments.soft_flag column added in migration 0005. Default False preserves
     backward compatibility for callers that pre-date Phase 11. ON CONFLICT
     refresh ensures re-compiles update the flag rather than stale-pinning it.
+
+    Quick task 260501-bet: evidence + intent JSONB columns added in migration
+    0006 thread through here. Both default None so legacy callers (and the
+    OFFLINE_DEMO / classifier-fail fallback) keep producing valid segment rows.
+    JSON-encoded via json.dumps to match the moderation_decisions / asyncpg
+    pattern (jsonb codec round-trips on read).
     """
     seg_id = uuid.uuid4().hex
     now = time.time()
@@ -359,8 +367,9 @@ async def insert_segment(
     row = await pool.fetchrow(
         """INSERT INTO segments
              (id, cluster_id, ordered_clip_ids, title, caption, location,
-              source_count, created_at, video_url, soft_flag)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+              source_count, created_at, video_url, soft_flag,
+              evidence, intent)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
            ON CONFLICT(cluster_id) DO UPDATE SET
              ordered_clip_ids = EXCLUDED.ordered_clip_ids,
              title            = EXCLUDED.title,
@@ -368,10 +377,14 @@ async def insert_segment(
              location         = EXCLUDED.location,
              source_count     = EXCLUDED.source_count,
              video_url        = EXCLUDED.video_url,
-             soft_flag        = EXCLUDED.soft_flag
+             soft_flag        = EXCLUDED.soft_flag,
+             evidence         = EXCLUDED.evidence,
+             intent           = EXCLUDED.intent
            RETURNING id""",
         seg_id, cluster_id, json.dumps(ordered_clip_ids),
         title, caption, location, source_count, now, video_url, soft_flag,
+        json.dumps(evidence) if evidence is not None else None,
+        json.dumps(intent) if intent is not None else None,
     )
     return row["id"]
 

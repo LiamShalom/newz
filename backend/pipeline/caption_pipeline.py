@@ -1,30 +1,55 @@
 """
-backend/pipeline/caption_pipeline.py — Gemini 2.5 Flash native-video caption pipeline.
+backend/pipeline/caption_pipeline.py — two-stage evidence + intent caption pipeline.
 
-Public API:
-    generate_caption(cluster_id, centroid, children) -> dict | None
-        Async. Steps:
-          1. Pick the 3 children clips closest to the cluster centroid by cosine.
-          2. ffmpeg-stitch them into one short composite mp4.
-          3. Upload to Gemini Files API; poll until ACTIVE.
-          4. Call gemini-2.5-flash with system prompt + JSON response_schema.
-          5. Parse + return {"title", "caption", "location", "source": "gemini"}.
-          6. Cleanup: delete uploaded Gemini file + temp stitch on disk.
+Public API (quick task 260501-bet):
+    extract_evidence_for_parent(parent_clip) -> dict | None
+        Per-parent Gemini call. Uploads the FULL parent video so audio is
+        preserved. Returns structured EvidenceJSON (signs, audio_transcript,
+        visual_cues, affiliations, summary) or None on failure.
 
-        Returns None on any failure (caller falls back to a generic caption).
+    synthesize_intent(evidence_list, location, when_iso) -> dict | None
+        Cluster-level Claude call. Takes the array of evidence dicts and emits
+        an IntentJSON (topic, what_is_happening, why_it_matters, evidence_trail,
+        title, caption). Title + caption are derived from intent so the
+        downstream segment row keeps the existing Segment.title / Segment.caption
+        contract green for the frontend.
 
-Replaces the prior Anthropic Haiku-per-child + Sonnet-synthesis pipeline.
-Single LLM call vs. four; native video reasoning (audio + motion + temporal continuity)
-vs. still frames + text aggregation. Strictly higher quality at equivalent latency.
+    run_evidence_to_intent_pipeline(cluster_id, parents, location) -> dict | None
+        Top-level: fan-out evidence extraction across parents, then synthesize.
+        On success returns
+            {"title", "caption", "location", "source": "vision",
+             "evidence": [...], "intent": {...}}
+        On total failure returns None.
+
+    generate_caption(cluster_id, centroid, children) -> dict | None  # backward-compat
+        Resolves parents from children and routes through
+        run_evidence_to_intent_pipeline. compile.py:_branch_caption already
+        calls this; the discriminator at compile.py:611 (source == "vision")
+        keeps working unchanged.
+
+Replaces the prior single-Gemini-call-on-stitched-composite pipeline. Two stages:
+(1) per-parent structured evidence extraction (Gemini surfacing signs / chants
+/ affiliations / visual cues), (2) cluster-level Claude synthesis turning that
+evidence array into an event-level intent. Asking the vision model for evidence
+rather than prose, then handing that evidence to a stronger reasoner, is what
+turns "people walking with signs" into "Caltech grad students walk out
+demanding stipend increase."
 """
 
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
+
+from claude_agent_sdk import (
+    query,
+    ClaudeAgentOptions,
+    ResultMessage,
+)
 
 from .. import config
 from .geocode import reverse_geocode
@@ -253,6 +278,702 @@ def _sanitize_output(parsed: dict, location: str) -> dict:
     return parsed
 
 
+# ---------------------------------------------------------------------------
+# Quick task 260501-bet: per-parent evidence extraction (Stage 1 — Gemini)
+# ---------------------------------------------------------------------------
+
+EVIDENCE_SYSTEM_PROMPT = """You are a vision-and-audio evidence extractor for a hyperlocal news pipeline.
+You are NOT writing prose. You are surfacing structured EVIDENCE so a downstream
+reasoner (a separate model) can synthesize the event-level meaning.
+
+==============================
+WHAT TO EXTRACT
+==============================
+For each videorecording, return JSON with these fields:
+
+- signs: list of objects, one per visible sign / placard / banner / poster /
+  printed text. Each object has:
+    {"text": "<exact words on the sign>", "context": "<who is holding it / where it is>"}
+  If the same text appears on multiple identical signs, list it once with a
+  count note in context (e.g. "held by 4 people in front row"). Empty list when
+  no signs are visible.
+
+- audio_transcript: a single string. Transcribe chants, speech, announcements,
+  PA-system audio, public-figure remarks at podiums VERBATIM in their native
+  language. AUDIO IS AT LEAST AS LOAD-BEARING AS ON-SCREEN TEXT. Crowd chants,
+  speeches, and announcements are exactly the kind of evidence the downstream
+  synthesizer needs. If there is no informative audio (only ambient sound),
+  emit "" (empty string), NOT a description of silence.
+
+- visual_cues: list of strings. Concrete observable tokens — clothing, colors,
+  objects, weather, lighting, time-of-day, vehicles, setting type, posture,
+  motion patterns, count estimates when unambiguous (<=10 visible).
+  Examples: "approximately 30 people", "blue tarp on curb", "police barricade",
+  "graduation gowns", "rainy / wet pavement", "early evening".
+
+- affiliations: list of strings. Org names, flag designs, logos, banner text,
+  uniform insignia, public-figure names visible at podiums or on speaker
+  placards. ANONYMITY-SAFE TARGETS ONLY (see anonymity guard below).
+  Examples: "Caltech graduate student union banner", "United Auto Workers",
+  "Mayor Victor Gordo (visible at podium)", "rainbow Pride flag",
+  "American flag".
+
+- summary: ONE neutral sentence describing what is observable in this
+  recording. Not editorial. Not predictive. Not "appears to" / "seems to".
+  Just what is actually on the screen + audio.
+
+==============================
+ANONYMITY GUARD — STRICT
+==============================
+The following ARE reportable / required:
+  - Public figures speaking at podiums or on stages
+  - Visible affiliations: organization names, logos, banners, flags, insignia
+  - Symbols (political, religious, commercial — describe what's depicted)
+  - Sign / placard / banner text VERBATIM
+  - Public officials in their official capacity
+
+The following MUST NOT appear in the output:
+  - Faces of bystanders or private individuals (no descriptions like "a man
+    with a beard wearing glasses")
+  - Identifying details of private individuals (clothing color of a bystander
+    is OK as a count-cue; "the woman in the red sweater near the bus stop"
+    is NOT — that's identifying)
+  - License plate numbers or partial plates
+  - Home addresses, apartment numbers, street numbers on private residences
+  - Phone numbers, email addresses, social media handles visible in the
+    recording (UNLESS they are an organization's published contact info)
+
+When in doubt about a person: if they are speaking AT a podium / from a stage
+/ in an official capacity, they are reportable. Otherwise treat them as an
+anonymous bystander and describe ONLY count + setting context.
+
+==============================
+NEVER DO
+==============================
+- Never reference the medium itself: forbidden words include "video", "clip",
+  "footage", "frame", "frames", "camera", "shot", "filmed", "recording".
+- Never write "appears to" or "seems to" — state what's there or omit it.
+- Never invent a count of people if it isn't unambiguous.
+- Never paraphrase a sign — transcribe verbatim or omit it.
+- Never editorialize. The downstream synthesizer does the reasoning, not you.
+"""
+
+
+EVIDENCE_RESPONSE_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "signs": {
+            "type": "ARRAY",
+            "items": {
+                "type": "OBJECT",
+                "properties": {
+                    "text":    {"type": "STRING"},
+                    "context": {"type": "STRING"},
+                },
+                "required": ["text", "context"],
+                "propertyOrdering": ["text", "context"],
+            },
+        },
+        "audio_transcript": {"type": "STRING"},
+        "visual_cues":      {"type": "ARRAY", "items": {"type": "STRING"}},
+        "affiliations":     {"type": "ARRAY", "items": {"type": "STRING"}},
+        "summary":          {"type": "STRING"},
+    },
+    "required": ["signs", "audio_transcript", "visual_cues", "affiliations", "summary"],
+    "propertyOrdering": [
+        "signs", "audio_transcript", "visual_cues", "affiliations", "summary",
+    ],
+}
+
+
+def _validate_evidence_shape(parsed: dict) -> dict | None:
+    """Coerce a parsed Gemini response to the EvidenceJSON contract or return None.
+
+    Lightweight type-guard: required keys present, lists are lists, signs are
+    list-of-dicts. Drops malformed sub-items rather than failing whole-evidence
+    so a partial extraction is still useful to the synthesizer.
+    """
+    if not isinstance(parsed, dict):
+        return None
+    required = ("signs", "audio_transcript", "visual_cues", "affiliations", "summary")
+    if not all(k in parsed for k in required):
+        return None
+
+    signs_in = parsed.get("signs") or []
+    if not isinstance(signs_in, list):
+        return None
+    signs: list[dict] = []
+    for s in signs_in:
+        if isinstance(s, dict) and isinstance(s.get("text"), str):
+            signs.append({
+                "text": s.get("text", ""),
+                "context": s.get("context", "") if isinstance(s.get("context"), str) else "",
+            })
+
+    audio = parsed.get("audio_transcript")
+    audio = audio if isinstance(audio, str) else ""
+
+    cues_in = parsed.get("visual_cues") or []
+    cues: list[str] = [c for c in cues_in if isinstance(c, str)] if isinstance(cues_in, list) else []
+
+    aff_in = parsed.get("affiliations") or []
+    affs: list[str] = [a for a in aff_in if isinstance(a, str)] if isinstance(aff_in, list) else []
+
+    summary = parsed.get("summary")
+    summary = summary if isinstance(summary, str) else ""
+
+    return {
+        "signs": signs,
+        "audio_transcript": audio,
+        "visual_cues": cues,
+        "affiliations": affs,
+        "summary": summary,
+    }
+
+
+async def _resolve_parent_input_to_local(parent_clip: dict) -> tuple[str | None, object | None]:
+    """Resolve parent_clip's source video to a local path Gemini Files API can ingest.
+
+    Local-mode: parent_path is a local FS path; pass through.
+    Blob-mode: parent_blob_url is an authorized HTTPS URL; download to a tempfile.
+
+    Returns (local_path_or_none, tmpfile_handle_or_none). Caller must close the
+    tmpfile_handle (a tempfile.NamedTemporaryFile) when done; pass None for the
+    handle in local-mode (no cleanup needed).
+
+    Mirrors the blob-download pattern in generate_caption (lines 365-389) but
+    operates per-parent instead of per-stitched-composite.
+    """
+    import tempfile
+    from urllib.parse import urlparse
+
+    parent_blob_url = parent_clip.get("parent_blob_url") or parent_clip.get("blob_url")
+    parent_path = parent_clip.get("parent_path") or parent_clip.get("path")
+
+    # Local-mode happy path.
+    if parent_path and not str(parent_path).startswith("http"):
+        if Path(parent_path).exists():
+            return parent_path, None
+        log.warning("evidence: local parent_path missing on disk: %s", parent_path)
+        return None, None
+
+    if not parent_blob_url:
+        return None, None
+
+    try:
+        from ..storage import blob_client
+        from ..storage.blob import authorized_blob_input
+
+        pathname = urlparse(parent_blob_url).path.lstrip("/")
+        url, headers = authorized_blob_input(pathname)
+        client = blob_client.get_client()
+        tmp_handle = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+        local_path = tmp_handle.name
+        try:
+            async with client.stream("GET", url, headers=headers) as resp:
+                resp.raise_for_status()
+                with open(local_path, "wb") as f:
+                    async for chunk in resp.aiter_bytes(chunk_size=64 * 1024):
+                        f.write(chunk)
+        except Exception:
+            tmp_handle.close()
+            try:
+                Path(local_path).unlink(missing_ok=True)
+            except Exception:
+                pass
+            raise
+        return local_path, tmp_handle
+    except Exception:
+        log.exception("evidence: failed to download blob parent for evidence extraction")
+        return None, None
+
+
+async def extract_evidence_for_parent(parent_clip: dict) -> dict | None:
+    """Per-parent Gemini call. Returns EvidenceJSON or None on failure.
+
+    parent_clip: dict with at least {parent_path | path, parent_blob_url | blob_url}.
+                 Same row shape used by run-resolution + clustering paths.
+
+    Honors OFFLINE_DEMO / missing GEMINI_API_KEY by returning None — caller
+    will skip this parent (and the run_evidence_to_intent_pipeline aggregator
+    falls back to legacy when zero parents survive extraction).
+    """
+    if not config.GEMINI_API_KEY:
+        log.warning("extract_evidence: GEMINI_API_KEY not set — skipping")
+        return None
+
+    local_path, tmp_handle = await _resolve_parent_input_to_local(parent_clip)
+    if not local_path:
+        log.warning("extract_evidence: could not resolve parent input for clip=%s",
+                    parent_clip.get("id") or parent_clip.get("parent_id"))
+        return None
+
+    try:
+        from google import genai
+        from google.genai import types
+
+        client = genai.Client(
+            api_key=config.GEMINI_API_KEY,
+            http_options=types.HttpOptions(timeout=120_000),
+        )
+
+        loop = asyncio.get_running_loop()
+
+        # 1. Upload (sync SDK call wrapped in executor)
+        try:
+            uploaded = await asyncio.wait_for(
+                loop.run_in_executor(None, lambda: client.files.upload(file=local_path)),
+                timeout=30.0,
+            )
+        except Exception:
+            log.exception("extract_evidence: upload failed")
+            return None
+
+        # 2. Poll until ACTIVE
+        for _ in range(30):  # ~30s ceiling
+            if uploaded.state.name == "ACTIVE":
+                break
+            await asyncio.sleep(1)
+            uploaded = await loop.run_in_executor(
+                None, lambda: client.files.get(name=uploaded.name)
+            )
+        if uploaded.state.name != "ACTIVE":
+            log.warning(
+                "extract_evidence: file did not reach ACTIVE state state=%s",
+                uploaded.state.name,
+            )
+            return None
+
+        user_prompt = (
+            "Extract structured evidence from this videorecording per the schema. "
+            "Transcribe audio chants/speech VERBATIM. Surface every visible sign. "
+            "Note affiliations / org names / public-figure speakers. "
+            "DO NOT describe faces of bystanders or other identifying private detail."
+        )
+
+        # 3. generate_content with structured JSON response
+        try:
+            response = await asyncio.wait_for(
+                loop.run_in_executor(
+                    None,
+                    lambda: client.models.generate_content(
+                        model=config.GEMINI_MODEL,
+                        contents=[uploaded, user_prompt],
+                        config=types.GenerateContentConfig(
+                            system_instruction=EVIDENCE_SYSTEM_PROMPT,
+                            temperature=0.2,
+                            response_mime_type="application/json",
+                            response_schema=EVIDENCE_RESPONSE_SCHEMA,
+                        ),
+                    ),
+                ),
+                timeout=125.0,
+            )
+        except Exception:
+            log.exception("extract_evidence: generate_content failed")
+            return None
+
+        # 4. Parse + validate shape
+        try:
+            parsed = json.loads(response.text)
+        except (TypeError, ValueError):
+            log.warning("extract_evidence: response not valid JSON: %r",
+                        (getattr(response, "text", "") or "")[:200])
+            return None
+
+        evidence = _validate_evidence_shape(parsed)
+        if evidence is None:
+            log.warning("extract_evidence: response missing required keys: %s",
+                        list(parsed.keys()) if isinstance(parsed, dict) else type(parsed).__name__)
+            return None
+
+        # 5. Cleanup uploaded Gemini file (best-effort)
+        try:
+            await loop.run_in_executor(
+                None, lambda: client.files.delete(name=uploaded.name)
+            )
+        except Exception as e:
+            log.warning("extract_evidence: file cleanup failed: %s", e)
+
+        log.info(
+            "extract_evidence ok signs=%d audio_chars=%d cues=%d affiliations=%d",
+            len(evidence["signs"]),
+            len(evidence["audio_transcript"]),
+            len(evidence["visual_cues"]),
+            len(evidence["affiliations"]),
+        )
+        return evidence
+
+    except Exception:
+        log.exception("extract_evidence: unexpected error")
+        return None
+    finally:
+        # Clean up the tempfile we created for blob-mode downloads. Local-mode
+        # passes the user's actual file through; we MUST NOT delete it.
+        if tmp_handle is not None:
+            try:
+                tmp_handle.close()
+            except Exception:
+                pass
+            try:
+                Path(local_path).unlink(missing_ok=True)
+            except Exception:
+                pass
+
+
+# ---------------------------------------------------------------------------
+# Quick task 260501-bet: cluster-level intent synthesis (Stage 2 — Claude)
+# ---------------------------------------------------------------------------
+
+INTENT_SYSTEM_INSTRUCTION = """You are an AP-wire breaking-news synthesizer.
+
+Below is structured EVIDENCE extracted by a vision-and-audio model from N
+independent recordings of (almost certainly) the same event. Each entry is a
+JSON object with: signs (sign text + context), audio_transcript (verbatim
+chants/speech), visual_cues, affiliations, summary.
+
+YOUR JOB: synthesize the event-level intent. Then derive a 4-8 word AP-wire
+headline TITLE and a 2-3 sentence neutral CAPTION.
+
+==============================
+SYNTHESIS RULES
+==============================
+- Ground every claim in the evidence array. Do not invent facts.
+- Cite which evidence items support which claims (evidence_trail[]).
+- Cross-reference: if 3 of 4 recordings show "Caltech grad union" affiliation
+  and audio chants demand "stipend increase", the topic is the walkout, not
+  "people walking with signs".
+- If evidence is too thin to determine intent (e.g. only one summary line,
+  no signs, no audio), prefer a CONSERVATIVE description over a confident one.
+
+==============================
+TITLE / CAPTION RULES
+==============================
+- Title: 4 to 8 words. HARD CAP: 60 characters total. Title Case.
+  Present tense, active voice. No period. No quotes. Not a question.
+  Must NOT contain: video, clip, footage, frame, frames, camera, shot,
+  filmed, recording, sequence.
+- Caption: 2 to 3 sentences. 80-400 characters. Third person, neutral tone.
+  Ends with a period. Adds AT LEAST TWO specific details NOT in the title
+  (audio cue, count, distinctive object, time-of-day, weather, action verb,
+  affiliation name, sign text).
+- Caption is NOT a rephrasing of the title.
+
+==============================
+ANONYMITY (carry-through)
+==============================
+- Public figures at podiums + organizational affiliations: REPORTABLE.
+- Bystander descriptions / license plates / private addresses: DO NOT
+  REPRODUCE — even if the upstream evidence accidentally included them.
+  Strip them silently.
+
+==============================
+RESPONSE FORMAT — STRICT JSON
+==============================
+Return ONE JSON object, exactly these keys, in this order:
+
+{
+  "topic": "<short noun phrase, 2-6 words>",
+  "what_is_happening": "<1-2 sentences, neutral, evidence-grounded>",
+  "why_it_matters": "<1-2 sentences, evidence-grounded>",
+  "evidence_trail": [
+    {"claim": "<one claim from above>",
+     "supporting_evidence": ["<verbatim phrase or paraphrase from evidence>", "..."]}
+  ],
+  "title": "<4-8 word headline>",
+  "caption": "<2-3 sentence lede>"
+}
+
+Wrapping the object in a single ```json ... ``` fence is OK. Do not return
+anything else after the JSON.
+"""
+
+
+def _extract_intent_json(text: str) -> dict | None:
+    """Tolerant JSON extractor — direct parse, then fence-strip, then balanced-brace fallback.
+
+    Mirrors compile.py:_extract_run_ids' fence-aware parser. Returns None on
+    any unrecoverable parse failure.
+    """
+    if not text:
+        return None
+
+    # 1. Direct parse
+    try:
+        obj = json.loads(text)
+        if isinstance(obj, dict):
+            return obj
+    except (TypeError, ValueError):
+        pass
+
+    candidates: list[str] = []
+
+    # 2. ```json ... ``` fence (longest match wins)
+    fence_re = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
+    candidates.extend(fence_re.findall(text))
+
+    # 3. Last balanced top-level object
+    last_brace = text.rfind("}")
+    if last_brace != -1:
+        depth = 0
+        start = -1
+        for i in range(last_brace, -1, -1):
+            ch = text[i]
+            if ch == "}":
+                depth += 1
+            elif ch == "{":
+                depth -= 1
+                if depth == 0:
+                    start = i
+                    break
+        if start != -1:
+            candidates.append(text[start:last_brace + 1])
+
+    for raw in candidates:
+        try:
+            obj = json.loads(raw)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(obj, dict):
+            return obj
+
+    return None
+
+
+def _validate_intent_shape(parsed: dict | None) -> dict | None:
+    """Coerce + sanitize an IntentJSON. Returns None if title/caption can't be salvaged.
+
+    Applies:
+      - required-key check (topic, what_is_happening, why_it_matters, title, caption)
+      - title length / forbidden-word strip / word-boundary truncate
+      - title-vs-caption duplicate detection (same handling as _sanitize_output)
+      - evidence_trail defaulting to [] if missing/malformed
+    """
+    if not isinstance(parsed, dict):
+        return None
+
+    title_in = parsed.get("title")
+    caption_in = parsed.get("caption")
+    if not isinstance(title_in, str) or not isinstance(caption_in, str):
+        return None
+    title_in = title_in.strip()
+    caption_in = caption_in.strip()
+    if not title_in or not caption_in:
+        return None
+
+    # Reuse the existing sanitization helpers — same forbidden-word ladder
+    # and length cap as the legacy single-call pipeline.
+    title = _strip_forbidden_words(title_in)
+    title = _truncate_to_word_boundary(title, _TITLE_HARD_CAP, _TITLE_MAX_WORDS)
+    if not title:
+        title = "Footage Captured"
+
+    caption = caption_in
+    title_norm = title.lower().strip(" ,.;:")
+    caption_norm = caption.lower().strip(" ,.;:")
+    duplicate = (
+        title_norm == caption_norm
+        or title_norm in caption_norm
+        or caption_norm in title_norm
+        or _shares_long_run(title, caption, n=4)
+    )
+    if duplicate:
+        log.warning(
+            "synthesize_intent: title≈caption duplicate detected — patching caption"
+        )
+        caption = (
+            "Multiple contributors recorded the scene from nearby vantage "
+            "points. Background sound and ambient detail captured."
+        )
+
+    topic = parsed.get("topic")
+    topic = topic if isinstance(topic, str) else ""
+    what = parsed.get("what_is_happening")
+    what = what if isinstance(what, str) else ""
+    why = parsed.get("why_it_matters")
+    why = why if isinstance(why, str) else ""
+
+    trail_in = parsed.get("evidence_trail")
+    trail: list[dict] = []
+    if isinstance(trail_in, list):
+        for entry in trail_in:
+            if not isinstance(entry, dict):
+                continue
+            claim = entry.get("claim")
+            supports = entry.get("supporting_evidence") or []
+            if not isinstance(claim, str):
+                continue
+            if isinstance(supports, list):
+                supports = [s for s in supports if isinstance(s, str)]
+            else:
+                supports = []
+            trail.append({"claim": claim, "supporting_evidence": supports})
+
+    return {
+        "topic": topic,
+        "what_is_happening": what,
+        "why_it_matters": why,
+        "evidence_trail": trail,
+        "title": title,
+        "caption": caption,
+    }
+
+
+async def synthesize_intent(
+    evidence_list: list[dict],
+    location: str,
+    when_iso: str,
+) -> dict | None:
+    """Cluster-level Claude synthesis. Returns IntentJSON dict or None.
+
+    Calls claude_agent_sdk.query() with model='sonnet', no MCP tools (pure
+    synthesis — the reasoner has all it needs in the prompt body).
+
+    Wraps the SDK call in asyncio.wait_for(timeout=60s) so the cluster-level
+    synthesis cannot blow the 300s compile budget regardless of SDK behaviour.
+    """
+    if not evidence_list:
+        return None
+
+    # Inline the evidence array as JSON in the prompt. The synthesizer doesn't
+    # need a tool call — everything it needs is here.
+    prompt_body = (
+        f"Date: {when_iso}\n"
+        f"Location: {location}\n\n"
+        f"Number of independent recordings: {len(evidence_list)}\n\n"
+        f"EVIDENCE (JSON array, one item per recording):\n"
+        f"{json.dumps(evidence_list, indent=2, ensure_ascii=False)}\n\n"
+        "Synthesize the event-level intent and emit one IntentJSON object per "
+        "the schema in your system instruction."
+    )
+
+    options = ClaudeAgentOptions(
+        model="sonnet",
+        max_turns=3,
+        system_prompt=INTENT_SYSTEM_INSTRUCTION,
+    )
+
+    final_text: str | None = None
+    try:
+        async def _run() -> str | None:
+            text: str | None = None
+            async for msg in query(prompt=prompt_body, options=options):
+                if isinstance(msg, ResultMessage):
+                    if msg.is_error:
+                        log.error(
+                            "synthesize_intent: SDK returned is_error=True turns=%s errors=%s",
+                            msg.num_turns, msg.errors,
+                        )
+                        return None
+                    text = msg.result
+                    break
+            return text
+
+        final_text = await asyncio.wait_for(_run(), timeout=60.0)
+    except asyncio.TimeoutError:
+        log.warning("synthesize_intent: TIMEOUT after 60s")
+        return None
+    except Exception:
+        log.exception("synthesize_intent: SDK call failed")
+        return None
+
+    if not final_text:
+        log.warning("synthesize_intent: empty response")
+        return None
+
+    parsed = _extract_intent_json(final_text)
+    intent = _validate_intent_shape(parsed)
+    if intent is None:
+        log.warning(
+            "synthesize_intent: could not extract / validate IntentJSON text=%r",
+            (final_text or "")[:300],
+        )
+        return None
+
+    log.info(
+        "synthesize_intent ok title=%r caption_len=%d trail_len=%d",
+        intent.get("title"), len(intent.get("caption", "")),
+        len(intent.get("evidence_trail", [])),
+    )
+    return intent
+
+
+async def run_evidence_to_intent_pipeline(
+    cluster_id: str,
+    parents: list[dict],
+    location: str,
+) -> dict | None:
+    """Top-level orchestration: fan-out evidence extraction, then synthesize intent.
+
+    parents: list of parent-clip dicts (parent_id IS NULL rows from
+             fetch_cluster_clips_with_children, or pre-resolved equivalents).
+
+    Returns the standard caption_pipeline result shape:
+        {"title", "caption", "location", "source": "vision",
+         "evidence": [...], "intent": {...}}
+    where source="vision" preserves the discriminator at compile.py:611.
+
+    Returns None on total failure (zero successful evidence extractions OR
+    intent synthesis failure). compile_segment then routes through the
+    existing fallback path (CMP-06 / _save_fallback_segment).
+    """
+    if not parents:
+        log.warning("evidence_to_intent: cluster %s has no parents", cluster_id)
+        return None
+
+    if not config.GEMINI_API_KEY:
+        log.warning("evidence_to_intent: GEMINI_API_KEY not set — falling back")
+        return None
+
+    # Stage 1: per-parent extraction in parallel.
+    tasks = [extract_evidence_for_parent(p) for p in parents]
+    raw_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    evidence_list: list[dict] = []
+    for r in raw_results:
+        if isinstance(r, Exception):
+            log.warning("evidence_to_intent: per-parent extraction raised: %s", r)
+            continue
+        if isinstance(r, dict):
+            evidence_list.append(r)
+
+    if not evidence_list:
+        log.warning(
+            "evidence_to_intent: zero successful evidence extractions for cluster %s",
+            cluster_id,
+        )
+        return None
+
+    log.info(
+        "evidence_to_intent: %d/%d parents produced evidence cluster=%s",
+        len(evidence_list), len(parents), cluster_id,
+    )
+
+    # Determine when_iso for the synthesis prompt. Use the earliest parent ts
+    # available (matches the legacy single-call pipeline's date stamp).
+    ts_candidates: list[float] = [
+        float(t) for p in parents if (t := p.get("ts")) is not None
+    ]
+    if ts_candidates:
+        when_iso = datetime.fromtimestamp(min(ts_candidates), tz=timezone.utc).strftime("%b %-d, %Y")
+    else:
+        when_iso = datetime.now(tz=timezone.utc).strftime("%b %-d, %Y")
+
+    # Stage 2: cluster-level Claude synthesis.
+    intent = await synthesize_intent(evidence_list, location, when_iso)
+    if intent is None:
+        return None
+
+    return {
+        "title": intent["title"],
+        "caption": intent["caption"],
+        "location": location,
+        "source": "vision",  # discriminator @ compile.py:611
+        "evidence": evidence_list,
+        "intent": intent,
+    }
+
+
 def _select_caption_children(
     children: list[dict],
     centroid: np.ndarray,
@@ -320,17 +1041,62 @@ def _build_stitch_refs(selected: list[dict]) -> list[dict]:
     return refs
 
 
+def _resolve_parents_from_children(children: list[dict]) -> list[dict]:
+    """Re-derive the unique parent rows from a children-list.
+
+    fetch_cluster_clips_with_children returns BOTH parent rows and child rows
+    in one flat list (parents have parent_id=None; children carry parent_id).
+    Our two-stage pipeline operates on parents only, so collapse-and-dedup by
+    parent_id (or row id when parent_id is None).
+
+    Each output row carries the keys extract_evidence_for_parent needs:
+    parent_path, parent_blob_url, lat, lng, ts. Falls back to the row's own
+    path / blob_url when parent_path / parent_blob_url is missing (the row
+    IS the parent in that case).
+    """
+    by_parent: dict[str, dict] = {}
+    for row in children:
+        parent_id = row.get("parent_id") or row.get("id")
+        if not parent_id or parent_id in by_parent:
+            continue
+        parent_path = row.get("parent_path") or row.get("path")
+        parent_blob_url = row.get("parent_blob_url") or row.get("blob_url")
+        by_parent[parent_id] = {
+            "id": parent_id,
+            "parent_path": parent_path,
+            "parent_blob_url": parent_blob_url,
+            "lat": row.get("lat"),
+            "lng": row.get("lng"),
+            "ts": row.get("ts"),
+        }
+    return list(by_parent.values())
+
+
 async def generate_caption(
     cluster_id: str,
     centroid: np.ndarray,
     children: list[dict],
 ) -> dict | None:
-    """Run the full Gemini caption track. Returns dict on success, None on failure.
+    """Backward-compat shim. Routes through the two-stage evidence + intent pipeline.
 
-    children: list of dicts, each with keys: id, parent_path, start_offset_sec,
-              end_offset_sec, lat, lng, ts, vec (np.ndarray or None).
-    centroid: parent-scope cluster centroid (unit vector).
+    Quick task 260501-bet replaces the prior single-Gemini-call-on-stitched-
+    composite pipeline with:
+      Stage 1: per-parent extract_evidence_for_parent (Gemini, structured JSON)
+      Stage 2: synthesize_intent (Claude, cluster-level reasoning)
+
+    The legacy {title, caption, location, source: "vision"} contract at the
+    top level is preserved verbatim so compile.py:_branch_caption + the
+    discriminator at compile.py:611 keep working unchanged. New keys
+    `evidence` (list[dict]) and `intent` (dict) are added so the segment
+    row write at compile.py:692-701 can persist them.
+
+    children: list of dicts as returned by fetch_cluster_clips_with_children.
+              Both parent rows and child rows are present; the shim collapses
+              to unique parents. centroid is now unused (the legacy
+              centroid-closest selection logic was for the single-composite
+              path; the two-stage pipeline runs on every parent).
     """
+    # Compute location from children's GPS centroid (same fallback as legacy path).
     lats = [c["lat"] for c in children if c.get("lat") is not None]
     lngs = [c["lng"] for c in children if c.get("lng") is not None]
     if lats and lngs:
@@ -338,177 +1104,9 @@ async def generate_caption(
     else:
         location = "Pasadena, CA"
 
-    if not config.GEMINI_API_KEY:
-        log.warning("generate_caption: GEMINI_API_KEY not set — skipping Gemini track")
+    parents = _resolve_parents_from_children(children)
+    if not parents:
+        log.warning("generate_caption: no parents resolvable for cluster %s", cluster_id)
         return None
 
-    selected = _select_caption_children(children, centroid, n=3)
-    if not selected:
-        log.warning("generate_caption: no children with vectors for cluster %s", cluster_id)
-        return None
-
-    stitch_refs = _build_stitch_refs(selected)
-    if not stitch_refs:
-        log.warning("generate_caption: no stitchable refs for cluster %s", cluster_id)
-        return None
-
-    config.DATA_DIR.mkdir(parents=True, exist_ok=True)
-    composite_path = config.DATA_DIR / "clips" / f"{cluster_id}_caption_input.mp4"
-    composite_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # Phase 10: Blob-mode refs carry HTTPS URLs that ffmpeg's `_sync_stitch`
-    # can't ingest directly (private blobs require Authorization headers, and
-    # the sync path doesn't pass them). Pre-download to a tempdir and rewrite
-    # refs to local paths before calling stitch_clips. Local-mode refs pass
-    # through unchanged. Mirrors compile.py:_download_refs_to_tempdir; kept
-    # local here to avoid the compile↔caption_pipeline import cycle.
-    needs_download = any(r["path"].startswith("http") for r in stitch_refs)
-    import tempfile
-    tmpdir_ctx = tempfile.TemporaryDirectory() if needs_download else None
-    try:
-        if needs_download and tmpdir_ctx is not None:
-            from ..storage import blob_client
-            tmpdir = tmpdir_ctx.name
-
-            async def _dl_one(ref: dict, idx: int) -> dict:
-                src_url = ref["path"]
-                if not src_url.startswith("http"):
-                    return ref
-                local = f"{tmpdir}/cap-src-{idx}.mp4"
-                client = blob_client.get_client()
-                headers = ref.get("headers") or {}
-                async with client.stream("GET", src_url, headers=headers) as resp:
-                    resp.raise_for_status()
-                    with open(local, "wb") as f:
-                        async for chunk in resp.aiter_bytes(chunk_size=64 * 1024):
-                            f.write(chunk)
-                return {**ref, "path": local, "headers": None}
-
-            stitch_refs = await asyncio.gather(
-                *[_dl_one(r, i) for i, r in enumerate(stitch_refs)]
-            )
-
-        try:
-            stitched = await stitch_clips(stitch_refs, str(composite_path))
-            # CRITICAL: stitch_clips returns clip_refs[0]["path"] (a SOURCE FILE) on failure.
-            # We must only proceed when stitched == composite_path; otherwise our finally
-            # block would unlink the user's original recording. See the data-loss bug
-            # documented in the cleanup section below.
-            if stitched != str(composite_path) or not Path(composite_path).exists():
-                log.warning(
-                    "generate_caption: stitch did not produce composite at %s (got %r) — skipping Gemini",
-                    composite_path, stitched,
-                )
-                return None
-        except Exception:
-            log.exception("generate_caption: stitch failed for cluster %s", cluster_id)
-            return None
-    finally:
-        if tmpdir_ctx is not None:
-            tmpdir_ctx.cleanup()
-
-    ts = selected[0].get("ts")
-    when_iso = (
-        datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%b %-d, %Y")
-        if ts else
-        datetime.now(tz=timezone.utc).strftime("%b %-d, %Y")
-    )
-
-    user_prompt = (
-        f"Date: {when_iso}\n"
-        f"Location: {location}\n\n"
-        f"Write the title, caption, and location for this footage. "
-        f"Use the location string above verbatim."
-    )
-
-    try:
-        from google import genai
-        from google.genai import types
-
-        # Set a transport-layer HTTP timeout on the client so a slow Gemini call
-        # actually aborts the underlying request, not just the asyncio future.
-        # Without this, asyncio.wait_for cancels the future but the executor
-        # thread keeps blocking on the socket until the SDK default (>>300s)
-        # eventually returns. See .planning/debug/compile-timeout-300s.md.
-        client = genai.Client(
-            api_key=config.GEMINI_API_KEY,
-            http_options=types.HttpOptions(timeout=120_000),  # ms
-        )
-
-        # 1. Upload (sync SDK call wrapped in executor)
-        loop = asyncio.get_running_loop()
-        uploaded = await asyncio.wait_for(
-            loop.run_in_executor(None, lambda: client.files.upload(file=stitched)),
-            timeout=30.0,
-        )
-
-        # 2. Poll until ACTIVE
-        for _ in range(30):  # ~30s ceiling
-            if uploaded.state.name == "ACTIVE":
-                break
-            await asyncio.sleep(1)
-            uploaded = await loop.run_in_executor(
-                None, lambda: client.files.get(name=uploaded.name)
-            )
-        if uploaded.state.name != "ACTIVE":
-            log.warning(
-                "generate_caption: file did not reach ACTIVE state cluster_id=%s state=%s",
-                cluster_id, uploaded.state.name,
-            )
-            return None
-
-        # 3. Generate content with system prompt + structured JSON.
-        # Inner asyncio.wait_for is belt-and-suspenders alongside the SDK's
-        # HttpOptions(timeout=120_000) — if HTTP doesn't abort, asyncio at
-        # least surfaces the failure in time for the outer 300s budget.
-        response = await asyncio.wait_for(
-            loop.run_in_executor(
-                None,
-                lambda: client.models.generate_content(
-                    model=config.GEMINI_MODEL,
-                    contents=[uploaded, user_prompt],
-                    config=types.GenerateContentConfig(
-                        system_instruction=SYSTEM_PROMPT,
-                        temperature=0.2,
-                        response_mime_type="application/json",
-                        response_schema=RESPONSE_SCHEMA,
-                    ),
-                ),
-            ),
-            timeout=125.0,
-        )
-
-        # 4. Parse + Layer 2 sanitize (forbidden words, length cap, dup detection)
-        parsed = json.loads(response.text)
-        if not all(k in parsed for k in ("title", "caption", "location")):
-            log.warning("generate_caption: missing required keys in JSON: %s", parsed)
-            return None
-        parsed = _sanitize_output(parsed, location)
-
-        log.info(
-            "generate_caption ok cluster_id=%s title=%r caption_len=%d",
-            cluster_id, parsed.get("title"), len(parsed.get("caption", "")),
-        )
-
-        # 5. Cleanup uploaded file (best-effort)
-        try:
-            await loop.run_in_executor(None, lambda: client.files.delete(name=uploaded.name))
-        except Exception as e:
-            log.warning("generate_caption: file cleanup failed: %s", e)
-
-        # NOTE: must be "vision" (not "gemini") to satisfy compile.py's discriminator
-        # at line 404 — `if b_result.get("source") == "vision"`. Backward-compat
-        # with the prior Anthropic-based pipeline that used the same gate.
-        return {**parsed, "source": "vision"}
-
-    except Exception:
-        log.exception("generate_caption: Gemini call failed cluster_id=%s", cluster_id)
-        return None
-    finally:
-        # Remove ONLY the composite we wrote — never `stitched`, which could be a
-        # fallback to a user's source recording (stitch_clips returns clip_refs[0]
-        # ["path"] on failure). Deleting that path destroys their original upload.
-        try:
-            composite_path.unlink(missing_ok=True)
-        except Exception:
-            pass
+    return await run_evidence_to_intent_pipeline(cluster_id, parents, location)
