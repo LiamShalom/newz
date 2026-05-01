@@ -121,7 +121,6 @@ export function Montage() {
                     ref={videoRef}
                     key={currentUrl}
                     src={currentUrl}
-                    muted
                     playsInline
                     controls
                     preload="auto"

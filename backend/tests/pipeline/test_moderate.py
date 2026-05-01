@@ -56,6 +56,9 @@ def patched_moderate(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "test-key-not-real")
     monkeypatch.setenv("GEMINI_MODERATION_MODEL", "gemini-2.5-flash-lite")
     monkeypatch.setenv("MODERATION_MAX_BUDGET_S", "20.0")
+    # Default the pilot fail-open knob explicitly so tests are unambiguous about
+    # which Branch A behaviour they expect. Individual tests can override.
+    monkeypatch.setenv("MODERATION_FAIL_OPEN_ON_CLASSIFIER_TIMEOUT", "true")
 
     # Reload config so the test's env vars are visible to moderate.
     import importlib
@@ -343,11 +346,23 @@ async def test_moderate_soft_flag_violence(patched_moderate):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_moderate_cancel_when_embed_finishes_first(patched_moderate):
-    """D-03 cancel-when-embed-finishes: embed completes, gemini still pending →
-    decision='blocked' reason='classifier_timeout' (Branch A in moderate._moderate_real).
-    Uses asyncio.Event for deterministic ordering — no real timing dependence."""
+async def test_moderate_cancel_when_embed_finishes_first_fail_open(patched_moderate):
+    """Phase 11 amendment 2026-04-30 (debug session moderation-classifier-timeout):
+    Branch A under the pilot-default MODERATION_FAIL_OPEN_ON_CLASSIFIER_TIMEOUT=true
+    routes embed-wins-first to decision='passed' reason='classifier_timeout_fail_open'.
+
+    The clip is preserved (no cleanup_blocked_clip), the audit row records the
+    fail-open decision, and ModerationResult.embed_result carries the parent
+    embedding through to run_pipeline so clustering/compile can proceed.
+
+    Uses asyncio.Event for deterministic ordering — no real timing dependence.
+    """
     pm = patched_moderate
+
+    # Belt-and-suspenders: explicitly verify the pilot default is in effect.
+    assert pm.mod.config.MODERATION_FAIL_OPEN_ON_CLASSIFIER_TIMEOUT is True, (
+        "fixture default sets the env var to true; reload may have missed it"
+    )
 
     embed_finished = asyncio.Event()
 
@@ -368,19 +383,81 @@ async def test_moderate_cancel_when_embed_finishes_first(patched_moderate):
 
     result = await pm.mod.moderate_clip("clip_abc")
 
-    assert result.decision == "blocked"
-    assert result.reason == "classifier_timeout", (
-        f"expected classifier_timeout (Branch A), got {result.reason!r}"
+    # Pilot fail-open: clip survives, classifier-timeout is the audit reason.
+    assert result.decision == "passed", (
+        f"pilot default should fail-open on classifier timeout; got {result.decision!r}"
+    )
+    assert result.reason == "classifier_timeout_fail_open", (
+        f"expected classifier_timeout_fail_open, got {result.reason!r}"
+    )
+    # embed_result preserved → run_pipeline can proceed to cluster_worker.
+    assert result.embed_result is not None, (
+        "Branch A fail-open must preserve embed_result so cluster/compile can run"
     )
 
-    # Audit row records the cancel.
+    # Audit row records the fail-open.
+    kwargs = pm.write_moderation_decision.await_args.kwargs
+    assert kwargs["decision"] == "passed"
+    assert kwargs["reason"] == "classifier_timeout_fail_open"
+
+    # CRITICAL: cleanup MUST NOT run on the fail-open path. The blob is preserved.
+    pm.cleanup_blocked_clip.assert_not_awaited()
+    pm.write_reported_csam.assert_not_awaited()
+    # set_clip_hidden runs only for decision='unknown' — fail-open is 'passed'.
+    pm.set_clip_hidden.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_moderate_cancel_when_embed_finishes_strict_mode(patched_moderate, monkeypatch):
+    """Strict mode (post-pilot): MODERATION_FAIL_OPEN_ON_CLASSIFIER_TIMEOUT=false
+    restores the original D-03 cancel-when-embed-finishes posture — Branch A
+    routes to decision='blocked' reason='classifier_timeout' and cleanup runs.
+
+    This is the legacy contract for when the classifier becomes reliable enough
+    that timeouts represent genuine pathology and the admin queue is the right
+    next step, not silent fail-open.
+    """
+    pm = patched_moderate
+
+    # Override the fixture default and reload config.
+    monkeypatch.setenv("MODERATION_FAIL_OPEN_ON_CLASSIFIER_TIMEOUT", "false")
+    import importlib
+    import backend.config
+    importlib.reload(backend.config)
+    # The reload swaps the module config object out from under moderate.py, so
+    # rebind the cleanup mock too — moderate looks up cleanup at call time via
+    # the module-level import, which is unaffected; only `config.*` lookups
+    # see the new value.
+    assert backend.config.MODERATION_FAIL_OPEN_ON_CLASSIFIER_TIMEOUT is False
+
+    embed_finished = asyncio.Event()
+
+    async def _fast_embed(clip_id: str):
+        embed_finished.set()
+        import numpy as np
+        return (clip_id, np.zeros(512, dtype="float32"))
+
+    async def _slow_gemini(clip_local_path: str):
+        await embed_finished.wait()
+        await asyncio.sleep(60)
+
+    pm.embed_worker.side_effect = _fast_embed
+    pm.gemini_classify.side_effect = _slow_gemini
+
+    result = await pm.mod.moderate_clip("clip_abc")
+
+    # Strict mode: legacy hard-block.
+    assert result.decision == "blocked"
+    assert result.reason == "classifier_timeout", (
+        f"strict mode must use legacy reason classifier_timeout; got {result.reason!r}"
+    )
+
     kwargs = pm.write_moderation_decision.await_args.kwargs
     assert kwargs["decision"] == "blocked"
     assert kwargs["reason"] == "classifier_timeout"
 
-    # Branch A: cleanup runs on every hard-block (idempotent).
+    # Strict mode: cleanup runs on every hard-block (idempotent).
     pm.cleanup_blocked_clip.assert_awaited_once_with("clip_abc")
-    # csam-specific reported_csam preservation does NOT fire on a timeout block.
     pm.write_reported_csam.assert_not_awaited()
 
 
@@ -391,7 +468,13 @@ async def test_moderate_cancel_when_embed_finishes_first(patched_moderate):
 @pytest.mark.parametrize(
     "exc_factory, expected_decision, expected_reason_prefix",
     [
-        (lambda: asyncio.TimeoutError("classifier hung"), "blocked", "classifier_timeout"),
+        # asyncio.TimeoutError under the pilot fail-open default routes to
+        # decision='passed' reason='classifier_timeout_fail_open'. The strict
+        # path is covered by test_moderate_classify_exception_timeout_strict_mode.
+        (
+            lambda: asyncio.TimeoutError("classifier hung"),
+            "passed", "classifier_timeout_fail_open",
+        ),
         (
             lambda: httpx.HTTPStatusError(
                 "400 bad", request=httpx.Request("POST", "https://x"),
@@ -411,14 +494,14 @@ async def test_moderate_cancel_when_embed_finishes_first(patched_moderate):
             "unknown", "classifier_network_error",
         ),
     ],
-    ids=["timeout-blocked", "4xx-blocked", "5xx-unknown", "connect-error-unknown"],
+    ids=["timeout-fail-open", "4xx-blocked", "5xx-unknown", "connect-error-unknown"],
 )
 @pytest.mark.asyncio
 async def test_moderate_failure_tier_classification(
     patched_moderate, exc_factory, expected_decision, expected_reason_prefix,
 ):
-    """D-05 typed-exception ladder: TimeoutError + 4xx → blocked;
-    5xx + ConnectError → unknown."""
+    """D-05 typed-exception ladder under pilot fail-open default:
+    TimeoutError → passed (fail-open); 4xx → blocked; 5xx + ConnectError → unknown."""
     pm = patched_moderate
 
     async def _raise_exc(clip_local_path: str):
@@ -440,13 +523,49 @@ async def test_moderate_failure_tier_classification(
     assert kwargs["decision"] == expected_decision
     assert kwargs["reason"] == expected_reason_prefix
 
-    # Side-effect routing: blocked → cleanup; unknown → set_clip_hidden.
+    # Side-effect routing: blocked → cleanup; unknown → set_clip_hidden;
+    # passed (incl. fail-open) → neither.
     if expected_decision == "blocked":
         pm.cleanup_blocked_clip.assert_awaited()
         pm.set_clip_hidden.assert_not_awaited()
-    else:
+    elif expected_decision == "unknown":
         pm.set_clip_hidden.assert_awaited()
         pm.cleanup_blocked_clip.assert_not_awaited()
+    else:
+        # passed (fail-open): clip preserved, no side-effect cleanup.
+        pm.cleanup_blocked_clip.assert_not_awaited()
+        pm.set_clip_hidden.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_moderate_classify_exception_timeout_strict_mode(patched_moderate, monkeypatch):
+    """Strict mode regression: when MODERATION_FAIL_OPEN_ON_CLASSIFIER_TIMEOUT=false,
+    a Gemini-side asyncio.TimeoutError (Branch B path) routes to decision='blocked'
+    reason='classifier_timeout' per the original D-05 typed-exception ladder.
+
+    Different code path from Branch A (cancel-when-embed-finishes): here the
+    gemini_task itself raises TimeoutError from its inner asyncio.wait_for(),
+    so the outer race sees gemini-done-with-exception and routes via
+    _classify_exception. Both paths must respect the same fail-open knob.
+    """
+    pm = patched_moderate
+
+    monkeypatch.setenv("MODERATION_FAIL_OPEN_ON_CLASSIFIER_TIMEOUT", "false")
+    import importlib
+    import backend.config
+    importlib.reload(backend.config)
+    assert backend.config.MODERATION_FAIL_OPEN_ON_CLASSIFIER_TIMEOUT is False
+
+    async def _raise_timeout(clip_local_path: str):
+        raise asyncio.TimeoutError("classifier hung")
+
+    pm.gemini_classify.side_effect = _raise_timeout
+
+    result = await pm.mod.moderate_clip("clip_abc")
+
+    assert result.decision == "blocked"
+    assert result.reason == "classifier_timeout"
+    pm.cleanup_blocked_clip.assert_awaited()
 
 
 # ---------------------------------------------------------------------------

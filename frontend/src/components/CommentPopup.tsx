@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { X } from "lucide-react";
+import { X, Volume2, VolumeX } from "lucide-react";
 import { fetchComments } from "../api";
 import { subscribeToCommentsFor } from "../commentsBus";
+import { useMuted } from "../muteBus";
 import type { Comment } from "../types";
 import { CommentList } from "./CommentList";
 import { CommentComposer } from "./CommentComposer";
@@ -34,6 +35,22 @@ export function CommentPopup({
   const [angleIdx, setAngleIdx] = useState(0);
   const currentUrl = urls[angleIdx] ?? null;
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [muted, setMuted] = useMuted();
+
+  const toggleMute = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      const next = !muted;
+      setMuted(next);
+      const el = videoRef.current;
+      if (el && !next) {
+        el.muted = false;
+        const p = el.play();
+        if (p && typeof p.catch === "function") p.catch(() => {});
+      }
+    },
+    [muted, setMuted],
+  );
 
   const handleEnded = useCallback(() => {
     if (!hasMultiple) return;
@@ -120,7 +137,7 @@ export function CommentPopup({
               ref={videoRef}
               key={currentUrl}
               src={currentUrl}
-              muted
+              muted={muted}
               playsInline
               preload="auto"
               onEnded={handleEnded}
@@ -130,6 +147,22 @@ export function CommentPopup({
             <div className="absolute inset-0 grid place-items-center text-sm text-ink-secondary">
               video unavailable
             </div>
+          )}
+
+          {currentUrl && (
+            <button
+              type="button"
+              onClick={toggleMute}
+              aria-label={muted ? "unmute" : "mute"}
+              aria-pressed={!muted}
+              className="absolute bottom-3 right-3 z-20 grid h-9 w-9 place-items-center rounded-full bg-black/45 backdrop-blur-sm text-white"
+            >
+              {muted ? (
+                <VolumeX className="h-4 w-4" />
+              ) : (
+                <Volume2 className="h-4 w-4" />
+              )}
+            </button>
           )}
 
           {hasMultiple && (

@@ -23,7 +23,6 @@ export function RetakeScreen({ blob, submitting, onRetake, onSubmit }: Props) {
         src={url}
         autoPlay
         loop
-        muted
         playsInline
         className="absolute inset-0 w-full h-full object-contain"
       />

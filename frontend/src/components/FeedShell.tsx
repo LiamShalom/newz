@@ -5,12 +5,8 @@ import { useMostVisibleIndex } from "../hooks/useMostVisibleIndex";
 
 export function FeedShell({
   segments,
-  viewerLat,
-  viewerLng,
 }: {
   segments: (Segment & { url: string | null })[];
-  viewerLat?: number;
-  viewerLng?: number;
 }) {
   const itemRefs = useRef<(HTMLLIElement | null)[]>([]);
   const activeIdx = useMostVisibleIndex(itemRefs, segments.length);
@@ -33,8 +29,6 @@ export function FeedShell({
           >
             <SegmentCard
               segment={s}
-              viewerLat={viewerLat}
-              viewerLng={viewerLng}
               active={i === resolvedActive}
             />
           </li>
