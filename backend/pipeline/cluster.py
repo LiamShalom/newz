@@ -15,12 +15,16 @@ Module state:
 
 Math (locked by CLAUDE.md + CONTEXT D-04/D-05/D-06):
     composite = 0.55*cos + 0.30*gps + 0.15*time   (gps=0.0 when lat/lng unavailable)
-    threshold = config.CLUSTER_THRESHOLD          (env-tunable, default 0.55)
-    visual_floor = config.VISUAL_FLOOR            (env-tunable, default 0.80)
+    time = max(0, 1 - dt/14400)                   (4h linear decay; see TIME_WINDOW_S below)
+    threshold = config.CLUSTER_THRESHOLD          (env-tunable, default 0.82)
+    visual_floor = config.VISUAL_FLOOR            (env-tunable, default 0.85)
         Joining a cluster requires BOTH composite >= threshold AND visual >= visual_floor.
         Without the floor, GPS+time alone contribute 0.45 to composite (when both ideal),
         so any visual cosine > 0.18 would clear threshold — that fused adversarial clips
         and broke CLU-08. The floor makes "AI sees same scene" the dominant gate.
+        Threshold raised to 0.82 (from 0.70) alongside time-window stretch to 4h
+        (debug session clustering-false-positive-31h, 2026-05-01) so same-place-
+        different-day uploads can no longer ride visual+GPS alone over the bar.
     centroid update: Welford running mean (float64 intermediate), re-normalized to unit length, stored as float32
 """
 
@@ -42,7 +46,14 @@ W_VISUAL = 0.55
 W_GPS    = 0.30
 W_TIME   = 0.15
 GPS_RADIUS_M  = 50.0
-TIME_WINDOW_S = 600.0
+# 4h linear decay (debug session clustering-false-positive-31h, 2026-05-01).
+# Old 600s (10min) cliffed the time term to 0 past 10 minutes, so any same-place
+# upload across hours/days saw composite = 0.55*cos + 0.30*gps + 0 — visual+gps
+# alone could trivially clear the old 0.70 threshold even though "next day same
+# room" isn't the same event. 4h matches realistic local-news event durations
+# (rallies, fires, crowd reactions extending past initial flashpoint) while
+# decaying to 0 well before "next day". Tuned alongside CLUSTER_THRESHOLD 0.82.
+TIME_WINDOW_S = 14400.0
 
 
 @dataclass

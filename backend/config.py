@@ -18,7 +18,15 @@ GEMINI_API_KEY: str = os.environ.get("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL: str = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
 # Phase 3: Clustering
-CLUSTER_THRESHOLD: float = float(os.environ.get("CLUSTER_THRESHOLD", "0.70"))
+# Threshold raised 0.70 → 0.82 (debug session clustering-false-positive-31h, 2026-05-01)
+# alongside TIME_WINDOW_S 600s → 14400s (4h) in cluster.py. Old 0.70 with 10-min
+# time window let same-place-different-day uploads (Marengo cosine ~0.93 from
+# scene/place encoding alone) cross the gate at composite ~0.81 with time term
+# saturated to 0. New 0.82 + 4h decay: stale-time clusters require visual >=0.945
+# to rescue (visual+gps ceiling alone hits 0.85), and 31h same-place false
+# positives reject; same-day extended events (≤4h) still cluster as the time
+# term decays gracefully rather than cliffing at 10min.
+CLUSTER_THRESHOLD: float = float(os.environ.get("CLUSTER_THRESHOLD", "0.82"))
 VISUAL_FLOOR: float = float(os.environ.get("VISUAL_FLOOR", "0.85"))
 
 # Phase 4.6: Run detection (compile-time grouping of contiguous similar children)
@@ -94,6 +102,19 @@ MODERATION_MAX_BUDGET_S: float = float(os.environ.get("MODERATION_MAX_BUDGET_S",
 #   false-blocks essentially every benign upload.
 MODERATION_FAIL_OPEN_ON_CLASSIFIER_TIMEOUT: bool = (
     os.environ.get("MODERATION_FAIL_OPEN_ON_CLASSIFIER_TIMEOUT", "true").strip().lower() == "true"
+)
+
+# Quick task 260501-bet: structured evidence + cluster intent synthesis.
+# EVIDENCE_FAIL_OPEN_TO_LEGACY_PROSE: when True (pilot default), if the new
+# two-stage pipeline (per-parent Gemini evidence -> cluster Claude intent
+# synthesis) returns None, compile_segment falls back through the existing
+# `_save_fallback_segment` path (generic "Submitted footage from N
+# contributor(s)." caption). This produces a playable segment even when
+# Gemini/Claude calls fail. Set False post-pilot to fail-CLOSED on caption
+# pipeline errors (segment row still ships with the run-level video_url, but
+# title/caption stay empty rather than legacy prose).
+EVIDENCE_FAIL_OPEN_TO_LEGACY_PROSE: bool = (
+    os.environ.get("EVIDENCE_FAIL_OPEN_TO_LEGACY_PROSE", "true").strip().lower() == "true"
 )
 
 # Phase 14: Recompile gate
