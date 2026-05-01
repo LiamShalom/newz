@@ -27,6 +27,18 @@ so the cancel primitive false-blocked essentially every benign upload.
 Branch C `max_budget_exceeded` (>20s wall-clock pathology) remains
 fail-CLOSED regardless. Set the env var to False before public launch and
 audit the threat model + admin-queue capacity at that point.
+
+Phase 11 amendment 2026-05-01 — pilot bugfix #2: the entire `unknown` decision
+tier (5xx ServerError, network errors, response parse errors, unrecognized
+SDK exceptions, defense-in-depth catch-all) now routes through
+config.MODERATION_FAIL_OPEN_ON_CLASSIFIER_UNKNOWN. Default True. Two clips
+fdc9319f.../bfad57ff... were hidden in prod with reason=classifier_unknown_error
+because the typed-exception ladder didn't recognize the underlying exception
+(most likely TypeError on json.loads(None) when Gemini's safety filter returns
+no candidates). Per pilot policy "only confident verdicts moderate", anything
+that isn't a confident _route_verdict block now flows through. Diagnostic
+warning log added at the catch-all so future failures surface their type+msg
+instead of being silently dropped.
 """
 from __future__ import annotations
 
@@ -429,6 +441,24 @@ def _classifier_timeout_decision() -> tuple[str, str]:
     return ("blocked", "classifier_timeout")
 
 
+def _classifier_unknown_decision(reason: str) -> tuple[str, str]:
+    """Single source of truth for classifier-unknown-tier routing.
+
+    The "unknown" tier covers every classifier failure that doesn't yield a
+    confident _route_verdict block: 5xx ServerError, network errors, response
+    parse errors, unrecognized SDK exceptions, defense-in-depth catch-all.
+
+    Returns ('passed', f'{reason}_fail_open') when the pilot fail-open flag is
+    set (default), else ('unknown', reason) to preserve pre-fix behaviour for
+    post-pilot strict mode (clip hidden + queued for admin via Stage 8).
+
+    Phase 11 amendment 2026-05-01 — pilot bugfix #2. See module docstring.
+    """
+    if getattr(config, "MODERATION_FAIL_OPEN_ON_CLASSIFIER_UNKNOWN", False):
+        return ("passed", f"{reason}_fail_open")
+    return ("unknown", reason)
+
+
 def _classify_exception(exc: BaseException) -> tuple[str, str]:
     """D-05: typed-exception → (decision, reason).
 
@@ -464,7 +494,7 @@ def _classify_exception(exc: BaseException) -> tuple[str, str]:
             return ("blocked", f"classifier_4xx_{status}")
         if isinstance(exc, genai_errors.ServerError):
             status = getattr(exc, "code", 0) or 500
-            return ("unknown", f"classifier_5xx_{status}")
+            return _classifier_unknown_decision(f"classifier_5xx_{status}")
 
     if isinstance(exc, httpx.HTTPStatusError):
         # Forward-compat / direct-callsite path. Real Gemini SDK calls do NOT
@@ -474,13 +504,20 @@ def _classify_exception(exc: BaseException) -> tuple[str, str]:
         if 400 <= status < 500:
             return ("blocked", f"classifier_4xx_{status}")
         if 500 <= status < 600:
-            return ("unknown", f"classifier_5xx_{status}")
-        return ("unknown", "classifier_network_error")
+            return _classifier_unknown_decision(f"classifier_5xx_{status}")
+        return _classifier_unknown_decision("classifier_network_error")
     # ConnectError / ReadError both subclass TransportError; ConnectError check first
     # is purely cosmetic. The reason string is unified.
     if isinstance(exc, (httpx.ConnectError, httpx.ReadError, httpx.TransportError)):
-        return ("unknown", "classifier_network_error")
-    return ("unknown", "classifier_unknown_error")
+        return _classifier_unknown_decision("classifier_network_error")
+    # Catch-all: surface the actual exception type+message before routing — the
+    # pre-2026-05-01 silent drop made the `classifier_unknown_error` failures
+    # un-debuggable in prod.
+    log.warning(
+        "classifier raised unrecognized exception type=%s msg=%s",
+        type(exc).__name__, str(exc)[:200],
+    )
+    return _classifier_unknown_decision("classifier_unknown_error")
 
 
 async def _drain_task(task: asyncio.Task) -> None:
@@ -722,26 +759,32 @@ async def _moderate_real(clip_id: str) -> ModerationResult:
             soft_flag_categories=soft_flag_categories,
         )
     except Exception:
-        # Defense in depth: any unhandled error → decision='unknown' + hide clip.
+        # Defense in depth: any unhandled error in the moderate pipeline.
+        # Pre-2026-05-01: hard 'unknown' + hide clip. Post: routes through
+        # _classifier_unknown_decision so the pilot fail-open flag governs
+        # whether the clip is preserved or hidden. Strict mode preserves
+        # legacy behavior (hidden + queued for admin).
         log.exception("moderate _moderate_real unhandled exception clip_id=%s", clip_id)
         latency_ms = int((time.monotonic() - t0) * 1000)
+        fb_decision, fb_reason = _classifier_unknown_decision("classifier_unknown_error")
         try:
             await db.write_moderation_decision(
                 clip_id=clip_id,
                 provider="gemini_flash_lite",
-                decision="unknown",
-                reason="classifier_unknown_error",
+                decision=fb_decision,
+                reason=fb_reason,
                 raw_response=None,
                 latency_ms=latency_ms,
                 prompt_version=PROMPT_VERSION,
             )
-            await db.set_clip_hidden(clip_id, hidden=True)
+            if fb_decision == "unknown":
+                await db.set_clip_hidden(clip_id, hidden=True)
         except Exception:
             log.exception("moderate fallback decision write failed clip_id=%s", clip_id)
         return ModerationResult(
-            decision="unknown",
+            decision=fb_decision,  # type: ignore[arg-type]
             provider="gemini_flash_lite",
-            reason="classifier_unknown_error",
+            reason=fb_reason,
             latency_ms=latency_ms,
         )
     finally:
