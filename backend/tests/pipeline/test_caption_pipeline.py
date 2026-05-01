@@ -104,10 +104,10 @@ async def test_extract_evidence_for_parent_returns_schema_shape(monkeypatch, tmp
         def upload(self, file=None):
             return _FakeFile(active=True)
 
-        def get(self, name=None):
+        def get(self, name: str = "files/test"):
             return _FakeFile(name=name, active=True)
 
-        def delete(self, name=None):
+        def delete(self, name: str = "files/test"):
             return None
 
     class _FakeModels:

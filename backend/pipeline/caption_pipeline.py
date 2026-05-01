@@ -951,7 +951,9 @@ async def run_evidence_to_intent_pipeline(
 
     # Determine when_iso for the synthesis prompt. Use the earliest parent ts
     # available (matches the legacy single-call pipeline's date stamp).
-    ts_candidates = [p.get("ts") for p in parents if p.get("ts")]
+    ts_candidates: list[float] = [
+        float(t) for p in parents if (t := p.get("ts")) is not None
+    ]
     if ts_candidates:
         when_iso = datetime.fromtimestamp(min(ts_candidates), tz=timezone.utc).strftime("%b %-d, %Y")
     else:
