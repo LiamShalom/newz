@@ -98,6 +98,12 @@ Plan: Not started
 
 None blocking the active phase (`01-comments-and-sharing` ready to execute; Phase 10 backbone awaiting spike).
 
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260430-qya | SegmentCard eyebrow now shows `segment.location` instead of distance label | 2026-05-01 | 9b28e2b | [260430-qya-location-name-not-distance](./quick/260430-qya-location-name-not-distance/) |
+
 ### Documented Overrides
 
 - **2026-04-29 — Phase 11 plan-phase Decision Coverage Gate (step 13a) override.** Gate reported `0/29` D-NN IDs covered because the planner cited decisions inline (109 D-NN citations across 7 PLAN.md bodies) rather than in `must_haves` / `truths` YAML frontmatter. Plan-checker independently verified all 14 phase-specific checks pass, all 10 phase requirement IDs (MOD-01..08, MOD-10, PRIV-03) are covered, and the 2026-04-29 reconciliation header in CONTEXT.md explicitly supersedes 16 of the 29 decisions. Override rationale: tooling format mismatch, not a correctness gap. **verify-phase will re-surface this.** If verify-phase flags it as a real gap, batch-edit plan must_haves blocks to add D-NN citations OR tag superseded decisions as `[informational]` inline in CONTEXT.md.
