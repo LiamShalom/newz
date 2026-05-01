@@ -10,6 +10,7 @@ import { BottomTabBar } from "../components/BottomTabBar";
 import { EmptyState } from "../components/EmptyState";
 import { FeedShell } from "../components/FeedShell";
 import { Masthead } from "../components/Masthead";
+import { UploadProgressBar } from "../components/UploadProgressBar";
 
 export function Feed() {
   const [segments, setSegments] = useState<(Segment & { url: string | null })[]>([]);
@@ -67,6 +68,7 @@ export function Feed() {
   return (
     <>
       <Masthead />
+      <UploadProgressBar />
       {!loaded ? (
         <div className="min-h-[calc(100dvh-52px)]" />
       ) : segments.length === 0 ? (
