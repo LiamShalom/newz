@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import { MessageCircle } from "lucide-react";
+import { MessageCircle, Volume2, VolumeX } from "lucide-react";
+import { useMuted } from "../muteBus";
 
 /** Phosphor `share-fat` (regular weight). Single closed-shape outline with
  *  a curved stem and a wide arrowhead — the icon Roan handed off as the
@@ -50,6 +51,27 @@ export function SegmentCard({
   const [angleIdx, setAngleIdx] = useState(0);
   const currentUrl = hasMultiple ? urls[angleIdx] : segment.url;
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [muted, setMuted] = useMuted();
+
+  const toggleMute = useCallback(
+    (e: React.MouseEvent) => {
+      // Stop the click from bubbling into the multi-angle nav buttons that
+      // sit beneath this overlay.
+      e.stopPropagation();
+      const next = !muted;
+      setMuted(next);
+      // Defensive: this click is a fresh user gesture. If we're unmuting,
+      // also kick play() on the active card — iOS sometimes pauses videos
+      // it had been autoplay-muting once a property changes.
+      const el = videoRef.current;
+      if (el && !next) {
+        el.muted = false;
+        const p = el.play();
+        if (p && typeof p.catch === "function") p.catch(() => {});
+      }
+    },
+    [muted, setMuted],
+  );
 
   const handleEnded = useCallback(() => {
     if (!hasMultiple) return;
@@ -125,7 +147,7 @@ export function SegmentCard({
             ref={videoRef}
             key={currentUrl}
             src={currentUrl}
-            muted
+            muted={muted}
             playsInline
             preload={active ? "auto" : "metadata"}
             onEnded={handleEnded}
@@ -185,6 +207,22 @@ export function SegmentCard({
         <div className="absolute bottom-3 dark:bottom-14 left-4 z-10">
           <LivePill />
         </div>
+
+        {currentUrl && (
+          <button
+            type="button"
+            onClick={toggleMute}
+            aria-label={muted ? "unmute" : "mute"}
+            aria-pressed={!muted}
+            className="absolute bottom-3 dark:bottom-14 right-4 z-20 grid h-9 w-9 place-items-center rounded-full bg-black/45 backdrop-blur-sm text-white"
+          >
+            {muted ? (
+              <VolumeX className="h-4 w-4" />
+            ) : (
+              <Volume2 className="h-4 w-4" />
+            )}
+          </button>
+        )}
       </div>
 
       <h2
