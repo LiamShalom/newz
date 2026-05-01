@@ -73,6 +73,28 @@ GEMINI_MODERATION_MODEL: str = os.environ.get("GEMINI_MODERATION_MODEL", "gemini
 #   Cancel-when-embed-finishes is the typical primitive (Marengo's elapsed time
 #   bounds Gemini); this is the safety floor when both tasks exceed Marengo p99.
 MODERATION_MAX_BUDGET_S: float = float(os.environ.get("MODERATION_MAX_BUDGET_S", "20.0"))
+# MODERATION_FAIL_OPEN_ON_CLASSIFIER_TIMEOUT (Phase 11 amendment 2026-04-30 — pilot bugfix):
+#   When True (pilot default), classifier timeouts route to decision='passed' with
+#   reason='classifier_timeout_fail_open'. The blob is preserved, no cleanup runs,
+#   the clip flows through to clustering / compile. Per CLAUDE.md "Reliability over
+#   polish for the pilot" + the post-reconciliation Phase 11 already deferring real
+#   CSAM hash vendor + NCMEC reporting to post-pilot, the pilot threat surface is
+#   demo-audience uploads (water bottles), not adversarial CSAM injection. Branch C
+#   `max_budget_exceeded` (>20s wall-clock pathology) remains fail-CLOSED regardless.
+#
+#   Set False before public launch — at that point the classifier MUST be reliable
+#   enough that timeouts represent genuine pathology, and any false-blocks should
+#   route to the Phase 12 admin queue (or, better: a real hash vendor pre-screen
+#   that doesn't depend on the classifier path at all).
+#
+#   Why this knob exists: cancel-when-embed-finishes (D-03) assumed Gemini Flash-Lite
+#   p50 < Marengo p50 on the actual corpus. Production Railway logs (2026-05-01)
+#   show the opposite: embed completes in 1.6-1.9s; Gemini files.upload + ACTIVE
+#   poll + generateContent routinely exceeds 3s, so the cancel primitive
+#   false-blocks essentially every benign upload.
+MODERATION_FAIL_OPEN_ON_CLASSIFIER_TIMEOUT: bool = (
+    os.environ.get("MODERATION_FAIL_OPEN_ON_CLASSIFIER_TIMEOUT", "true").strip().lower() == "true"
+)
 
 # Phase 14: Recompile gate
 # RECOMPILE_DEBOUNCE_S: cooldown window after a compile completes during which

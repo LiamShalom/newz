@@ -17,6 +17,16 @@ Cloudflare CSAM hash dispatcher, no CSAM_PROVIDER env var, no httpx singleton.
 The csam category in the locked Gemini taxonomy is the operative CSAM detection
 signal; on hit, we write a reported_csam preservation row (SHA-256 of clip bytes,
 1-year retention per 2024 REPORT Act) and call cleanup_blocked_clip(clip_id).
+
+Phase 11 amendment 2026-04-30 — pilot bugfix (debug session
+moderation-classifier-timeout): cancel-when-embed-finishes (Branch A) and
+classifier asyncio.TimeoutError now consult
+config.MODERATION_FAIL_OPEN_ON_CLASSIFIER_TIMEOUT. Default is True for the
+pilot — Gemini Flash-Lite production latency exceeds Marengo p50 routinely,
+so the cancel primitive false-blocked essentially every benign upload.
+Branch C `max_budget_exceeded` (>20s wall-clock pathology) remains
+fail-CLOSED regardless. Set the env var to False before public launch and
+audit the threat model + admin-queue capacity at that point.
 """
 from __future__ import annotations
 
@@ -400,10 +410,31 @@ def _route_verdict(parsed: dict) -> tuple[str, str | None, list[str]]:
     return ("passed", None, [])
 
 
+def _classifier_timeout_decision() -> tuple[str, str]:
+    """Single source of truth for classifier-timeout routing.
+
+    Returns ('passed', 'classifier_timeout_fail_open') when the pilot fail-open
+    flag is set (default), else ('blocked', 'classifier_timeout') to preserve
+    pre-fix behaviour for post-pilot strict mode.
+
+    Used by:
+      - Branch A in _moderate_real (cancel-when-embed-finishes path)
+      - _classify_exception(asyncio.TimeoutError) (Branch B path where the
+        gemini_task itself raised TimeoutError from its inner wait_for)
+
+    Phase 11 amendment 2026-04-30 — pilot bugfix. See module docstring.
+    """
+    if getattr(config, "MODERATION_FAIL_OPEN_ON_CLASSIFIER_TIMEOUT", False):
+        return ("passed", "classifier_timeout_fail_open")
+    return ("blocked", "classifier_timeout")
+
+
 def _classify_exception(exc: BaseException) -> tuple[str, str]:
     """D-05: typed-exception → (decision, reason).
 
-    asyncio.TimeoutError + 4xx → 'blocked'
+    asyncio.TimeoutError → routed via _classifier_timeout_decision (pilot
+    fail-open default; see Phase 11 amendment 2026-04-30 in module docstring).
+    4xx → 'blocked'
     5xx + httpx.ConnectError + httpx.ReadError + httpx.TransportError → 'unknown'
     Anything else → 'unknown' (defense-in-depth).
 
@@ -414,7 +445,7 @@ def _classify_exception(exc: BaseException) -> tuple[str, str]:
     expose `code` (an int HTTP status) — see google/genai/errors.py.
     """
     if isinstance(exc, asyncio.TimeoutError):
-        return ("blocked", "classifier_timeout")
+        return _classifier_timeout_decision()
 
     # google.genai SDK errors — local import keeps this module load-safe under
     # OFFLINE_DEMO (no genai dep needed in that branch). Defensive: if the
@@ -498,6 +529,10 @@ async def _moderate_real(clip_id: str) -> ModerationResult:
          clip doesn't surface in the feed while Plan 05 short-circuits clustering.
       9. On passed: ModerationResult includes embed_result for Plan 05 to use.
 
+    Branch A (embed-wins-first) routes via _classifier_timeout_decision so the
+    pilot fail-open flag governs whether the clip is preserved. See module
+    docstring for the Phase 11 amendment 2026-04-30.
+
     Defense-in-depth: any unhandled exception falls through to decision='unknown'.
     """
     from pathlib import Path
@@ -521,7 +556,7 @@ async def _moderate_real(clip_id: str) -> ModerationResult:
         gemini_task = asyncio.create_task(_gemini_classify(clip_local_path))
 
         # ----- Stage 3: race them with outer cap -----
-        done, pending = await asyncio.wait(
+        done, _ = await asyncio.wait(
             {embed_task, gemini_task},
             return_when=asyncio.FIRST_COMPLETED,
             timeout=config.MODERATION_MAX_BUDGET_S,
@@ -536,6 +571,10 @@ async def _moderate_real(clip_id: str) -> ModerationResult:
         # ----- Stage 4: branch on race outcome -----
         if not done:
             # Branch C — wait timed out, both still pending.
+            # >20s wall-clock pathology: stays fail-CLOSED regardless of the
+            # MODERATION_FAIL_OPEN_ON_CLASSIFIER_TIMEOUT flag. A run that
+            # exceeds the absolute budget is genuine pathology (network outage,
+            # Gemini control-plane stall) and should not silently fail-open.
             await _drain_task(embed_task)
             await _drain_task(gemini_task)
             decision = "blocked"
@@ -547,14 +586,26 @@ async def _moderate_real(clip_id: str) -> ModerationResult:
             )
         elif embed_task in done and gemini_task not in done:
             # Branch A — embed finished first; gemini still pending.
-            # Cancel-when-embed-finishes (D-03) → classifier_timeout.
+            # Pre-fix (D-03 verbatim): hard-block with reason='classifier_timeout'.
+            # Post-fix (Phase 11 amendment 2026-04-30): consult the pilot
+            # fail-open flag. Default routes to decision='passed' with reason
+            # 'classifier_timeout_fail_open' so the blob is preserved and the
+            # clip flows through to clustering/compile. Set the env var to False
+            # before public launch to restore the strict cancel-when-embed-finishes
+            # behaviour.
             try:
                 embed_result = embed_task.result()
             except BaseException:
                 embed_result = None
             await _drain_task(gemini_task)
-            decision = "blocked"
-            reason = "classifier_timeout"
+            decision, reason = _classifier_timeout_decision()
+            if decision == "passed":
+                log.warning(
+                    "moderate gate fail-open clip_id=%s reason=%s — "
+                    "Gemini classifier did not return before Marengo embed; "
+                    "clip preserved per MODERATION_FAIL_OPEN_ON_CLASSIFIER_TIMEOUT=true",
+                    clip_id, reason,
+                )
         else:
             # Branch B — gemini finished first (with or without embed already done).
             # Drain embed: re-await it to get the real result if not done; if it's
@@ -585,6 +636,13 @@ async def _moderate_real(clip_id: str) -> ModerationResult:
             gemini_exc = gemini_task.exception()
             if gemini_exc is not None:
                 decision, reason = _classify_exception(gemini_exc)
+                if isinstance(gemini_exc, asyncio.TimeoutError) and decision == "passed":
+                    log.warning(
+                        "moderate gate fail-open clip_id=%s reason=%s — "
+                        "Gemini classifier raised TimeoutError; clip preserved per "
+                        "MODERATION_FAIL_OPEN_ON_CLASSIFIER_TIMEOUT=true",
+                        clip_id, reason,
+                    )
             else:
                 parsed = gemini_task.result()
                 raw_response = parsed
