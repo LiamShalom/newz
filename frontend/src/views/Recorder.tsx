@@ -19,6 +19,7 @@ import {
 } from "../lib/getPositionWithTimeout";
 import { postClip } from "../api";
 import { enqueue } from "../uploadQueue";
+import { setUploadStatus } from "../uploadStatusBus";
 
 /**
  * Phase 1 capture loop state machine. Phases:
@@ -245,39 +246,45 @@ export function Recorder() {
       return;
     }
 
-    setPhase({
-      kind: "submitting",
-      blob: phase.blob,
-      mimeType: phase.mimeType,
-    });
-    const filename = `clip.${phase.mimeType.includes("mp4") ? "mp4" : "webm"}`;
+    // Capture upload args into local consts BEFORE navigate so the detached
+    // closure doesn't read stale React state after this component unmounts.
+    const blob = phase.blob;
+    const mimeType = phase.mimeType;
+    const filename = `clip.${mimeType.includes("mp4") ? "mp4" : "webm"}`;
     const ts = Date.now() / 1000;
+    const lat = pos.lat;
+    const lng = pos.lng;
 
-    try {
-      await postClip({
-        blob: phase.blob,
-        filename,
-        lat: pos.lat,
-        lng: pos.lng,
-        ts,
-      });
-      navigate("/feed");
-    } catch (err) {
-      // Visibility for the silent-success class of bug (debug session
-      // phone-upload-no-railway-logs): without this log, a misconfigured
-      // VITE_API_BASE / down backend / CORS-block looks like success in the UI.
-      console.error("[recorder] postClip failed; enqueuing locally:", err);
-      // Network / 5xx — CAP-09 enqueue. 4xx would also land here; uploadQueue.flush
-      // drops 4xx as permanent on the next visit, so this is safe.
-      await enqueue({
-        blob: phase.blob,
-        mimeType: phase.mimeType,
-        lat: pos.lat,
-        lng: pos.lng,
-        ts,
-      });
-      navigate("/feed");
-    }
+    // Optimistic-navigate: surface uploading state on the bus, then navigate
+    // immediately, then run the upload as a detached promise. The user sees
+    // the feed in the same gesture frame; the bar at the top of the feed
+    // shows progress (indeterminate) until success/error.
+    setUploadStatus({ kind: "uploading" });
+    navigate("/feed");
+
+    void (async () => {
+      try {
+        await postClip({ blob, filename, lat, lng, ts });
+        setUploadStatus({ kind: "idle" });
+      } catch (err) {
+        // Visibility for the silent-success class of bug (debug session
+        // phone-upload-no-railway-logs): without this log, a misconfigured
+        // VITE_API_BASE / down backend / CORS-block looks like success in the UI.
+        console.error("[recorder] postClip failed; enqueuing locally:", err);
+        try {
+          // Network / 5xx — CAP-09 enqueue. 4xx would also land here;
+          // uploadQueue.flush drops 4xx as permanent on the next visit, so
+          // this is safe.
+          await enqueue({ blob, mimeType, lat, lng, ts });
+          setUploadStatus({
+            kind: "error",
+            message: "Upload queued — will retry",
+          });
+        } catch {
+          setUploadStatus({ kind: "error", message: "Upload failed" });
+        }
+      }
+    })();
   };
 
   // Kill stream/timer on unmount. Without this the iOS camera indicator stays
