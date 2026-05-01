@@ -382,6 +382,11 @@ async def _save_fallback_segment(cluster_id: str, video_url: str | None = None) 
         location=location_str,
         source_count=distinct_parents or len(clips),
         video_url=video_url,
+        # Quick task 260501-bet: explicit None clears stale evidence/intent on
+        # cluster recompile-after-failure (relies on ON CONFLICT refresh
+        # including these columns — db_postgres.insert_segment + migration 0006).
+        evidence=None,
+        intent=None,
     )
 
 
@@ -698,6 +703,12 @@ async def compile_segment(cluster_id: str) -> None:
                 source_count=distinct_parents or seg.get("source_count", 1),
                 video_url=video_url or seg.get("video_url"),
                 soft_flag=soft_flag,
+                # Quick task 260501-bet: thread evidence + intent JSONB through.
+                # caption_result carries them when run_evidence_to_intent_pipeline
+                # succeeds; absent on fallback paths (None clears stale values via
+                # the ON CONFLICT refresh list in db_postgres.insert_segment).
+                evidence=(caption_result.get("evidence") if caption_result else None),
+                intent=(caption_result.get("intent") if caption_result else None),
             )
 
         elapsed_ms = int((time.time() - started_at) * 1000)
