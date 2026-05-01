@@ -4,7 +4,7 @@ import { ThemeSwitch } from "./ui/theme-switch-button";
 // navigation, so the masthead stays focused on brand + theme.
 export function Masthead() {
   return (
-    <header className="sticky top-0 z-20 bg-surface">
+    <header className="sticky top-0 z-30 bg-surface">
       <div className="mx-auto max-w-[640px] flex items-center justify-between px-5 h-[96px]">
         <span className="w-8" aria-hidden />
         <span
