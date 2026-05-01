@@ -56,9 +56,10 @@ def patched_moderate(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "test-key-not-real")
     monkeypatch.setenv("GEMINI_MODERATION_MODEL", "gemini-2.5-flash-lite")
     monkeypatch.setenv("MODERATION_MAX_BUDGET_S", "20.0")
-    # Default the pilot fail-open knob explicitly so tests are unambiguous about
-    # which Branch A behaviour they expect. Individual tests can override.
+    # Default the pilot fail-open knobs explicitly so tests are unambiguous about
+    # which behaviour they expect. Individual tests can override.
     monkeypatch.setenv("MODERATION_FAIL_OPEN_ON_CLASSIFIER_TIMEOUT", "true")
+    monkeypatch.setenv("MODERATION_FAIL_OPEN_ON_CLASSIFIER_UNKNOWN", "true")
 
     # Reload config so the test's env vars are visible to moderate.
     import importlib
@@ -482,26 +483,42 @@ async def test_moderate_cancel_when_embed_finishes_strict_mode(patched_moderate,
             ),
             "blocked", "classifier_4xx_400",
         ),
+        # 5xx + network errors under MODERATION_FAIL_OPEN_ON_CLASSIFIER_UNKNOWN=true
+        # (pilot default) route to decision='passed' reason='<original>_fail_open'.
+        # Strict-mode regressions live in test_moderate_classify_exception_unknown_strict_mode.
         (
             lambda: httpx.HTTPStatusError(
                 "503 unavailable", request=httpx.Request("POST", "https://x"),
                 response=httpx.Response(503),
             ),
-            "unknown", "classifier_5xx_503",
+            "passed", "classifier_5xx_503_fail_open",
         ),
         (
             lambda: httpx.ConnectError("connect refused"),
-            "unknown", "classifier_network_error",
+            "passed", "classifier_network_error_fail_open",
+        ),
+        # Unrecognized exception type (e.g. TypeError from json.loads(None) when
+        # Gemini's safety filter returns no candidates — the 2026-05-01 prod bug).
+        (
+            lambda: TypeError("the JSON object must be str, bytes or bytearray, not NoneType"),
+            "passed", "classifier_unknown_error_fail_open",
         ),
     ],
-    ids=["timeout-fail-open", "4xx-blocked", "5xx-unknown", "connect-error-unknown"],
+    ids=[
+        "timeout-fail-open",
+        "4xx-blocked",
+        "5xx-fail-open",
+        "connect-error-fail-open",
+        "unknown-exc-fail-open",
+    ],
 )
 @pytest.mark.asyncio
 async def test_moderate_failure_tier_classification(
     patched_moderate, exc_factory, expected_decision, expected_reason_prefix,
 ):
     """D-05 typed-exception ladder under pilot fail-open default:
-    TimeoutError → passed (fail-open); 4xx → blocked; 5xx + ConnectError → unknown."""
+    TimeoutError + 5xx + network + unrecognized exception all → passed (fail-open).
+    4xx ClientError still → blocked (separate tier — client-side request error)."""
     pm = patched_moderate
 
     async def _raise_exc(clip_local_path: str):
@@ -596,7 +613,13 @@ async def test_moderate_genai_client_error_blocked(patched_moderate):
 
 @pytest.mark.asyncio
 async def test_moderate_genai_server_error_unknown(patched_moderate):
-    """CR-03 regression: ServerError (5xx) → decision=unknown, reason=classifier_5xx_<code>."""
+    """CR-03 regression: ServerError (5xx) → unknown tier.
+
+    Under MODERATION_FAIL_OPEN_ON_CLASSIFIER_UNKNOWN=true (pilot default,
+    Phase 11 amendment 2026-05-01), the unknown tier routes to decision='passed'
+    reason='classifier_5xx_<code>_fail_open'. Strict-mode behavior covered by
+    test_moderate_classify_exception_unknown_strict_mode.
+    """
     pm = patched_moderate
     from google.genai import errors as genai_errors
 
@@ -607,11 +630,70 @@ async def test_moderate_genai_server_error_unknown(patched_moderate):
 
     result = await pm.mod.moderate_clip("clip_abc")
 
+    assert result.decision == "passed"
+    assert result.reason == "classifier_5xx_503_fail_open", (
+        f"genai ServerError(503) under fail-open must route to "
+        f"classifier_5xx_503_fail_open, got {result.reason!r}"
+    )
+    # Fail-open: clip preserved, NOT hidden.
+    pm.set_clip_hidden.assert_not_awaited()
+    pm.cleanup_blocked_clip.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_moderate_classify_exception_unknown_strict_mode(patched_moderate, monkeypatch):
+    """Strict mode regression: when MODERATION_FAIL_OPEN_ON_CLASSIFIER_UNKNOWN=false,
+    5xx / network / unrecognized-exception failures route to decision='unknown'
+    reason=<original> per the pre-2026-05-01 D-05 typed-exception ladder, and
+    Stage 8 hides the clip + queues for admin.
+    """
+    pm = patched_moderate
+
+    monkeypatch.setenv("MODERATION_FAIL_OPEN_ON_CLASSIFIER_UNKNOWN", "false")
+    import importlib
+    import backend.config
+    importlib.reload(backend.config)
+    assert backend.config.MODERATION_FAIL_OPEN_ON_CLASSIFIER_UNKNOWN is False
+
+    async def _raise_typeerror(clip_local_path: str):
+        # Mirrors the 2026-05-01 prod bug: json.loads(None) when Gemini's
+        # safety filter returns no candidates.
+        raise TypeError("the JSON object must be str, bytes or bytearray, not NoneType")
+
+    pm.gemini_classify.side_effect = _raise_typeerror
+
+    result = await pm.mod.moderate_clip("clip_abc")
+
     assert result.decision == "unknown"
-    assert result.reason == "classifier_5xx_503", (
-        f"genai ServerError(503) must route to classifier_5xx_503, got {result.reason!r}"
+    assert result.reason == "classifier_unknown_error", (
+        f"strict mode: unrecognized exception must route to classifier_unknown_error; "
+        f"got {result.reason!r}"
     )
     pm.set_clip_hidden.assert_awaited()
+    pm.cleanup_blocked_clip.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_moderate_unrecognized_exception_logs_diagnostic(patched_moderate, caplog):
+    """The 2026-05-01 catch-all log line surfaces the actual exception type+msg
+    so future classifier_unknown_error failures are debuggable in prod."""
+    import logging
+    pm = patched_moderate
+
+    async def _raise_typeerror(clip_local_path: str):
+        raise TypeError("synthetic NoneType failure for log assertion")
+
+    pm.gemini_classify.side_effect = _raise_typeerror
+
+    with caplog.at_level(logging.WARNING, logger="backend.pipeline.moderate"):
+        await pm.mod.moderate_clip("clip_abc")
+
+    assert any(
+        "classifier raised unrecognized exception" in rec.message
+        and "type=TypeError" in rec.message
+        and "synthetic NoneType failure" in rec.message
+        for rec in caplog.records
+    ), f"diagnostic log line missing; got records={[r.message for r in caplog.records]!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -740,13 +822,24 @@ async def test_moderate_priv_03_outbound_payload_anonymized(patched_moderate):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_moderate_unknown_path_hides_clip(patched_moderate):
-    """5xx response → decision='unknown' → db.set_clip_hidden(clip_id, hidden=True).
+async def test_moderate_unknown_path_hides_clip(patched_moderate, monkeypatch):
+    """Strict-mode regression: 5xx response → decision='unknown' →
+    db.set_clip_hidden(clip_id, hidden=True).
 
-    Plan 05's run_pipeline gate short-circuits clustering on decision='unknown';
-    this unit test verifies moderate.py's side-effect contract for the unknown branch
-    (the cluster_worker non-invocation is a Plan 05 integration concern)."""
+    Under MODERATION_FAIL_OPEN_ON_CLASSIFIER_UNKNOWN=true (pilot default,
+    Phase 11 amendment 2026-05-01), 5xx routes to fail-open and the clip is
+    NOT hidden — that case is covered by test_moderate_genai_server_error_unknown
+    and the parametrized failure_tier_classification test. This test pins the
+    legacy strict-mode contract: when the fail-open knob is False, Stage 8 hides
+    the clip + queues for admin so Plan 05's run_pipeline gate short-circuits
+    clustering."""
     pm = patched_moderate
+
+    monkeypatch.setenv("MODERATION_FAIL_OPEN_ON_CLASSIFIER_UNKNOWN", "false")
+    import importlib
+    import backend.config
+    importlib.reload(backend.config)
+    assert backend.config.MODERATION_FAIL_OPEN_ON_CLASSIFIER_UNKNOWN is False
 
     async def _raise_503(clip_local_path: str):
         raise httpx.HTTPStatusError(

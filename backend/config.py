@@ -103,6 +103,43 @@ MODERATION_MAX_BUDGET_S: float = float(os.environ.get("MODERATION_MAX_BUDGET_S",
 MODERATION_FAIL_OPEN_ON_CLASSIFIER_TIMEOUT: bool = (
     os.environ.get("MODERATION_FAIL_OPEN_ON_CLASSIFIER_TIMEOUT", "true").strip().lower() == "true"
 )
+# MODERATION_FAIL_OPEN_ON_CLASSIFIER_UNKNOWN (Phase 11 amendment 2026-05-01 — pilot bugfix):
+#   When True (pilot default), classifier failures that don't yield a confident
+#   verdict (5xx ServerError, network errors, response parse errors, unrecognized
+#   SDK exceptions, defense-in-depth catch-all) route to decision='passed' with
+#   reason='<original_reason>_fail_open'. The clip flows through to clustering /
+#   compile instead of being hidden + queued for admin.
+#
+#   Rationale (2026-05-01): two consecutive uploads on Railway prod hit
+#   `classifier_unknown_error latency_ms=8425` / `6433` and were hidden — Gemini
+#   raised an exception type the typed-exception ladder didn't recognize (most
+#   likely TypeError on json.loads(None) when the model's safety filter returned
+#   no candidates). Per pilot policy "only confident verdicts moderate", the
+#   gate should pass anything that isn't a confident _route_verdict block.
+#
+#   Confident verdicts from _route_verdict (HARD_BLOCK_CATEGORIES in {flag,block})
+#   still hard-block. 4xx ClientError still routes to blocked (separate tier —
+#   indicates client-side request error, not a classifier failure). Branch C
+#   `max_budget_exceeded` (>20s wall-clock pathology) remains fail-CLOSED.
+#
+#   Set False before public launch + audit the threat model + admin-queue capacity
+#   at that point.
+MODERATION_FAIL_OPEN_ON_CLASSIFIER_UNKNOWN: bool = (
+    os.environ.get("MODERATION_FAIL_OPEN_ON_CLASSIFIER_UNKNOWN", "true").strip().lower() == "true"
+)
+
+# Quick task 260501-bet: structured evidence + cluster intent synthesis.
+# EVIDENCE_FAIL_OPEN_TO_LEGACY_PROSE: when True (pilot default), if the new
+# two-stage pipeline (per-parent Gemini evidence -> cluster Claude intent
+# synthesis) returns None, compile_segment falls back through the existing
+# `_save_fallback_segment` path (generic "Submitted footage from N
+# contributor(s)." caption). This produces a playable segment even when
+# Gemini/Claude calls fail. Set False post-pilot to fail-CLOSED on caption
+# pipeline errors (segment row still ships with the run-level video_url, but
+# title/caption stay empty rather than legacy prose).
+EVIDENCE_FAIL_OPEN_TO_LEGACY_PROSE: bool = (
+    os.environ.get("EVIDENCE_FAIL_OPEN_TO_LEGACY_PROSE", "true").strip().lower() == "true"
+)
 
 # Quick task 260501-bet: structured evidence + cluster intent synthesis.
 # EVIDENCE_FAIL_OPEN_TO_LEGACY_PROSE: when True (pilot default), if the new
