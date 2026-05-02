@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Pilot MVP for funding (Public-Launch-Ready Backbone)
 status: ready_to_plan
-last_updated: "2026-05-02T15:50:00.000Z"
-last_activity: 2026-05-02 -- Completed quick task 260502-c55: clamp SegmentCard caption to 2 lines with Read more toggle
+last_updated: "2026-05-02T15:55:00.000Z"
+last_activity: 2026-05-02 -- Completed quick task 260502-c4t: make selected cam/feed tab clearer (BottomTabBar pill + aria-current)
 progress:
   total_phases: 7
   completed_phases: 6
@@ -107,6 +107,7 @@ None blocking the active phase (`01-comments-and-sharing` ready to execute; Phas
 | 260430-smd | Optimistic navigation on upload — feed shows immediately with top-of-feed UploadProgressBar instead of blocking on recording screen | 2026-05-01 | c2c70b3 | [260430-smd-when-a-user-clicks-button-to-upload-vide](./quick/260430-smd-when-a-user-clicks-button-to-upload-vide/) |
 | 260501-bet | Caption pipeline split into per-parent structured-evidence Gemini extraction + cluster-level Claude intent synthesis (signs/audio/affiliations → topic/why-it-matters) | 2026-05-01 | 769acc9 | [260501-bet-structured-evidence-cluster-intent-synth](./quick/260501-bet-structured-evidence-cluster-intent-synth/) |
 | 260502-c55 | SegmentCard caption clamped to 2 lines with inline Read more / Show less toggle (only renders when text overflows) | 2026-05-02 | 12b9ade | [260502-c55-the-story-under-each-segment-should-only](./quick/260502-c55-the-story-under-each-segment-should-only/) |
+| 260502-c4t | BottomTabBar selected tab now reads as a filled `bg-surface-elevated` pill with `aria-current="page"` + bumped icon strokes — selected vs unselected legible at small viewports | 2026-05-02 | 0714c23 | [260502-c4t-make-selected-tab-clearer-in-cam-feed-sw](./quick/260502-c4t-make-selected-tab-clearer-in-cam-feed-sw/) |
 
 ### Documented Overrides
 
