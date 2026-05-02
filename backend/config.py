@@ -141,19 +141,6 @@ EVIDENCE_FAIL_OPEN_TO_LEGACY_PROSE: bool = (
     os.environ.get("EVIDENCE_FAIL_OPEN_TO_LEGACY_PROSE", "true").strip().lower() == "true"
 )
 
-# Quick task 260501-bet: structured evidence + cluster intent synthesis.
-# EVIDENCE_FAIL_OPEN_TO_LEGACY_PROSE: when True (pilot default), if the new
-# two-stage pipeline (per-parent Gemini evidence -> cluster Claude intent
-# synthesis) returns None, compile_segment falls back through the existing
-# `_save_fallback_segment` path (generic "Submitted footage from N
-# contributor(s)." caption). This produces a playable segment even when
-# Gemini/Claude calls fail. Set False post-pilot to fail-CLOSED on caption
-# pipeline errors (segment row still ships with the run-level video_url, but
-# title/caption stay empty rather than legacy prose).
-EVIDENCE_FAIL_OPEN_TO_LEGACY_PROSE: bool = (
-    os.environ.get("EVIDENCE_FAIL_OPEN_TO_LEGACY_PROSE", "true").strip().lower() == "true"
-)
-
 # Phase 14: Recompile gate
 # RECOMPILE_DEBOUNCE_S: cooldown window after a compile completes during which
 #   subsequent new-parent joins do not trigger a fresh recompile. 60s coalesces

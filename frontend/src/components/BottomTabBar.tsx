@@ -3,10 +3,15 @@ import { NavLink } from "react-router-dom";
 const TAB_BASE =
   "flex flex-col items-center justify-center gap-0.5 flex-1 h-14 " +
   "text-[11px] font-black tracking-wide uppercase " +
+  "rounded-xl mx-2 my-1.5 " +
   "transition-colors";
 
 function tabClass({ isActive }: { isActive: boolean }) {
-  return `${TAB_BASE} ${isActive ? "text-ink-primary" : "text-ink-primary/70"}`;
+  return `${TAB_BASE} ${
+    isActive
+      ? "text-ink-primary bg-surface-elevated"
+      : "text-ink-tertiary"
+  }`;
 }
 
 function CameraLens({ size = 28, active }: { size?: number; active: boolean }) {
@@ -17,7 +22,7 @@ function CameraLens({ size = 28, active }: { size?: number; active: boolean }) {
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth={active ? 2.25 : 1.75}
+      strokeWidth={active ? 2.5 : 1.5}
     >
       <circle cx="12" cy="12" r="10" />
       <circle cx="12" cy="12" r="5" fill="currentColor" stroke="none" />
@@ -27,7 +32,7 @@ function CameraLens({ size = 28, active }: { size?: number; active: boolean }) {
 }
 
 function FeedIcon({ size = 28, active }: { size?: number; active: boolean }) {
-  const sw = active ? 1.5 : 1.25;
+  const sw = active ? 2 : 1.25;
   return (
     <svg
       width={size}
@@ -61,10 +66,21 @@ export function BottomTabBar() {
                  pb-[env(safe-area-inset-bottom)]"
       aria-label="Primary"
     >
-      <NavLink to="/" end className={tabClass} aria-label="Camera">
+      <NavLink
+        to="/"
+        end
+        className={tabClass}
+        aria-label="Camera"
+        aria-current="page"
+      >
         {({ isActive }) => <CameraLens active={isActive} />}
       </NavLink>
-      <NavLink to="/feed" className={tabClass} aria-label="Feed">
+      <NavLink
+        to="/feed"
+        className={tabClass}
+        aria-label="Feed"
+        aria-current="page"
+      >
         {({ isActive }) => <FeedIcon active={isActive} />}
       </NavLink>
     </nav>

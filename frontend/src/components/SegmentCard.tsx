@@ -98,6 +98,27 @@ export function SegmentCard({
   const [commentsOpen, setCommentsOpen] = useState(false);
   const [commentCount, setCommentCount] = useState<number | undefined>(undefined);
 
+  const captionRef = useRef<HTMLParagraphElement | null>(null);
+  const [captionExpanded, setCaptionExpanded] = useState(false);
+  const [captionOverflows, setCaptionOverflows] = useState(false);
+
+  // Detect whether the caption actually exceeds the 2-line clamp so the
+  // "Read more" toggle only renders when it would do something.
+  useEffect(() => {
+    const el = captionRef.current;
+    if (!el) return;
+    const measure = () => {
+      // scrollHeight reflects unclamped content height; clientHeight is the
+      // rendered (possibly clamped) height. The +1 guards against subpixel
+      // rounding on iOS Safari.
+      setCaptionOverflows(el.scrollHeight > el.clientHeight + 1);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [segment.caption, captionExpanded]);
+
   const handleShare = useCallback(async () => {
     // Backend /m/<id> serves OG tags + redirects browsers to FRONTEND_URL/m/<id>.
     // We share the backend URL so iMessage/Twitter unfurlers see the meta tags;
@@ -235,9 +256,23 @@ export function SegmentCard({
         {summary}
       </p>
 
-      <p className="mt-3 px-4 text-[13px] leading-[1.5] text-ink-primary">
+      <p
+        ref={captionRef}
+        className={`mt-3 px-4 text-[13px] leading-[1.5] text-ink-primary ${
+          captionExpanded ? "" : "line-clamp-2"
+        }`}
+      >
         {segment.caption}
       </p>
+      {(captionOverflows || captionExpanded) && (
+        <button
+          type="button"
+          onClick={() => setCaptionExpanded((v) => !v)}
+          className="mt-1 px-4 text-[12px] font-medium text-ink-secondary hover:text-ink-primary"
+        >
+          {captionExpanded ? "Show less" : "Read more"}
+        </button>
+      )}
 
       <div className="mt-4 px-4 flex items-center gap-4">
         <button
