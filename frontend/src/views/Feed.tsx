@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { fetchSegments } from "../api";
 import { getOrCreateSessionId } from "../session";
@@ -39,10 +39,6 @@ export function Feed() {
     }
   });
   const location = useLocation();
-  // Mirror state in a ref so the SSE callback (stable across renders) can read
-  // the latest coords without forcing the EventSource to reconnect.
-  const coordsRef = useRef<{ lat: number; lng: number } | undefined>(undefined);
-  coordsRef.current = coords;
 
   useEffect(() => {
     if (!navigator.geolocation) return;
@@ -98,16 +94,17 @@ export function Feed() {
   // later becomes available within the session).
   const effectiveTab: FeedTab = tab === "nearby" && !nearbyEnabled ? "global" : tab;
 
+  // Null when the filter does not apply (Global tab, or Nearby with no coords).
+  // The non-null shape carries the matched segments + which radius applied
+  // (radius === null inside that shape means "fell back to global"; banner shown).
   const filterResult = useMemo(() => {
-    if (effectiveTab !== "nearby" || !coords) {
-      return { segments, effectiveRadiusM: -1 as const };
-    }
+    if (effectiveTab !== "nearby" || !coords) return null;
     return applyNearbyFilter(segments, coords.lat, coords.lng);
   }, [effectiveTab, segments, coords]);
 
-  const displayedSegments = filterResult.segments;
+  const displayedSegments = filterResult ? filterResult.segments : segments;
   const showFallbackBanner =
-    effectiveTab === "nearby" && filterResult.effectiveRadiusM === null && !bannerDismissed;
+    filterResult?.effectiveRadiusM === null && !bannerDismissed;
 
   const handleTabChange = useCallback((next: FeedTab) => {
     setTab(next);
