@@ -91,4 +91,8 @@ tdd_checkpoint: ""
 
 **Fix:** add `width`/`height`/`frameRate` ideals to both `getUserMedia` calls. Use `ideal` (not `exact` or `min`) so older iPhones / lower-tier devices gracefully degrade instead of throwing `OverconstrainedError`.
 
-(Fix not yet applied — awaiting user choice per stored preference to discuss before applying tuning fixes.)
+**Applied (2026-05-02):** Option A (1080p) — added `width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 }` to both `getUserMedia` calls in `frontend/src/views/Recorder.tsx`:
+- `initializePermissions` (now L113-122)
+- `acquire` (now L167-176)
+
+**Verification pending:** must test on a real iPhone in iOS Safari (project hard constraint) — confirm preview is sharper and `track.getSettings()` reports the granted resolution at or near 1920×1080. Also confirm the captured/uploaded videorecording's larger blob doesn't break the 300s compile budget on Railway.

@@ -112,7 +112,12 @@ export function Recorder() {
 
     // Both calls fire synchronously here — same gesture frame.
     const camPromise = navigator.mediaDevices.getUserMedia({
-      video: { facingMode: "environment" },
+      video: {
+        facingMode: "environment",
+        width: { ideal: 1920 },
+        height: { ideal: 1080 },
+        frameRate: { ideal: 30 },
+      },
       audio: true,
     });
     const geoPromise = getPositionWithTimeout(10000);
@@ -161,7 +166,12 @@ export function Recorder() {
     setPhase({ kind: "acquiring", facing });
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: facing },
+        video: {
+          facingMode: facing,
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+          frameRate: { ideal: 30 },
+        },
         audio: true,
       });
       cleanupStream();
