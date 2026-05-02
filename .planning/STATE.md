@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Pilot MVP for funding (Public-Launch-Ready Backbone)
 status: in_progress
-last_updated: "2026-04-29T22:00:00.000Z"
-last_activity: 2026-04-29 -- shipped Phase 02 (Safari permissions + recorder reliability); merged via PR #10
+last_updated: "2026-05-02T00:00:00.000Z"
+last_activity: 2026-05-02 -- shipped Phase 03 (Feed tabs — Global / Nearby); pending real-iPhone UAT before PR
 progress:
-  total_phases: 8
-  completed_phases: 6
-  total_plans: 20
-  completed_plans: 16
-  percent: 75
+  total_phases: 9
+  completed_phases: 7
+  total_plans: 21
+  completed_plans: 17
+  percent: 78
 ---
 
 # Project State: Newz
@@ -21,15 +21,15 @@ progress:
 
 **Current Focus:** v1.1 Pilot MVP for funding — two parallel tracks:
 - **Backbone (Liam):** Phase 9 (Postgres) + Phase 10 (Vercel Blob) shipped; Phase 11 (Moderation gate) next.
-- **Feature (Roan):** Phase 01 (comments + shares) + Phase 02 (Safari permissions) shipped; next feature TBD.
+- **Feature (Roan):** Phase 01 (comments + shares) + Phase 02 (Safari permissions) + Phase 03 (Feed tabs Global/Nearby) shipped; next feature TBD.
 
 ## Current Position
 
 | Field | Value |
 |-------|-------|
 | Active Milestone | v1.1 Pilot MVP for funding (Public-Launch-Ready Backbone) |
-| Active Phases | Backbone: 11 next (Moderation Gate) · Feature: 01 + 02 shipped, next TBD |
-| Status | Backbone phases 8 + 9 + 10 shipped; feature track Phase 01 + Phase 02 shipped |
+| Active Phases | Backbone: 11 next (Moderation Gate) · Feature: 01 + 02 + 03 shipped, next TBD |
+| Status | Backbone phases 8 + 9 + 10 shipped; feature track Phase 01 + Phase 02 + Phase 03 shipped |
 | Workflow | Two tracks: backbone uses sequenced phases (8-13); feature track uses per-feature GSD |
 
 ```
@@ -110,18 +110,19 @@ None blocking the active phase (`01-comments-and-sharing` ready to execute; Phas
 
 ## Session Continuity
 
-**Last session ended:** 2026-04-29 — Phase 10 (Vercel Blob migration) shipped. SC-1, SC-2, SC-3, SC-4 passed in live HUMAN-UAT against the Railway preview backend. Task 5.5 / SC-5 (cleanup_blocked_clip) and SC-6 (env-flip rollback) deferred to Phase 11 (cleanup hook lacks production caller until moderation gate; rollback is theoretical now that `clips.path` is nullable). Spec amendment captured in `10-HUMAN-UAT.md`: provisioned Vercel Blob store is private-only, so `runs/*` reads route through a backend proxy (`GET /runs/{run_id}.mp4`) instead of CDN-direct.
+**Last session ended:** 2026-05-02 — Phase 03 (Feed tabs Global/Nearby) shipped on `feature/feed-tabs-nearby-global`. Two-tab segmented control above the feed; client-side adaptive-radius filter (5 km → 25 km → global fallback with banner). Side-effect anonymity hardening: `fetchSegments` no longer sends `lat`/`lng` to the backend — coords stay on device for distance display only. Typecheck clean, all 31 existing tests pass, production build clean. Branch is ahead of `main`; awaiting real-iPhone UAT before opening PR.
 
 **Next action (backbone track):** Plan Phase 11 (Moderation Gate — Gemini Flash-Lite + Cloudflare CSAM hash). Pre-flight TODOs from Pending Todos still apply (Gemini latency benchmark, Cloudflare CSAM tool / NCMEC application lead time).
 
-**Next action (feature track):** Run Wave 4 verification (T4.1–T4.4) on a real iPhone + desktop browser for Phase 01 (comments + shares). See `phases/01-comments-and-sharing/01-SUMMARY.md`.
+**Next action (feature track):** Real-iPhone UAT for Phase 03 (sticky tab strip on iOS rubber-band scroll, location-denied path, banner copy). Then PR. Pending UAT for Phase 01 (comments + shares) still open from prior session.
 
 **Key files to load on resume:**
 
+- `.planning/phases/03-feed-tabs-nearby-global/03-SUMMARY.md` — Phase 03 status + UAT checklist
 - `.planning/phases/10-vercel-blob-migration/10-HUMAN-UAT.md` — Phase 10 UAT outcomes + spec amendments (private-store proxy)
 - `.planning/phases/01-comments-and-sharing/01-SUMMARY.md` — feature track Phase 01 status
 - `.planning/PROJECT.md` — v1.1 active scope (both tracks), anonymity constraint, nomenclature
 - `.planning/ROADMAP.md` — full v1.1 backlog
 
 ---
-*Last updated: 2026-04-28 — Phase 01 (comments + shares) shipped, pending Wave 4 iPhone UAT*
+*Last updated: 2026-05-02 — Phase 03 (Feed tabs Global/Nearby) shipped, pending real-iPhone UAT*
