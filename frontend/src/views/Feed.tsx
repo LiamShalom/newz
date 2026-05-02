@@ -5,6 +5,7 @@ import { getOrCreateSessionId } from "../session";
 import { flushUploadQueue } from "../uploadQueue";
 import { useEventSource } from "../hooks/useEventSource";
 import { dispatchCommentAdded } from "../commentsBus";
+import { checkPermission } from "../lib/permissionsCheck";
 import type { Segment, ServerEvent } from "../types";
 import { BottomTabBar } from "../components/BottomTabBar";
 import { EmptyState } from "../components/EmptyState";
@@ -20,13 +21,28 @@ export function Feed() {
 
   useEffect(() => {
     if (!navigator.geolocation) return;
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        coordsRef.current = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-      },
-      () => {},
-      { timeout: 5000, enableHighAccuracy: false },
-    );
+    let cancelled = false;
+    void (async () => {
+      // Soft-check via Permissions API before firing getCurrentPosition.
+      // - granted: safe to read coords without surfacing a dialog
+      // - denied:  skip silently; feed falls back to non-coords fetch
+      // - prompt / unknown: fire and let the browser decide. Recorder is the
+      //   primary gesture-anchored prompt site, so by the time a returning
+      //   user lands on the feed this is usually 'granted'.
+      const state = await checkPermission("geolocation");
+      if (cancelled || state === "denied") return;
+      if (state !== "granted" && state !== "prompt" && state !== "unknown") return;
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          coordsRef.current = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        },
+        () => {},
+        { timeout: 5000, enableHighAccuracy: false },
+      );
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const refetchFeed = useCallback(async () => {

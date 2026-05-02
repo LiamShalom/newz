@@ -19,14 +19,21 @@ interface Props {
  * "Try again" that re-runs the permission flow in a fresh user gesture (which
  * may successfully re-prompt if the user toggled Settings in between).
  */
+// iOS Safari note: even after a one-time grant, the platform default is "ask
+// each session" — the only way to stop re-prompts is the Settings → Allow path
+// below. We surface that explicitly so users don't bounce off a re-ask thinking
+// the app is broken.
+const IOS_PERSIST_HINT =
+  "iOS asks every session unless you set this to Allow once.";
+
 const COPY = {
   "camera-blocked": {
     heading: "Camera blocked",
-    body: "Settings → Apps → Safari → Camera → Allow",
+    body: `${IOS_PERSIST_HINT} Settings → Apps → Safari → Camera → Allow.`,
   },
   "location-blocked": {
     heading: "Location blocked",
-    body: "Settings → Privacy & Security → Location Services is on → scroll down → Safari Websites → While Using App",
+    body: `${IOS_PERSIST_HINT} Settings → Privacy & Security → Location Services on → scroll down → Safari Websites → While Using App.`,
   },
   "location-unavailable": {
     heading: "Couldn't get your location",

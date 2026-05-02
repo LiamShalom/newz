@@ -1,9 +1,9 @@
 ---
 slug: permissions-not-persisting-ios
-status: investigating
+status: fixed-pending-iphone-verification
 trigger: "System repeatedly asks for permission; want to save devices that have given permission so we don't ask multiple times"
 created: 2026-05-01
-updated: 2026-05-01
+updated: 2026-05-02
 ---
 
 # Debug: Permissions not persisting on iOS Safari
@@ -77,3 +77,18 @@ Anonymity constraint means we cannot move permission state to a server-side per-
 ### Next step
 
 Surface fix options A / B / C to user. Apply selected fix(es), regenerate session-storage tests if migrating, verify on real iPhone Safari per project constraints.
+
+## Applied — 2026-05-02 (uncommitted on `liam/bug-fixes`)
+
+User selected A + B + C (rejected D / PWA standalone re-check).
+
+- **A — Recorder.tsx:** `PERMS_GRANTED_KEY` migrated `sessionStorage` → `localStorage` (lines 65-69 comment block + lines 74, 155, 183 storage calls). Cross-session priming-modal skip. The `acquire()` catch path at line 183 still removes the flag on `getUserMedia` failure, so a stale flag never traps a user whose iOS-level grant was revoked.
+- **B — Feed.tsx + new lib/permissionsCheck.ts:** `getCurrentPosition` is now gated by `checkPermission("geolocation")`. `denied` skips silently; `granted` reads coords without surfacing a dialog on iOS 16+; `prompt` / `unknown` falls through to existing behavior. Eliminates the second prompt site on returning visits.
+- **C — PermissionErrorScreen.tsx:** `camera-blocked` and `location-blocked` copy now leads with "iOS asks every session unless you set this to Allow once." so users hitting a re-ask know the platform-level remedy. `location-unavailable` copy unchanged (transient GPS, not a permission issue).
+- **Build:** `tsc --noEmit` clean, `vite build` clean. Pre-existing `SegmentCard.test.tsx` ResizeObserver failures are unrelated.
+
+**Still pending:** real-iPhone verification per project constraint. Test matrix:
+1. First-ever Safari visit → priming modal → grant → tab close → reopen → priming should NOT re-fire (was: re-fired on tab close).
+2. Returning visit, geolocation already granted → land on `/feed` → no dialog (was: dialog on every Feed mount).
+3. Settings → Safari → Websites → [origin] → Camera = Ask → grant once → close tab → reopen → expect iOS to re-prompt at record time (platform-level, not our flag) → confirm error screen copy now mentions the "Allow once" upgrade.
+4. PWA-installed-from-Home-Screen launch with localStorage flag set in Safari → expect re-prompt (separate storage scope) → fix is intentionally NOT applied here (option D was rejected); document if behavior is unacceptable.

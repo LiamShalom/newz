@@ -61,16 +61,17 @@ type Phase =
 const RECORD_CAP_SEC = 30; // CAP-05 hard cap
 const MIN_RECORD_SEC = 5; // Marengo requires >=4s; 5 leaves a buffer for trim/encoding
 
-// Session-scoped flag: once both permissions are granted in this tab, skip the
-// priming popup on subsequent feed→camera navigations. Cleared on a hard reload
-// (sessionStorage is per-tab) so a stale flag can't trap a user whose permissions
-// were revoked.
+// Cross-session flag: once both permissions are granted on this device/origin,
+// skip the priming popup on every subsequent visit. Stored in localStorage so it
+// survives tab close. The acquire() catch path below removes the flag on a
+// getUserMedia failure, which covers the case where iOS revoked access between
+// sessions — so a stale flag never traps the user.
 const PERMS_GRANTED_KEY = "perms_granted";
 
 export function Recorder() {
   const navigate = useNavigate();
   const [phase, setPhase] = useState<Phase>(() =>
-    sessionStorage.getItem(PERMS_GRANTED_KEY) === "1"
+    localStorage.getItem(PERMS_GRANTED_KEY) === "1"
       ? { kind: "acquiring", facing: "environment" }
       : { kind: "priming" },
   );
@@ -146,7 +147,7 @@ export function Recorder() {
 
       // Both granted — attach stream, transition to ready. User taps record
       // again to actually start recording.
-      sessionStorage.setItem(PERMS_GRANTED_KEY, "1");
+      localStorage.setItem(PERMS_GRANTED_KEY, "1");
       cleanupStream();
       streamRef.current = camResult.value;
       setPhase({ kind: "ready", facing: "environment" });
@@ -169,7 +170,7 @@ export function Recorder() {
     } catch {
       // Cached perms got revoked between sessions, or hardware error.
       // Clear the cache flag so the next visit re-shows priming.
-      sessionStorage.removeItem(PERMS_GRANTED_KEY);
+      localStorage.removeItem(PERMS_GRANTED_KEY);
       setPhase({ kind: "error", error: "camera-blocked" });
     }
   };
