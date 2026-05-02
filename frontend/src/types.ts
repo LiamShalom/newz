@@ -100,6 +100,13 @@ export interface Comment {
 }
 
 /**
+ * Phase 03: which tab the feed is showing. "global" = recency-sorted
+ * unfiltered. "nearby" = client-side adaptive-radius filter around the
+ * viewer's current coords (5 km → 25 km → fall back to global).
+ */
+export type FeedTab = "global" | "nearby";
+
+/**
  * Discriminated union of all events emitted by GET /events (RTM-01).
  * Consumed by useEventSource hook in Feed.tsx.
  */
