@@ -27,7 +27,7 @@ GEMINI_MODEL: str = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 # positives reject; same-day extended events (≤4h) still cluster as the time
 # term decays gracefully rather than cliffing at 10min.
 CLUSTER_THRESHOLD: float = float(os.environ.get("CLUSTER_THRESHOLD", "0.82"))
-VISUAL_FLOOR: float = float(os.environ.get("VISUAL_FLOOR", "0.85"))
+VISUAL_FLOOR: float = float(os.environ.get("VISUAL_FLOOR", "0.70"))
 
 # Phase 4.6: Run detection (compile-time grouping of contiguous similar children)
 # Threshold lowered 0.85 → 0.70 to catch gentle scene shifts (lighting, pan,

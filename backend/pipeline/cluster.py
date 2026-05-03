@@ -14,17 +14,23 @@ Module state:
     _LOCK: asyncio.Lock                -- serializes the score-and-mutate critical section
 
 Math (locked by CLAUDE.md + CONTEXT D-04/D-05/D-06):
-    composite = 0.55*cos + 0.30*gps + 0.15*time   (gps=0.0 when lat/lng unavailable)
+    composite = 0.40*cos + 0.40*gps + 0.20*time   (gps=0.0 when lat/lng unavailable)
     time = max(0, 1 - dt/14400)                   (4h linear decay; see TIME_WINDOW_S below)
     threshold = config.CLUSTER_THRESHOLD          (env-tunable, default 0.82)
-    visual_floor = config.VISUAL_FLOOR            (env-tunable, default 0.85)
+    visual_floor = config.VISUAL_FLOOR            (env-tunable, default 0.70)
         Joining a cluster requires BOTH composite >= threshold AND visual >= visual_floor.
-        Without the floor, GPS+time alone contribute 0.45 to composite (when both ideal),
-        so any visual cosine > 0.18 would clear threshold — that fused adversarial clips
-        and broke CLU-08. The floor makes "AI sees same scene" the dominant gate.
-        Threshold raised to 0.82 (from 0.70) alongside time-window stretch to 4h
-        (debug session clustering-false-positive-31h, 2026-05-01) so same-place-
-        different-day uploads can no longer ride visual+GPS alone over the bar.
+        Floor stops "same place, totally different thing in frame" from clustering on
+        location alone; composite gate stops "same place, hours later" via the 4h time
+        decay. Floor at 0.70 (down from 0.85, 2026-05-02) accommodates same-event-
+        different-angle uploads where the same scene reads as visually different from
+        another camera position (cafe interior shot vs. exterior of same cafe land in
+        the 0.65–0.80 cosine band — 0.85 was rejecting these outright).
+        Visual weight reduced 0.55 -> 0.40 and GPS raised 0.30 -> 0.40 (2026-05-02) so
+        co-location is peer-equal with appearance — different angles of same scene are
+        the dominant real-world case, not adversarial co-location which the floor still
+        catches. Threshold held at 0.82 (raised from 0.70 in debug session
+        clustering-false-positive-31h, 2026-05-01); the 4h time window does the heavy
+        lifting against same-place-different-day uploads.
     centroid update: Welford running mean (float64 intermediate), re-normalized to unit length, stored as float32
 """
 
@@ -42,9 +48,13 @@ from .. import config, db, events
 log = logging.getLogger(__name__)
 
 # Composite weights (locked — do not change without updating CLAUDE.md + CONTEXT.md)
-W_VISUAL = 0.55
-W_GPS    = 0.30
-W_TIME   = 0.15
+# 2026-05-02: rebalanced from (0.55/0.30/0.15) toward GPS so that same-event
+# different-angle uploads (the dominant real-world case) cluster together when
+# their visual cosine is depressed by framing/distance differences. The visual
+# floor (config.VISUAL_FLOOR) still catches "same place, unrelated subject."
+W_VISUAL = 0.40
+W_GPS    = 0.40
+W_TIME   = 0.20
 GPS_RADIUS_M  = 50.0
 # 4h linear decay (debug session clustering-false-positive-31h, 2026-05-01).
 # Old 600s (10min) cliffed the time term to 0 past 10 minutes, so any same-place
@@ -149,8 +159,19 @@ async def cluster_worker(clip_id: str, vec: np.ndarray) -> str:
         # near-tie cluster with high GPS+time agreement but low visual cosine doesn't
         # win the "best" slot and then fail the gate (CLU-08 fix).
         best: tuple[ClusterCache, ScoreBreakdown] | None = None
+        # near_miss tracks the highest-composite candidate REGARDLESS of floor so
+        # we can report why a clip didn't join (debug-tuning aid, 2026-05-02).
+        near_miss: tuple[ClusterCache, ScoreBreakdown] | None = None
         for c in CLUSTERS.values():
             sb = score_against(c, vec, lat, lng, ts)
+            log.debug(
+                "score clip_id=%s vs cluster_id=%s visual=%.3f gps=%.3f time=%.3f composite=%.3f gps_avail=%s floor=%.2f threshold=%.2f cleared_floor=%s",
+                clip_id, c.id, sb.visual, sb.gps, sb.time, sb.composite,
+                sb.gps_available, config.VISUAL_FLOOR, config.CLUSTER_THRESHOLD,
+                sb.visual >= config.VISUAL_FLOOR,
+            )
+            if near_miss is None or sb.composite > near_miss[1].composite:
+                near_miss = (c, sb)
             if sb.visual < config.VISUAL_FLOOR:
                 continue  # ineligible: cluster fails visual floor for this clip
             if best is None or sb.composite > best[1].composite:
@@ -190,6 +211,19 @@ async def cluster_worker(clip_id: str, vec: np.ndarray) -> str:
             cluster_id = cluster.id
         else:
             # CREATE new cluster
+            if near_miss is not None:
+                nm_cluster, nm_sb = near_miss
+                reason = (
+                    "below_floor" if nm_sb.visual < config.VISUAL_FLOOR
+                    else "below_threshold"
+                )
+                log.info(
+                    "cluster near-miss clip_id=%s best_cluster_id=%s reason=%s "
+                    "visual=%.3f gps=%.3f time=%.3f composite=%.3f floor=%.2f threshold=%.2f",
+                    clip_id, nm_cluster.id, reason,
+                    nm_sb.visual, nm_sb.gps, nm_sb.time, nm_sb.composite,
+                    config.VISUAL_FLOOR, config.CLUSTER_THRESHOLD,
+                )
             cluster_id = uuid.uuid4().hex
             new_cluster = ClusterCache(
                 id=cluster_id,

@@ -233,6 +233,7 @@ export function SegmentCard({
           <button
             type="button"
             onClick={toggleMute}
+            data-mute-control
             aria-label={muted ? "unmute" : "mute"}
             aria-pressed={!muted}
             className="absolute bottom-3 dark:bottom-14 right-4 z-20 grid h-9 w-9 place-items-center rounded-full bg-black/45 backdrop-blur-sm text-white"

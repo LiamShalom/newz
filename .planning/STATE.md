@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Pilot MVP for funding (Public-Launch-Ready Backbone)
 status: ready_to_plan
-last_updated: "2026-05-02T22:00:00.000Z"
-last_activity: 2026-05-02 -- merged main into feature/feed-tabs-nearby-global; resolved conflicts in Feed.tsx, Masthead.tsx, STATE.md (Phase 03 + Phase 11 + Phase 14 + 6 quick tasks integrated). Phase 03 (Feed tabs Global/Nearby) shipped on branch; pending real-iPhone UAT before merge.
+last_updated: "2026-05-03T06:30:00.000Z"
+last_activity: 2026-05-03 -- merged origin/main into liam/bug-fixes; resolved conflicts in STATE.md, debug/montage-capped-at-2-clips.md, frontend/src/views/Feed.tsx. Pulls in Phase 03 (Feed tabs Global/Nearby) + quick task 260502-h26 (iOS codec compat). Local work since: caption prompts rewritten for news-lede voice (260502-w74), audio-on-by-default (260502-w52), cluster-rebalance toward GPS+time.
 progress:
   total_phases: 8
   completed_phases: 7
@@ -108,7 +108,9 @@ None blocking the active phase (`01-comments-and-sharing` ready to execute; Phas
 | 260501-bet | Caption pipeline split into per-parent structured-evidence Gemini extraction + cluster-level Claude intent synthesis (signs/audio/affiliations → topic/why-it-matters) | 2026-05-01 | 769acc9 | [260501-bet-structured-evidence-cluster-intent-synth](./quick/260501-bet-structured-evidence-cluster-intent-synth/) |
 | 260502-c55 | SegmentCard caption clamped to 2 lines with inline Read more / Show less toggle (only renders when text overflows) | 2026-05-02 | 12b9ade | [260502-c55-the-story-under-each-segment-should-only](./quick/260502-c55-the-story-under-each-segment-should-only/) |
 | 260502-c4t | BottomTabBar selected tab now reads as a filled `bg-surface-elevated` pill with `aria-current="page"` + bumped icon strokes — selected vs unselected legible at small viewports | 2026-05-02 | 0714c23 | [260502-c4t-make-selected-tab-clearer-in-cam-feed-sw](./quick/260502-c4t-make-selected-tab-clearer-in-cam-feed-sw/) |
-| 260502-h26 | `_sync_trim` re-encodes through libx264+AAC when source is not H.264 — fixes black-video-no-sound on iPhone Safari for Chromebook/desktop Chrome WebM uploads (per-angle URLs) | 2026-05-02 | (pending PR) | [260502-h26-trim-ios-codec-compat](./quick/260502-h26-trim-ios-codec-compat/) |
+| 260502-w52 | Feed/popup videos auto-unmute on first user gesture (TikTok pattern) — keeps iOS Safari autoplay legal while shipping audio-on-by-default UX | 2026-05-02 | 1fee782 | [260502-w52-flip-video-default-to-audio-on](./quick/260502-w52-flip-video-default-to-audio-on/) |
+| 260502-h26 | `_sync_trim` re-encodes through libx264+AAC when source is not H.264 — fixes black-video-no-sound on iPhone Safari for Chromebook/desktop Chrome WebM uploads (per-angle URLs) | 2026-05-02 | (merged from main) | [260502-h26-trim-ios-codec-compat](./quick/260502-h26-trim-ios-codec-compat/) |
+| 260502-w74 | Both caption prompts (`SYSTEM_PROMPT` legacy Gemini + `INTENT_SYSTEM_INSTRUCTION` active Claude cluster path) rewritten for news-lede voice — sentence 1 must open with an event-framing verb; descriptive-tableau examples replaced with action-verb leads, anti-description BAD examples + rewrites added | 2026-05-03 | ee2b2bd | [260502-w74-make-montage-description-read-like-a-new](./quick/260502-w74-make-montage-description-read-like-a-new/) |
 
 ### Documented Overrides
 
@@ -149,4 +151,4 @@ None blocking the active phase (`01-comments-and-sharing` ready to execute; Phas
 - `.planning/ROADMAP.md` — full v1.1 backlog
 
 ---
-*Last updated: 2026-05-02 — Phase 03 (Feed tabs Global/Nearby) shipped on feature branch + main merged, pending real-iPhone UAT*
+*Last updated: 2026-05-03 — merged origin/main; Phase 03 (Feed tabs) + 260502-h26 (iOS codec compat) integrated alongside local 260502-w52 (audio-on) + 260502-w74 (news-lede prompts)*
