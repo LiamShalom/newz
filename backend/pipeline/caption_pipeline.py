@@ -675,8 +675,31 @@ SYNTHESIS RULES
   no signs, no audio), prefer a CONSERVATIVE description over a confident one.
 
 ==============================
+NEWS-LEDE VOICE — REQUIRED
+==============================
+- The caption is a wire LEDE, not a video description. Sentence 1 must
+  OPEN with an event-framing verb naming WHAT HAPPENED:
+  gathered, marched, demanded, blocked, dispersed, rallied, walked out,
+  occupied, evacuated, halted, confronted, struck, deployed, intervened,
+  cleared, arrived, picketed, surged, swarmed, assembled.
+- Front-load WHO and WHERE in sentence 1 when the evidence supports it.
+  "Caltech grad students walked out at the south gate" beats
+  "Roughly thirty people stand shoulder-to-shoulder near the entrance."
+- Save sensory detail (count, color, audio, weather, clothing,
+  time-of-day) for sentences 2-3 — these are the wire story's color,
+  not the lede.
+- Do NOT open the caption with a descriptive tableau
+  ("Roughly thirty people stand...", "A row of blue bins lies...",
+  "A man in a dark hoodie walks..."). That reads like a vision model
+  narrating a file. It is not what a wire reporter writes.
+
+==============================
 TITLE / CAPTION RULES
 ==============================
+- Caption sentence 1 MUST open with an event-framing verb (see NEWS-LEDE
+  VOICE above). Captions opening with descriptive tableaux ("A row of...",
+  "A man in...", "Roughly thirty people stand...") are non-conforming and
+  must be rewritten.
 - Title: 4 to 8 words. HARD CAP: 60 characters total. Title Case.
   Present tense, active voice. No period. No quotes. Not a question.
   Must NOT contain: video, clip, footage, frame, frames, camera, shot,
@@ -686,6 +709,43 @@ TITLE / CAPTION RULES
   (audio cue, count, distinctive object, time-of-day, weather, action verb,
   affiliation name, sign text).
 - Caption is NOT a rephrasing of the title.
+
+==============================
+NEWS-LEDE EXAMPLES
+==============================
+GOOD A — protest, evidence-rich (evidence_trail elided in example for brevity):
+{"topic": "Caltech grad walkout",
+ "what_is_happening": "Caltech graduate students walked out at the south gate demanding stipend increases.",
+ "why_it_matters": "Cost-of-living pay disputes have spread across UC and private-research campuses since fall.",
+ "evidence_trail": [],
+ "title": "Caltech Grad Students Walk Out At South Gate",
+ "caption": "Caltech graduate students walked out at the campus south gate Friday, demanding a stipend increase as roughly thirty marchers raised handmade cardboard signs. A bullhorn cut in and out under an overcast sky."}
+
+GOOD B — civic disorder, sparser evidence (evidence_trail elided in example for brevity):
+{"topic": "Vandalism on Lake Avenue",
+ "what_is_happening": "Recycling bins were overturned along Lake Avenue overnight.",
+ "why_it_matters": "Pasadena Public Works has logged a recent uptick in pre-dawn street vandalism reports.",
+ "evidence_trail": [],
+ "title": "Recycling Bins Toppled On Lake Avenue",
+ "caption": "Vandals overturned a row of blue municipal bins along Lake Avenue overnight, scattering loose paper and a torn cardboard box across the asphalt. The block was empty at first light, with only bird calls audible."}
+
+GOOD C — mundane / single-subject (evidence_trail elided in example for brevity):
+{"topic": "Resident in Pasadena home",
+ "what_is_happening": "A resident paced inside a Pasadena home late Thursday.",
+ "why_it_matters": "No event-level significance evident from the recording; logged for completeness.",
+ "evidence_trail": [],
+ "title": "Resident Paces In Pasadena Home",
+ "caption": "A resident moved between two rooms of a Pasadena home late Thursday, briefly steadying a hand against the wall. A low fan hummed under a single door creak; lighting was dim and yellow-tinged."}
+
+BAD #1 — reads like a video description, not a news lede:
+  caption: "Roughly thirty people stand shoulder-to-shoulder near the entrance, several holding handmade cardboard signs."
+  Why bad: opens with a static tableau verb ("stand") describing a frozen frame. The lede must name the EVENT (rallied / walked out / gathered).
+  News-lede rewrite caption: "Roughly thirty demonstrators rallied at the south entrance Friday, several raising handmade cardboard signs as a bullhorn cut in and out."
+
+BAD #2 — reads like a video description, not a news lede:
+  caption: "A man in a dark hoodie walks between two rooms inside a residence, hand briefly touching the wall."
+  Why bad: opens with descriptive participial syntax ("A man in..."). Reads like a vision model narrating. The lede must lead with the action ("A resident paced...", "A resident moved between...").
+  News-lede rewrite caption: "A resident paced between two rooms inside a Pasadena home late Thursday, briefly steadying a hand against the wall."
 
 ==============================
 ANONYMITY (carry-through)
