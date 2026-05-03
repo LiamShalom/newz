@@ -72,6 +72,14 @@ TITLE — the headline
 ==============================
 CAPTION — the lede
 ==============================
+- OPEN with an event-framing verb. The first clause must name WHAT HAPPENED
+  (gathered, marched, blocked, demanded, dispersed, struck, deployed,
+  intervened, cleared, arrived, rallied, walked out, occupied, evacuated,
+  halted, confronted, assembled, picketed). Do NOT open with a descriptive
+  tableau ("A row of...", "A man in...", "Roughly thirty people stand...") —
+  that reads like a video transcript, not news.
+- Front-load WHO and WHERE in sentence 1 when known. Save sensory detail
+  (color, count, audio, weather, clothing) for sentences 2-3.
 - 2 to 3 sentences. Aim for 250-350 characters. HARD CAP: 400 characters total.
 - MUST add at least TWO specific details NOT in the title:
     audio cue, color, count, distinctive object, weather, action verb, motion,
@@ -107,27 +115,43 @@ LOCATION
 Use the location string provided in the user message verbatim. Do not invent.
 
 ==============================
-GOOD EXAMPLES (study the title-vs-caption split)
+GOOD EXAMPLES (study the title-vs-caption split — every caption OPENS with an event verb)
 ==============================
-{"title": "Hacktech Letters Light Up Caltech",
- "caption": "Glowing white 'HACKTECH' signage lines a red-brick walkway after dusk, illuminating a small group of students walking past. Faint chatter and the steady hum of a portable generator carry through the warm evening air. A blue tarp sits folded near the curb.",
+{"title": "Crowd Rallies At Caltech South Gate",
+ "caption": "Roughly thirty demonstrators gathered at Caltech's south entrance late Friday, several raising handmade cardboard signs as a bullhorn cut in and out. Sky overcast, daylight fading; a single bicycle leaned against the gate post.",
  "location": "Pasadena, CA"}
 
-{"title": "Crowd Gathers At Caltech South Gate",
- "caption": "Roughly thirty people stand shoulder-to-shoulder near the entrance, several holding handmade cardboard signs. A bullhorn cuts in and out audibly, and a single bicycle leans against the gate post. Sky is overcast; daylight is fading.",
+{"title": "Recycling Bins Toppled On Lake Avenue",
+ "caption": "Vandals overturned a row of blue municipal bins along Lake Avenue overnight, scattering loose paper and a torn cardboard box across the asphalt. A sedan passed at first light; bird calls were the only ambient sound.",
  "location": "Pasadena, CA"}
 
-{"title": "Recycling Bins Topple On Lake Avenue",
- "caption": "A row of blue municipal bins lies overturned along the curb on Lake Avenue at first light. Loose paper and a torn cardboard box drift across the asphalt as a sedan passes by. No people are in the immediate vicinity; bird calls are audible.",
+{"title": "Hacktech Banner Lights Caltech Walkway",
+ "caption": "Organizers lit a glowing white 'HACKTECH' marquee along the red-brick walkway at dusk Friday, drawing a small group of students past the warm-evening hum of a portable generator. A folded blue tarp sat at the curb.",
  "location": "Pasadena, CA"}
 
 {"title": "Resident Paces In Pasadena Home",
- "caption": "A man in a dark hoodie walks between two rooms inside a residence, hand briefly touching the wall. A low fan hum is constant, punctuated by a single door creak. The lighting is dim and yellow-tinged, suggesting late evening indoors.",
+ "caption": "A resident moved between two interior rooms of a Pasadena home late Thursday, briefly steadying a hand against the wall. A low fan hummed under a single door creak; lighting was dim and yellow-tinged.",
  "location": "Pasadena, CA"}
 
 ==============================
 BAD EXAMPLES (do NOT imitate)
 ==============================
+BAD — reads like a video description, not a news lede:
+{"title": "Crowd Gathers At Caltech South Gate",
+ "caption": "Roughly thirty people stand shoulder-to-shoulder near the entrance, several holding handmade cardboard signs. A bullhorn cuts in and out audibly."}
+Why bad: caption opens with a static descriptive tableau ("Roughly thirty people stand..."). Reads like a vision model's narration, not a wire lede. The first verb must name the EVENT (rallied / gathered / overturned), not describe a frozen frame.
+NEWS-LEDE REWRITE:
+{"title": "Crowd Rallies At Caltech South Gate",
+ "caption": "Roughly thirty demonstrators gathered at Caltech's south entrance late Friday, several raising handmade cardboard signs as a bullhorn cut in and out."}
+
+BAD — reads like a video description, not a news lede:
+{"title": "Recycling Bins Topple On Lake Avenue",
+ "caption": "A row of blue municipal bins lies overturned along the curb on Lake Avenue at first light. Loose paper drifts across the asphalt."}
+Why bad: caption opens with a static descriptive tableau ("A row of blue bins lies..."). Reads like a vision model's narration, not a wire lede. The first verb must name the EVENT (rallied / gathered / overturned), not describe a frozen frame.
+NEWS-LEDE REWRITE:
+{"title": "Recycling Bins Toppled On Lake Avenue",
+ "caption": "Vandals overturned a row of blue municipal bins along Lake Avenue overnight, scattering loose paper across the asphalt at first light."}
+
 BAD — title and caption identical, too long, forbidden words ("camera", "frame"):
 {"title": "Pasadena Youth Captured On Elevator Camera In Series Of Poses, Final Frame Shows Hoodie Lifted",
  "caption": "Pasadena Youth Captured On Elevator Camera In Series Of Poses, Final Frame Shows Hoodie Lifted"}
@@ -156,7 +180,7 @@ BAD — speculative hedging:
 SELF-CHECK BEFORE EMITTING JSON
 ==============================
 Before you finalize your output, silently verify ALL of these. If any fails,
-rewrite that field. Do not emit JSON until all four pass:
+rewrite that field. Do not emit JSON until all six pass:
   (a) Title word count is between 4 and 8 (count the words).
   (b) Title contains NONE of: video, clip, footage, frame, frames, camera,
       shot, filmed, recording, sequence.
@@ -164,6 +188,10 @@ rewrite that field. Do not emit JSON until all four pass:
   (d) Caption mentions at least TWO specific details (audio cue, color, count,
       object, action verb, weather, lighting, clothing) that are NOT in the title.
   (e) Caption is between 2 and 3 sentences and reaches at least 80 characters.
+  (f) Caption sentence 1 opens with an event-framing verb naming WHAT HAPPENED
+      — not a descriptive tableau ("A row of...", "A man in...", "Roughly
+      thirty people stand..."). If sentence 1 reads like a video narration,
+      rewrite it.
 """
 
 
