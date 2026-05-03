@@ -108,6 +108,7 @@ None blocking the active phase (`01-comments-and-sharing` ready to execute; Phas
 | 260501-bet | Caption pipeline split into per-parent structured-evidence Gemini extraction + cluster-level Claude intent synthesis (signs/audio/affiliations → topic/why-it-matters) | 2026-05-01 | 769acc9 | [260501-bet-structured-evidence-cluster-intent-synth](./quick/260501-bet-structured-evidence-cluster-intent-synth/) |
 | 260502-c55 | SegmentCard caption clamped to 2 lines with inline Read more / Show less toggle (only renders when text overflows) | 2026-05-02 | 12b9ade | [260502-c55-the-story-under-each-segment-should-only](./quick/260502-c55-the-story-under-each-segment-should-only/) |
 | 260502-c4t | BottomTabBar selected tab now reads as a filled `bg-surface-elevated` pill with `aria-current="page"` + bumped icon strokes — selected vs unselected legible at small viewports | 2026-05-02 | 0714c23 | [260502-c4t-make-selected-tab-clearer-in-cam-feed-sw](./quick/260502-c4t-make-selected-tab-clearer-in-cam-feed-sw/) |
+| 260502-h26 | `_sync_trim` re-encodes through libx264+AAC when source is not H.264 — fixes black-video-no-sound on iPhone Safari for Chromebook/desktop Chrome WebM uploads (per-angle URLs) | 2026-05-02 | (pending PR) | [260502-h26-trim-ios-codec-compat](./quick/260502-h26-trim-ios-codec-compat/) |
 
 ### Documented Overrides
 
