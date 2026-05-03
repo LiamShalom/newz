@@ -14,27 +14,28 @@ export const _abs = (u: string | null | undefined): string | null =>
 
 /**
  * Fetch compiled segments from GET /feed.
- * Passes viewer coordinates for proximity sort when available (FED-01).
- * Attaches a synthetic `url` field pointing to the compiled video when ready,
- * or null while the segment is still being stitched. After M6, ordered_clip_ids
- * holds run IDs (not file IDs), so we never try to construct a clip-path URL.
+ *
+ * Phase 03 anonymity hardening: viewer coordinates are NOT sent to the
+ * backend. Nearby filtering now happens client-side (see feedFilter.ts);
+ * coords stay on device and are used only for distance display in
+ * SegmentCard. The backend therefore returns a pure recency-sorted list.
+ *
+ * Defensive client-side sort by created_at DESC: keeps the feed contract
+ * (newest-first on both Global and Nearby tabs) independent of backend
+ * ordering. The Nearby filter preserves input order, so sorting here
+ * covers both tabs.
  */
-export async function fetchSegments(
-  lat?: number,
-  lng?: number,
-): Promise<(Segment & { url: string | null })[]> {
-  let endpoint = `${API_BASE}/feed`;
-  if (lat !== undefined && lng !== undefined) {
-    endpoint += `?lat=${lat}&lng=${lng}`;
-  }
-  const res = await fetch(endpoint);
+export async function fetchSegments(): Promise<(Segment & { url: string | null })[]> {
+  const res = await fetch(`${API_BASE}/feed`);
   if (!res.ok) throw new Error(`feed ${res.status}`);
   const data = (await res.json()) as { segments: Segment[] };
-  return data.segments.map((s) => ({
-    ...s,
-    url: _abs(s.video_url),
-    video_urls: s.video_urls ? s.video_urls.map(_abs) : null,
-  }));
+  return data.segments
+    .map((s) => ({
+      ...s,
+      url: _abs(s.video_url),
+      video_urls: s.video_urls ? s.video_urls.map(_abs) : null,
+    }))
+    .sort((a, b) => b.created_at - a.created_at);
 }
 
 export async function postClip(args: {

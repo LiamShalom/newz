@@ -133,19 +133,75 @@ async def stitch_clips(
         return local_out
 
 
+def _probe_video_codec(path: str, headers: dict | None = None) -> str:
+    """Returns the input file's first-video-stream codec name (e.g. 'h264', 'vp9').
+
+    Returns "" on any probe failure — caller treats that as "unknown" and falls
+    through to the libx264 re-encode path for safety. We'd rather re-encode an
+    iPhone Safari clip unnecessarily (~1-3 s extra) than serve a black video to
+    every iPhone Safari viewer.
+    """
+    try:
+        probe_kwargs: dict = {"select_streams": "v:0"}
+        if headers:
+            # Same CRLF-terminated -headers convention as ffmpeg.input below.
+            probe_kwargs["headers"] = "".join(
+                f"{k}: {v}\r\n" for k, v in headers.items()
+            )
+        probe = ffmpeg.probe(path, **probe_kwargs)
+        streams = probe.get("streams") or []
+        if streams:
+            return streams[0].get("codec_name") or ""
+    except Exception as exc:  # noqa: BLE001 — log + fall through, never raise
+        log.warning("ffprobe failed path=%s err=%s", path, exc)
+    return ""
+
+
+def _pick_trim_output_kwargs(src_video_codec: str) -> dict:
+    """Pick ffmpeg output kwargs for a trim, codec-aware.
+
+    H.264 sources use stream-copy (vcodec/acodec=copy) — fast pass-through,
+    ~50-100 ms. Anything else is re-encoded through libx264 + AAC for iOS
+    Safari compatibility (~1-3 s). The non-H.264 case covers Chromebook /
+    desktop Chrome MediaRecorder output (VP8/VP9 + Opus inside WebM) which
+    iPhone Safari refuses to decode when wrapped in an .mp4 container.
+
+    Empty / unknown codec name → libx264 path (fail-safe default).
+    """
+    common = {
+        "format": "mp4",
+        "movflags": "+faststart",
+        "avoid_negative_ts": "make_zero",
+    }
+    if src_video_codec == "h264":
+        return {**common, "vcodec": "copy", "acodec": "copy"}
+    return {
+        **common,
+        "vcodec": "libx264",
+        "preset": "ultrafast",
+        "crf": 28,
+        "pix_fmt": "yuv420p",
+        "acodec": "aac",
+    }
+
+
 def _sync_trim(ref: dict, output_path: str) -> str:
-    """Fast `-c copy` trim of a single window from one parent file.
+    """Codec-aware single-window trim of one parent file.
 
     Per-run case (Phase 4.6): runs are always contiguous slices of ONE parent,
-    so there's nothing to concatenate across files. A stream-copy trim avoids
-    libx264 re-encode entirely (~50-100ms vs. 1-3s for the normalize pipeline).
-    iOS Safari plays mp4-from-mp4 trims fine when the source is already H.264
-    (MediaRecorder output from iPhone Safari) — `+faststart` ensures the moov
-    atom is at the front so playback can start before the file is fully fetched.
+    so there's nothing to concatenate across files. We probe the source video
+    codec once and branch:
 
-    Output is .mp4 regardless of input extension; if input is webm/VP9 the trim
-    will produce an mp4 container around VP9 which iOS won't play. That's an
-    acceptable trade for the demo target (iPhone Safari producing H.264 .mp4).
+    - H.264 source (iPhone Safari MediaRecorder): stream-copy with `+faststart`,
+      ~50-100 ms. iPhone Safari plays the result natively.
+    - Non-H.264 source (Chromebook / desktop Chrome MediaRecorder produces
+      WebM/VP8/VP9 + Opus): re-encode through libx264 + AAC with yuv420p +
+      faststart, ~1-3 s. Without this, copying VP8/VP9 into an .mp4 container
+      yields a file iPhone Safari cannot decode (black, no sound — confirmed
+      live 2026-05-02).
+
+    Probe failure → libx264 fallback. We'd rather pay the encode cost than
+    silently ship a broken clip.
     """
     if not ref:
         return ""
@@ -163,18 +219,15 @@ def _sync_trim(ref: dict, output_path: str) -> str:
     if headers_dict:
         input_kwargs["headers"] = "".join(f"{k}: {v}\r\n" for k, v in headers_dict.items())
 
+    src_video_codec = _probe_video_codec(ref["path"], headers_dict)
+    out_kwargs = _pick_trim_output_kwargs(src_video_codec)
+    reencoded = out_kwargs["vcodec"] != "copy"
+
     try:
         out = (
             ffmpeg
             .input(ref["path"], **input_kwargs)
-            .output(
-                tmp_path,
-                format="mp4",
-                vcodec="copy",
-                acodec="copy",
-                movflags="+faststart",
-                avoid_negative_ts="make_zero",
-            )
+            .output(tmp_path, **out_kwargs)
             .global_args("-loglevel", "error")
             .run_async(pipe_stderr=True)
         )
@@ -188,7 +241,12 @@ def _sync_trim(ref: dict, output_path: str) -> str:
         except FileNotFoundError:
             pass
         raise
-    log.info("trim ok output=%s", output_path)
+    log.info(
+        "trim ok output=%s codec=%s reencoded=%s",
+        output_path,
+        src_video_codec or "unknown",
+        reencoded,
+    )
     return output_path
 
 
