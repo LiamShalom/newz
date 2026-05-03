@@ -109,6 +109,7 @@ None blocking the active phase (`01-comments-and-sharing` ready to execute; Phas
 | 260502-c55 | SegmentCard caption clamped to 2 lines with inline Read more / Show less toggle (only renders when text overflows) | 2026-05-02 | 12b9ade | [260502-c55-the-story-under-each-segment-should-only](./quick/260502-c55-the-story-under-each-segment-should-only/) |
 | 260502-c4t | BottomTabBar selected tab now reads as a filled `bg-surface-elevated` pill with `aria-current="page"` + bumped icon strokes — selected vs unselected legible at small viewports | 2026-05-02 | 0714c23 | [260502-c4t-make-selected-tab-clearer-in-cam-feed-sw](./quick/260502-c4t-make-selected-tab-clearer-in-cam-feed-sw/) |
 | 260502-w52 | Feed/popup videos auto-unmute on first user gesture (TikTok pattern) — keeps iOS Safari autoplay legal while shipping audio-on-by-default UX | 2026-05-02 | 1fee782 | [260502-w52-flip-video-default-to-audio-on](./quick/260502-w52-flip-video-default-to-audio-on/) |
+| 260502-w74 | Both caption prompts (`SYSTEM_PROMPT` legacy Gemini + `INTENT_SYSTEM_INSTRUCTION` active Claude cluster path) rewritten for news-lede voice — sentence 1 must open with an event-framing verb; descriptive-tableau examples replaced with action-verb leads, anti-description BAD examples + rewrites added | 2026-05-03 | ee2b2bd | [260502-w74-make-montage-description-read-like-a-new](./quick/260502-w74-make-montage-description-read-like-a-new/) |
 
 ### Documented Overrides
 
@@ -148,4 +149,4 @@ None blocking the active phase (`01-comments-and-sharing` ready to execute; Phas
 - `.planning/ROADMAP.md` — full v1.1 backlog
 
 ---
-*Last updated: 2026-04-29 — Phase 11 (Moderation Gate) context gathered, ready for /gsd-plan-phase*
+*Last updated: 2026-05-03 — Quick task 260502-w74 shipped: caption prompts rewritten for news-lede voice*
