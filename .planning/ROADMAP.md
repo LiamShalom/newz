@@ -54,6 +54,7 @@ Per-feature GSD: each backlog item becomes its own phase under `phases/<NN>-<slu
 | 3 | Custom engagement signal (replaces likes) | Feature | TBD | 🟡 Open — design decision pending | — |
 | 4 | Audio embedding | Feature | Liam | 🟡 Open — verify Marengo coverage first | — |
 | 5 | Multiple feed tabs (Recent / Popular / Today) | Feature | Roan | 🟡 Open | — |
+| 5b | Feed tabs (Global / Nearby — geographic) | Feature | Roan | ✅ Shipped (pending iPhone UAT) | `phases/03-feed-tabs-nearby-global/` |
 | 6 | AI comment replies | Feature | TBD | 🟡 Open — depends on Mando #5 shipping | — |
 
 #### Considered, then dropped
@@ -73,6 +74,8 @@ Per-feature GSD: each backlog item becomes its own phase under `phases/<NN>-<slu
 - [ ] Phase 13: Observability deepening + OFFLINE_DEMO audit — open · Liam
 - [ ] Phase 14: Recompile montage on new parent in existing cluster — open · Liam
 - [x] Phase 01: Anonymous comments + shares — shipped (pending real-iPhone verification) · Roan
+- [x] Phase 02: Safari permissions + recorder reliability — shipped · Roan
+- [x] Phase 03: Feed tabs (Global / Nearby) — shipped (pending real-iPhone verification) · Roan
 
 ### v1.0 Hackathon MVP (shipped)
 
@@ -187,6 +190,8 @@ Plans:
 | 12. Reactive Reporting + Admin Queue | v1.1 backbone | 0/TBD | Not started | — |
 | 13. Observability Deepening + OFFLINE_DEMO Audit | v1.1 backbone | 0/TBD | Not started | — |
 | 01. Anonymous comments + shares | v1.1 feature | 1/1 | Shipped (pending iPhone UAT) | 2026-04-28 |
+| 02. Safari permissions + recorder reliability | v1.1 feature | 1/1 | Shipped | 2026-04-29 |
+| 03. Feed tabs (Global / Nearby) | v1.1 feature | 1/1 | Shipped (pending iPhone UAT) | 2026-05-02 |
 
 ---
 

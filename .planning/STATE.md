@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Pilot MVP for funding (Public-Launch-Ready Backbone)
 status: ready_to_plan
-last_updated: "2026-05-02T15:55:00.000Z"
-last_activity: 2026-05-02 -- Completed quick task 260502-c4t: make selected cam/feed tab clearer (BottomTabBar pill + aria-current)
+last_updated: "2026-05-02T22:00:00.000Z"
+last_activity: 2026-05-02 -- merged main into feature/feed-tabs-nearby-global; resolved conflicts in Feed.tsx, Masthead.tsx, STATE.md (Phase 03 + Phase 11 + Phase 14 + 6 quick tasks integrated). Phase 03 (Feed tabs Global/Nearby) shipped on branch; pending real-iPhone UAT before merge.
 progress:
-  total_phases: 7
-  completed_phases: 6
-  total_plans: 21
-  completed_plans: 21
+  total_phases: 8
+  completed_phases: 7
+  total_plans: 22
+  completed_plans: 22
   percent: 100
 ---
 
@@ -19,10 +19,10 @@ progress:
 
 **Core Value:** Multi-angle event clustering must work — show the same event captured by different people, automatically grouped and compiled into one coherent montage.
 
-**Current Focus:** v1.1 Pilot MVP for funding — Phase 11 just shipped; Phase 12 (reactive reporting + admin queue) next.
+**Current Focus:** v1.1 Pilot MVP for funding — Phase 11 (Moderation gate) and Phase 14 (recompile-on-cluster-update) shipped on backbone; Phase 03 (Feed tabs Global/Nearby) shipped on feature track. Phase 12 (reactive reporting + admin queue) next on backbone.
 
-- **Backbone (Liam):** Phase 8 (Observability) + Phase 9 (Postgres) + Phase 10 (Vercel Blob) + Phase 11 (Moderation gate) shipped. Phase 12 next.
-- **Feature (Roan):** Phase 01 (comments + shares) + Phase 02 (Safari permissions) shipped; SQLite retired in PR #11; UI polish landed. Next feature TBD.
+- **Backbone (Liam):** Phase 8 (Observability) + Phase 9 (Postgres) + Phase 10 (Vercel Blob) + Phase 11 (Moderation gate) + Phase 14 (Recompile-on-cluster-update) shipped. Phase 12 next.
+- **Feature (Roan):** Phase 01 (comments + shares) + Phase 02 (Safari permissions) + Phase 03 (Feed tabs Global/Nearby) shipped; SQLite retired in PR #11; UI polish landed. Next feature TBD.
 
 ## Current Position
 
@@ -31,12 +31,12 @@ Plan: Not started
 | Field | Value |
 |-------|-------|
 | Active Milestone | v1.1 Pilot MVP for funding (Public-Launch-Ready Backbone) |
-| Active Phases | Backbone: 12 next (Reactive Reporting + Admin Queue) · Feature: 01 + 02 shipped, next TBD |
-| Status | Backbone phases 8 + 9 + 10 + 11 shipped; feature track Phase 01 + Phase 02 shipped; SQLite retired |
+| Active Phases | Backbone: 12 next (Reactive Reporting + Admin Queue) · Feature: 01 + 02 + 03 shipped, next TBD |
+| Status | Backbone phases 8 + 9 + 10 + 11 + 14 shipped; feature track Phase 01 + Phase 02 + Phase 03 shipped; SQLite retired |
 | Workflow | Two tracks: backbone uses sequenced phases (8-13); feature track uses per-feature GSD |
 
 ```
-[███████░░░░] ~75% — backbone 3/6 (8, 9, 10 shipped); feature 0/N (01 ready)
+[█████████░] ~88% — backbone 5/6 (8, 9, 10, 11, 14 shipped); feature 3/N (01, 02, 03 shipped)
 ```
 
 ## Accumulated Context
@@ -131,14 +131,15 @@ None blocking the active phase (`01-comments-and-sharing` ready to execute; Phas
 
 ## Session Continuity
 
-**Last session ended:** 2026-04-30 — Phase 11 (Moderation Gate, Gemini Flash-Lite classifier-only CSAM) shipped. 7 plans executed across 5 waves; 22/22 tests passing post-fix; 4 critical + 7 warning code-review findings auto-fixed; verifier scored 23/23 must-haves with 3 HUMAN-UAT items remaining (Railway smoke, frontend interstitial, latency benchmark). Then merged `origin/main` into the phase-11 branch — Roan's PR #11 (UI polish + SQLite retirement) introduced 9 conflicts, all resolved (db_sqlite.py + test_feed_segments.py deletions accepted; Phase 11's postgres-side work + gemini_moderation_mock fixture preserved).
+**Last session ended:** 2026-05-02 — Phase 03 (Feed tabs Global/Nearby) shipped on `feature/feed-tabs-nearby-global` and merged with `origin/main` to pull in Phase 11 (Moderation Gate) + Phase 14 (Recompile-on-cluster-update) + 6 quick tasks (qya/s4p/smd/bet/c55/c4t). Conflict resolution: kept FeedTabs/banner/filter logic; layered in main's `checkPermission` permission soft-check + `<UploadProgressBar />`; dropped `viewerLat/viewerLng` props on FeedShell (main removed distance display via 260430-qya); Masthead taken from main wholesale (its z-30 + 16 px gradient fade subsumes our z-30 fix). Branch ahead of main; awaiting real-iPhone UAT before merge.
 
 **Next action (backbone track):** Plan Phase 12 (Reactive Reporting + Admin Queue). Phase 11's `_resume_pipeline()` is the re-entry hook for cleared unknown-tier clips.
 
-**Next action (feature track):** Run Wave 4 verification (T4.1–T4.4) on a real iPhone + desktop browser for Phase 01 (comments + shares). See `phases/01-comments-and-sharing/01-SUMMARY.md`.
+**Next action (feature track):** Real-iPhone UAT for Phase 03 (sticky tab strip on iOS rubber-band scroll, location-denied path, banner copy, no UploadProgressBar overlap regression). Then merge PR. Pending UAT for Phase 01 (comments + shares) still open from prior session.
 
 **Key files to load on resume:**
 
+- `.planning/phases/03-feed-tabs-nearby-global/03-SUMMARY.md` — Phase 03 status + UAT checklist
 - `.planning/phases/11-moderation-gate-gemini-flash-lite-csam-hash/11-VERIFICATION.md` — Phase 11 verifier report (status: human_needed; 3 HUMAN-UAT items pending)
 - `.planning/phases/11-moderation-gate-gemini-flash-lite-csam-hash/11-HUMAN-UAT.md` — Railway smoke + frontend interstitial + latency benchmark items
 - `.planning/phases/10-vercel-blob-migration/10-HUMAN-UAT.md` — Phase 10 UAT outcomes + spec amendments (private-store proxy)
@@ -147,4 +148,4 @@ None blocking the active phase (`01-comments-and-sharing` ready to execute; Phas
 - `.planning/ROADMAP.md` — full v1.1 backlog
 
 ---
-*Last updated: 2026-04-29 — Phase 11 (Moderation Gate) context gathered, ready for /gsd-plan-phase*
+*Last updated: 2026-05-02 — Phase 03 (Feed tabs Global/Nearby) shipped on feature branch + main merged, pending real-iPhone UAT*
