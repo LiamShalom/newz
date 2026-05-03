@@ -140,7 +140,7 @@ export function Feed() {
             <div className="mx-auto max-w-[640px] px-5 pt-4">
               <div className="flex items-center justify-between gap-3 rounded-lg bg-gradient-to-r from-coral-light/15 to-coral/15 border border-coral/30 px-4 py-2.5 text-[13px] text-ink-primary">
                 <span>
-                  No clips within {Math.round(RADIUS_FAR_M / 1000)} km — showing global.
+                  No clips within {Math.round(RADIUS_FAR_M / 1000)} km. Showing global.
                 </span>
                 <button
                   type="button"
