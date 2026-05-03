@@ -125,6 +125,31 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(_pre_warm_marengo())
     asyncio.create_task(_pre_warm_sdk())
 
+    # 6. Phase 11 (D-18 reconciled): non-blocking production-environment notice.
+    # Pilot ships classifier-only CSAM detection (Gemini csam-category → hard-block +
+    # reported_csam preservation). Real hash vendor (Thorn / PhotoDNA / Hive) and
+    # automated NCMEC CyberTipline reporting are deferred post-pilot. This is a
+    # visible reminder for ops, not a startup-refusal — mirrors _pre_warm_sdk WARN posture.
+    if not config.OFFLINE_DEMO and config.SENTRY_ENVIRONMENT == "production":
+        log.warning(
+            "Phase 11 ships classifier-only CSAM detection. "
+            "Real hash vendor + NCMEC reporting deferred post-pilot."
+        )
+
+    # 6b. WR-05: fail-loud on missing GEMINI_API_KEY when the moderation gate
+    # WILL be exercised (non-OFFLINE_DEMO). Without this, every clip's
+    # _gemini_classify raises httpx.ConnectError("GEMINI_API_KEY unset"), the
+    # typed-exception ladder routes to decision='unknown', and every clip
+    # silently disappears from the feed via set_clip_hidden. Mirrors the
+    # DATABASE_URL fail-loud at db.init_pool. Skipped under OFFLINE_DEMO
+    # (the gate short-circuits before any Gemini call).
+    if not config.OFFLINE_DEMO and not config.GEMINI_API_KEY:
+        raise RuntimeError(
+            "GEMINI_API_KEY is empty and OFFLINE_DEMO=false. "
+            "The moderation gate cannot reach Gemini and every clip will be hidden. "
+            "Set GEMINI_API_KEY or flip OFFLINE_DEMO=true."
+        )
+
     try:
         yield
     finally:

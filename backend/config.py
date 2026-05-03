@@ -18,7 +18,15 @@ GEMINI_API_KEY: str = os.environ.get("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL: str = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
 # Phase 3: Clustering
-CLUSTER_THRESHOLD: float = float(os.environ.get("CLUSTER_THRESHOLD", "0.70"))
+# Threshold raised 0.70 → 0.82 (debug session clustering-false-positive-31h, 2026-05-01)
+# alongside TIME_WINDOW_S 600s → 14400s (4h) in cluster.py. Old 0.70 with 10-min
+# time window let same-place-different-day uploads (Marengo cosine ~0.93 from
+# scene/place encoding alone) cross the gate at composite ~0.81 with time term
+# saturated to 0. New 0.82 + 4h decay: stale-time clusters require visual >=0.945
+# to rescue (visual+gps ceiling alone hits 0.85), and 31h same-place false
+# positives reject; same-day extended events (≤4h) still cluster as the time
+# term decays gracefully rather than cliffing at 10min.
+CLUSTER_THRESHOLD: float = float(os.environ.get("CLUSTER_THRESHOLD", "0.82"))
 VISUAL_FLOOR: float = float(os.environ.get("VISUAL_FLOOR", "0.85"))
 
 # Phase 4.6: Run detection (compile-time grouping of contiguous similar children)
@@ -64,3 +72,84 @@ STORAGE_BACKEND: str = os.environ.get("STORAGE_BACKEND", "local").strip().lower(
 #   Never logged, never sent to browser (L-02). Empty when STORAGE_BACKEND=blob
 #   AND OFFLINE_DEMO=false fails fast at lifespan startup (D-19).
 BLOB_READ_WRITE_TOKEN: str = os.environ.get("BLOB_READ_WRITE_TOKEN", "").strip()
+
+# Phase 11: Moderation gate (post-reconciliation D-24 — classifier-only CSAM detection)
+# GEMINI_MODERATION_MODEL: separate from GEMINI_MODEL (L18) so the moderation
+#   classifier model can iterate independently of the caption pipeline model.
+GEMINI_MODERATION_MODEL: str = os.environ.get("GEMINI_MODERATION_MODEL", "gemini-2.5-flash-lite")
+# MODERATION_MAX_BUDGET_S: absolute upper-bound on the gate (D-03). Default 20s.
+#   Cancel-when-embed-finishes is the typical primitive (Marengo's elapsed time
+#   bounds Gemini); this is the safety floor when both tasks exceed Marengo p99.
+MODERATION_MAX_BUDGET_S: float = float(os.environ.get("MODERATION_MAX_BUDGET_S", "20.0"))
+# MODERATION_FAIL_OPEN_ON_CLASSIFIER_TIMEOUT (Phase 11 amendment 2026-04-30 — pilot bugfix):
+#   When True (pilot default), classifier timeouts route to decision='passed' with
+#   reason='classifier_timeout_fail_open'. The blob is preserved, no cleanup runs,
+#   the clip flows through to clustering / compile. Per CLAUDE.md "Reliability over
+#   polish for the pilot" + the post-reconciliation Phase 11 already deferring real
+#   CSAM hash vendor + NCMEC reporting to post-pilot, the pilot threat surface is
+#   demo-audience uploads (water bottles), not adversarial CSAM injection. Branch C
+#   `max_budget_exceeded` (>20s wall-clock pathology) remains fail-CLOSED regardless.
+#
+#   Set False before public launch — at that point the classifier MUST be reliable
+#   enough that timeouts represent genuine pathology, and any false-blocks should
+#   route to the Phase 12 admin queue (or, better: a real hash vendor pre-screen
+#   that doesn't depend on the classifier path at all).
+#
+#   Why this knob exists: cancel-when-embed-finishes (D-03) assumed Gemini Flash-Lite
+#   p50 < Marengo p50 on the actual corpus. Production Railway logs (2026-05-01)
+#   show the opposite: embed completes in 1.6-1.9s; Gemini files.upload + ACTIVE
+#   poll + generateContent routinely exceeds 3s, so the cancel primitive
+#   false-blocks essentially every benign upload.
+MODERATION_FAIL_OPEN_ON_CLASSIFIER_TIMEOUT: bool = (
+    os.environ.get("MODERATION_FAIL_OPEN_ON_CLASSIFIER_TIMEOUT", "true").strip().lower() == "true"
+)
+# MODERATION_FAIL_OPEN_ON_CLASSIFIER_UNKNOWN (Phase 11 amendment 2026-05-01 — pilot bugfix):
+#   When True (pilot default), classifier failures that don't yield a confident
+#   verdict (5xx ServerError, network errors, response parse errors, unrecognized
+#   SDK exceptions, defense-in-depth catch-all) route to decision='passed' with
+#   reason='<original_reason>_fail_open'. The clip flows through to clustering /
+#   compile instead of being hidden + queued for admin.
+#
+#   Rationale (2026-05-01): two consecutive uploads on Railway prod hit
+#   `classifier_unknown_error latency_ms=8425` / `6433` and were hidden — Gemini
+#   raised an exception type the typed-exception ladder didn't recognize (most
+#   likely TypeError on json.loads(None) when the model's safety filter returned
+#   no candidates). Per pilot policy "only confident verdicts moderate", the
+#   gate should pass anything that isn't a confident _route_verdict block.
+#
+#   Confident verdicts from _route_verdict (HARD_BLOCK_CATEGORIES in {flag,block})
+#   still hard-block. 4xx ClientError still routes to blocked (separate tier —
+#   indicates client-side request error, not a classifier failure). Branch C
+#   `max_budget_exceeded` (>20s wall-clock pathology) remains fail-CLOSED.
+#
+#   Set False before public launch + audit the threat model + admin-queue capacity
+#   at that point.
+MODERATION_FAIL_OPEN_ON_CLASSIFIER_UNKNOWN: bool = (
+    os.environ.get("MODERATION_FAIL_OPEN_ON_CLASSIFIER_UNKNOWN", "true").strip().lower() == "true"
+)
+
+# Quick task 260501-bet: structured evidence + cluster intent synthesis.
+# EVIDENCE_FAIL_OPEN_TO_LEGACY_PROSE: when True (pilot default), if the new
+# two-stage pipeline (per-parent Gemini evidence -> cluster Claude intent
+# synthesis) returns None, compile_segment falls back through the existing
+# `_save_fallback_segment` path (generic "Submitted footage from N
+# contributor(s)." caption). This produces a playable segment even when
+# Gemini/Claude calls fail. Set False post-pilot to fail-CLOSED on caption
+# pipeline errors (segment row still ships with the run-level video_url, but
+# title/caption stay empty rather than legacy prose).
+EVIDENCE_FAIL_OPEN_TO_LEGACY_PROSE: bool = (
+    os.environ.get("EVIDENCE_FAIL_OPEN_TO_LEGACY_PROSE", "true").strip().lower() == "true"
+)
+
+# Phase 14: Recompile gate
+# RECOMPILE_DEBOUNCE_S: cooldown window after a compile completes during which
+#   subsequent new-parent joins do not trigger a fresh recompile. 60s coalesces
+#   typical 4-parent burst from a single hot event into one recompile while
+#   keeping per-cluster recompile rate <=60/hr at steady state. Distinct from
+#   the 30s first-publish TTL in set_compile_in_flight.
+RECOMPILE_DEBOUNCE_S: float = float(os.environ.get("RECOMPILE_DEBOUNCE_S", "60.0"))
+# RECOMPILE_ON_NEW_PARENT: feature flag for gradual rollout. When False, the
+#   _should_recompile gate short-circuits and the legacy v1.0 behavior (compile
+#   fires only on first >=2-parent threshold cross) is preserved. Cheap rollback
+#   if recompile-storm scenarios manifest in pilot traffic.
+RECOMPILE_ON_NEW_PARENT: bool = os.environ.get("RECOMPILE_ON_NEW_PARENT", "true").strip().lower() == "true"

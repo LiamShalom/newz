@@ -81,6 +81,13 @@ export interface Segment {
    * helper in api.ts.
    */
   video_urls: (string | null)[] | null;
+  /**
+   * Phase 11 (D-15 / MOD-07 / MOD-08): true when ANY cluster member's Gemini
+   * classifier flagged hate or violence (verdict in {"flag", "block"}). Frontend
+   * wraps autoplay in a tap-to-reveal interstitial when true. Backend handoff
+   * only — UI implementation lives in feature-track #6 (Roan).
+   */
+  soft_flag: boolean;
 }
 
 /**

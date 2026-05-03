@@ -43,7 +43,7 @@ REQUEST_DURATION = Histogram(
 STAGE_DURATION = Histogram(
     "newz_pipeline_stage_duration_seconds",
     "Pipeline stage duration in seconds",
-    labelnames=("stage",),         # ingest|embed|cluster|compile|stitch
+    labelnames=("stage",),         # ingest|moderate|embed|cluster|compile|stitch
     buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0),
 )
 

@@ -97,22 +97,44 @@ async def stitch_multi_source(refs: list[dict], run_id: str) -> str | None:
 
 log = logging.getLogger(__name__)
 
+# Phase 14: per-cluster recompile counter (process-local, resets on restart).
+# Single-process FastAPI + --workers 1 makes module-local state authoritative
+# for the pilot. NOT persisted — a Railway redeploy zeroes the counter, which
+# is fine for the soft-warn observability use case (the goal is "did this
+# cluster trip the warn threshold during this process lifecycle"). Revisit
+# post-pilot if a hard cap is needed (then add clusters.compile_count column
+# per RESEARCH § R4).
+_RECOMPILE_COUNTS: dict[str, int] = {}
+_RECOMPILE_WARN_THRESHOLD: int = 5
 
-ANGLE_SELECTOR_PROMPT_TEMPLATE = """You are picking the best 2-4 RUNS from cluster {cluster_id}.
+
+MONTAGE_RUNTIME_BUDGET_SEC: float = 20.0
+
+
+ANGLE_SELECTOR_PROMPT_TEMPLATE = """You are picking RUNS from cluster {cluster_id} for a montage.
 
 A run = one continuous camera angle (a contiguous span of similar 3-second
 slices from the same source clip). Different runs from different parent clips
 give different viewpoints of the same event.
 
+RUNTIME BUDGET — TOTAL STITCHED RUNTIME ≤ {budget_sec:.1f} SECONDS:
+  Sum the duration_sec of every run you pick. The sum MUST NOT exceed
+  {budget_sec:.1f} seconds. Aim to roughly fill the budget (≥ {budget_floor:.1f}s)
+  when the cluster has enough non-redundant material — typically 3 to 5 runs
+  at ~3-6s each. Pick fewer runs only when the cluster doesn't have enough
+  material that satisfies the diversity + non-redundancy criteria below.
+  Do NOT default to 2 runs when more eligible runs exist — that produces a
+  short montage that wastes budget.
+
 HARD CONSTRAINT — PARENT DIVERSITY:
   When the cluster contains 2 or more distinct parent clips, your selection
   MUST include at least one run from each of at least 2 distinct parents.
-  A segment showing only one viewpoint is unacceptable. If you find yourself
+  A montage showing only one viewpoint is unacceptable. If you find yourself
   picking 2+ runs from the same parent_id while another parent has runs you
   haven't picked, drop one of the same-parent runs and pick a run from the
   other parent instead.
 
-Selection criteria — within the parent-diversity constraint, rank by:
+Selection criteria — within the runtime + parent-diversity constraints:
 1. TEMPORAL SPREAD: prefer runs from early, middle, and late in the event
    timeline (spread across the timestamp range).
 2. SPATIAL DIVERSITY: prefer runs whose parent clips were recorded from
@@ -197,7 +219,11 @@ async def _run_orchestrator_chain(cluster_id: str) -> str:
         max_turns=20,
         model="sonnet",
     )
-    prompt = ANGLE_SELECTOR_PROMPT_TEMPLATE.format(cluster_id=cluster_id)
+    prompt = ANGLE_SELECTOR_PROMPT_TEMPLATE.format(
+        cluster_id=cluster_id,
+        budget_sec=MONTAGE_RUNTIME_BUDGET_SEC,
+        budget_floor=max(0.0, MONTAGE_RUNTIME_BUDGET_SEC - 6.0),
+    )
     final_text: str | None = None
     async for msg in query(prompt=prompt, options=options):
         if isinstance(msg, ResultMessage):
@@ -372,6 +398,11 @@ async def _save_fallback_segment(cluster_id: str, video_url: str | None = None) 
         location=location_str,
         source_count=distinct_parents or len(clips),
         video_url=video_url,
+        # Quick task 260501-bet: explicit None clears stale evidence/intent on
+        # cluster recompile-after-failure (relies on ON CONFLICT refresh
+        # including these columns — db_postgres.insert_segment + migration 0006).
+        evidence=None,
+        intent=None,
     )
 
 
@@ -431,6 +462,122 @@ async def _enforce_parent_diversity(cluster_id: str, min_parents: int = 2) -> No
         "parent diversity guard: angle-selector picked %d distinct parent(s) "
         "(cluster has %d). Augmenting with %d run(s): %s",
         len(picked_parents), len(cluster_parents), len(additions), additions,
+    )
+    await db.insert_segment(
+        cluster_id=cluster_id,
+        ordered_clip_ids=new_picked,
+        title=seg.get("title") or "",
+        caption=seg.get("caption") or "",
+        location=seg.get("location") or "Pasadena, CA",
+        source_count=distinct_parents,
+        video_url=seg.get("video_url"),
+    )
+
+
+def _run_duration_sec(run, synthetic_run_estimate_sec: float) -> float:
+    """Duration of a single run for budget arithmetic.
+
+    Synthetic full-parent runs (member_child_ids == []) ingest the entire
+    parent file at stitch time, but compute_runs_for_cluster has no way to
+    know that file's duration without an ffprobe call we don't want on the
+    hot path. Estimate at synthetic_run_estimate_sec; the real duration is
+    bounded by client-side capture limits regardless.
+    """
+    if not run.member_child_ids:
+        return synthetic_run_estimate_sec
+    return max(0.0, float(run.end_offset_sec) - float(run.start_offset_sec))
+
+
+async def _enforce_runtime_budget(
+    cluster_id: str,
+    target_seconds: float = 20.0,
+    synthetic_run_estimate_sec: float = 6.0,
+) -> None:
+    """Deterministic guard: extend or trim the angle-selector's run pick so the
+    summed run durations approach (without exceeding) `target_seconds`.
+
+    Pairs with `_enforce_parent_diversity` and is called AFTER it so the
+    parent-diversity floor is established before extension. Mirrors the
+    belt-and-suspenders pattern: the prompt asks the LLM to fill the budget,
+    this guard makes it deterministic when the LLM under-picks (Sonnet's
+    historical bias toward the lower bound — see Phase 14 + the
+    parent-diversity rationale).
+
+    Behavior:
+      - If summed duration < target with eligible unpicked runs available,
+        append additional runs in chronological order whose individual
+        duration fits within the remaining budget. Keep within target.
+      - If summed duration > target (rare given MAX_RUN_MEMBERS=2 caps each
+        run at ~6s), drop trailing picks until under budget while preserving
+        ≥2 distinct parents.
+      - No-op when picks are absent, runs can't be loaded, or no change is
+        needed.
+
+    Patches the segment row in place so Phase 2 stitch sees the updated
+    run_ids when it reads the row.
+    """
+    seg = await db.get_segment_for_cluster(cluster_id)
+    if seg is None:
+        return
+    raw = seg.get("ordered_clip_ids")
+    picked = json.loads(raw) if isinstance(raw, str) else (raw or [])
+    if not picked:
+        return
+
+    runs = await compute_runs_for_cluster(cluster_id)
+    if not runs:
+        return
+    by_id = {r.id: r for r in runs}
+
+    def _duration(run_id: str) -> float:
+        run = by_id.get(run_id)
+        if run is None:
+            return 0.0
+        return _run_duration_sec(run, synthetic_run_estimate_sec)
+
+    def _total(run_ids: list[str]) -> float:
+        return sum(_duration(rid) for rid in run_ids)
+
+    current_total = _total(picked)
+
+    additions: list[str] = []
+    if current_total < target_seconds - 0.5:
+        candidates = [r for r in runs if r.id not in picked]
+        # Chronological tiebreak by parent_id + run_id for determinism.
+        candidates.sort(key=lambda r: (r.start_offset_sec, r.parent_id, r.id))
+        remaining = target_seconds - current_total
+        for cand in candidates:
+            d = _run_duration_sec(cand, synthetic_run_estimate_sec)
+            if d <= 0:
+                continue
+            if d <= remaining + 0.5:
+                additions.append(cand.id)
+                remaining -= d
+                if remaining <= 0.5:
+                    break
+
+    new_picked = picked + additions
+
+    # Trim trailing runs while preserving ≥2 distinct parents and ≥2 picks.
+    while _total(new_picked) > target_seconds + 0.5 and len(new_picked) > 2:
+        without_last = new_picked[:-1]
+        parents_after = {_parent_id_of_run(r) for r in without_last}
+        if len(parents_after) >= 2:
+            new_picked = without_last
+        else:
+            break
+
+    if new_picked == picked:
+        return
+
+    distinct_parents = len({_parent_id_of_run(rid) for rid in new_picked})
+    log.info(
+        "runtime budget guard: cluster_id=%s target_s=%.1f "
+        "before=%d picks (%.1fs) after=%d picks (%.1fs) additions=%s",
+        cluster_id, target_seconds,
+        len(picked), current_total,
+        len(new_picked), _total(new_picked),
+        additions,
     )
     await db.insert_segment(
         cluster_id=cluster_id,
@@ -548,11 +695,29 @@ async def compile_segment(cluster_id: str) -> None:
     Phase 3: single insert_segment combines both phases atomically.
     """
     started_at = time.time()
+    # Phase 14: detect recompile vs first-publish for the SSE payload + soft-warn.
+    # An existing segment row means this is a recompile pass (D-NEW-01 in 14-PLAN).
+    seg_existing = await db.get_segment_for_cluster(cluster_id)
+    is_recompile = seg_existing is not None
     await events.broadcast({
         "type": "compile_started",
         "cluster_id": cluster_id,
         "started_at": started_at,
+        "recompile": is_recompile,
     })
+
+    if is_recompile:
+        # Module-local counter; dict mutation is atomic at the asyncio scheduling
+        # boundary, no asyncio.Lock needed (counter is approximate-by-design — a
+        # missed increment under contention is acceptable; we only soft-warn at
+        # >=_RECOMPILE_WARN_THRESHOLD).
+        recompile_count = _RECOMPILE_COUNTS.get(cluster_id, 0) + 1
+        _RECOMPILE_COUNTS[cluster_id] = recompile_count
+        if recompile_count >= _RECOMPILE_WARN_THRESHOLD:
+            log.warning(
+                "compile recompile_count_high cluster_id=%s count=%d -- investigate hot-event behavior",
+                cluster_id, recompile_count,
+            )
 
     segment_id: str = ""
     video_url: str | None = None
@@ -595,6 +760,20 @@ async def compile_segment(cluster_id: str) -> None:
             except Exception as exc:
                 log.warning("parent diversity guard failed cluster_id=%s: %s", cluster_id, exc)
 
+        # Phase 1.6: deterministic runtime-budget guard. After parent-diversity
+        # establishes the ≥2-parent floor, extend picks (or trim) so total
+        # stitched runtime targets MONTAGE_RUNTIME_BUDGET_SEC. Mirrors the
+        # parent-diversity guard's belt-and-suspenders pattern — Sonnet has a
+        # documented bias toward the lower bound on N-of-M selection prompts.
+        if not isinstance(a_result, Exception):
+            try:
+                await _enforce_runtime_budget(
+                    cluster_id,
+                    target_seconds=MONTAGE_RUNTIME_BUDGET_SEC,
+                )
+            except Exception as exc:
+                log.warning("runtime budget guard failed cluster_id=%s: %s", cluster_id, exc)
+
         # Phase 2: stitch each chosen run separately. Always runs — the
         # fallback now writes deterministic run IDs (first run per parent),
         # so even when the LLM call failed there's something to stitch.
@@ -614,6 +793,44 @@ async def compile_segment(cluster_id: str) -> None:
         # frontends that don't iterate video_urls.
         video_url = run_video_urls[0] if run_video_urls else None
 
+        # Phase 11 (D-08, D-14): broadened soft-flag policy. Read each cluster
+        # member's moderation_decisions; if ANY member shows hate or violence
+        # category with verdict in (flag, block), write segments.soft_flag=true.
+        # Decoupled from corroboration count (no >=2-parent gate here -- D-08).
+        # Defensive: never let a soft-flag derivation failure prevent the segment
+        # from shipping. Default to False on any exception (visible-by-default
+        # for ops; missing soft-flag is preferable to a missing montage).
+        #
+        # WR-07: single batched query (one DB roundtrip) replaces the previous
+        # N+1 pattern (one get_moderation_decisions per cluster member). On
+        # postgres this saves N pool-acquire + roundtrip pairs; on SQLite it
+        # collapses N file-locked queries into one.
+        soft_flag = False
+        try:
+            members = await db.fetch_cluster_clips(cluster_id)
+            member_ids = [m["id"] for m in members]
+            decisions = await db.get_moderation_decisions_for_clips(member_ids)
+            for d in decisions:
+                raw = d.get("raw_response") or {}
+                if isinstance(raw, str):
+                    # SQLite TEXT path or postgres without WR-04 codec — defensive parse.
+                    try:
+                        raw = json.loads(raw)
+                    except (TypeError, ValueError):
+                        raw = {}
+                for cat in ("hate", "violence"):
+                    cat_signal = raw.get(cat) or {}
+                    if isinstance(cat_signal, dict) and cat_signal.get("verdict") in ("flag", "block"):
+                        soft_flag = True
+                        break
+                if soft_flag:
+                    break
+        except Exception as exc:
+            log.warning(
+                "soft_flag derivation failed cluster_id=%s: %s -- defaulting false",
+                cluster_id, exc,
+            )
+
         # Phase 3: re-insert with all updates landed.
         seg = await db.get_segment_for_cluster(cluster_id)
         if seg is not None:
@@ -631,6 +848,13 @@ async def compile_segment(cluster_id: str) -> None:
                 location=(caption_result["location"] if caption_result else seg.get("location") or "Pasadena, CA"),
                 source_count=distinct_parents or seg.get("source_count", 1),
                 video_url=video_url or seg.get("video_url"),
+                soft_flag=soft_flag,
+                # Quick task 260501-bet: thread evidence + intent JSONB through.
+                # caption_result carries them when run_evidence_to_intent_pipeline
+                # succeeds; absent on fallback paths (None clears stale values via
+                # the ON CONFLICT refresh list in db_postgres.insert_segment).
+                evidence=(caption_result.get("evidence") if caption_result else None),
+                intent=(caption_result.get("intent") if caption_result else None),
             )
 
         elapsed_ms = int((time.time() - started_at) * 1000)

@@ -19,6 +19,7 @@ import {
 } from "../lib/getPositionWithTimeout";
 import { postClip } from "../api";
 import { enqueue } from "../uploadQueue";
+import { setUploadStatus } from "../uploadStatusBus";
 
 /**
  * Phase 1 capture loop state machine. Phases:
@@ -60,16 +61,17 @@ type Phase =
 const RECORD_CAP_SEC = 30; // CAP-05 hard cap
 const MIN_RECORD_SEC = 5; // Marengo requires >=4s; 5 leaves a buffer for trim/encoding
 
-// Session-scoped flag: once both permissions are granted in this tab, skip the
-// priming popup on subsequent feed→camera navigations. Cleared on a hard reload
-// (sessionStorage is per-tab) so a stale flag can't trap a user whose permissions
-// were revoked.
+// Cross-session flag: once both permissions are granted on this device/origin,
+// skip the priming popup on every subsequent visit. Stored in localStorage so it
+// survives tab close. The acquire() catch path below removes the flag on a
+// getUserMedia failure, which covers the case where iOS revoked access between
+// sessions — so a stale flag never traps the user.
 const PERMS_GRANTED_KEY = "perms_granted";
 
 export function Recorder() {
   const navigate = useNavigate();
   const [phase, setPhase] = useState<Phase>(() =>
-    sessionStorage.getItem(PERMS_GRANTED_KEY) === "1"
+    localStorage.getItem(PERMS_GRANTED_KEY) === "1"
       ? { kind: "acquiring", facing: "environment" }
       : { kind: "priming" },
   );
@@ -110,7 +112,12 @@ export function Recorder() {
 
     // Both calls fire synchronously here — same gesture frame.
     const camPromise = navigator.mediaDevices.getUserMedia({
-      video: { facingMode: "environment" },
+      video: {
+        facingMode: "environment",
+        width: { ideal: 1920 },
+        height: { ideal: 1080 },
+        frameRate: { ideal: 30 },
+      },
       audio: true,
     });
     const geoPromise = getPositionWithTimeout(10000);
@@ -145,7 +152,7 @@ export function Recorder() {
 
       // Both granted — attach stream, transition to ready. User taps record
       // again to actually start recording.
-      sessionStorage.setItem(PERMS_GRANTED_KEY, "1");
+      localStorage.setItem(PERMS_GRANTED_KEY, "1");
       cleanupStream();
       streamRef.current = camResult.value;
       setPhase({ kind: "ready", facing: "environment" });
@@ -159,7 +166,12 @@ export function Recorder() {
     setPhase({ kind: "acquiring", facing });
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: facing },
+        video: {
+          facingMode: facing,
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+          frameRate: { ideal: 30 },
+        },
         audio: true,
       });
       cleanupStream();
@@ -168,7 +180,7 @@ export function Recorder() {
     } catch {
       // Cached perms got revoked between sessions, or hardware error.
       // Clear the cache flag so the next visit re-shows priming.
-      sessionStorage.removeItem(PERMS_GRANTED_KEY);
+      localStorage.removeItem(PERMS_GRANTED_KEY);
       setPhase({ kind: "error", error: "camera-blocked" });
     }
   };
@@ -245,39 +257,45 @@ export function Recorder() {
       return;
     }
 
-    setPhase({
-      kind: "submitting",
-      blob: phase.blob,
-      mimeType: phase.mimeType,
-    });
-    const filename = `clip.${phase.mimeType.includes("mp4") ? "mp4" : "webm"}`;
+    // Capture upload args into local consts BEFORE navigate so the detached
+    // closure doesn't read stale React state after this component unmounts.
+    const blob = phase.blob;
+    const mimeType = phase.mimeType;
+    const filename = `clip.${mimeType.includes("mp4") ? "mp4" : "webm"}`;
     const ts = Date.now() / 1000;
+    const lat = pos.lat;
+    const lng = pos.lng;
 
-    try {
-      await postClip({
-        blob: phase.blob,
-        filename,
-        lat: pos.lat,
-        lng: pos.lng,
-        ts,
-      });
-      navigate("/feed");
-    } catch (err) {
-      // Visibility for the silent-success class of bug (debug session
-      // phone-upload-no-railway-logs): without this log, a misconfigured
-      // VITE_API_BASE / down backend / CORS-block looks like success in the UI.
-      console.error("[recorder] postClip failed; enqueuing locally:", err);
-      // Network / 5xx — CAP-09 enqueue. 4xx would also land here; uploadQueue.flush
-      // drops 4xx as permanent on the next visit, so this is safe.
-      await enqueue({
-        blob: phase.blob,
-        mimeType: phase.mimeType,
-        lat: pos.lat,
-        lng: pos.lng,
-        ts,
-      });
-      navigate("/feed");
-    }
+    // Optimistic-navigate: surface uploading state on the bus, then navigate
+    // immediately, then run the upload as a detached promise. The user sees
+    // the feed in the same gesture frame; the bar at the top of the feed
+    // shows progress (indeterminate) until success/error.
+    setUploadStatus({ kind: "uploading" });
+    navigate("/feed");
+
+    void (async () => {
+      try {
+        await postClip({ blob, filename, lat, lng, ts });
+        setUploadStatus({ kind: "idle" });
+      } catch (err) {
+        // Visibility for the silent-success class of bug (debug session
+        // phone-upload-no-railway-logs): without this log, a misconfigured
+        // VITE_API_BASE / down backend / CORS-block looks like success in the UI.
+        console.error("[recorder] postClip failed; enqueuing locally:", err);
+        try {
+          // Network / 5xx — CAP-09 enqueue. 4xx would also land here;
+          // uploadQueue.flush drops 4xx as permanent on the next visit, so
+          // this is safe.
+          await enqueue({ blob, mimeType, lat, lng, ts });
+          setUploadStatus({
+            kind: "error",
+            message: "Upload queued — will retry",
+          });
+        } catch {
+          setUploadStatus({ kind: "error", message: "Upload failed" });
+        }
+      }
+    })();
   };
 
   // Kill stream/timer on unmount. Without this the iOS camera indicator stays

@@ -30,6 +30,11 @@ async def test_compile_segment_timeout_uses_fallback():
          patch("backend.pipeline.compile.events") as mock_events:
 
         mock_db.set_compile_in_flight = AsyncMock(return_value=True)
+        # Phase 14: compile_segment now reads get_segment_for_cluster at the top
+        # to detect first-publish vs recompile for the SSE payload + soft-warn
+        # counter. Mock as None (first-publish path) so the timeout test stays
+        # focused on the timeout fallback behavior.
+        mock_db.get_segment_for_cluster = AsyncMock(return_value=None)
         mock_events.broadcast = AsyncMock()
 
         from backend.pipeline.compile import compile_segment

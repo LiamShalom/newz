@@ -6,12 +6,14 @@ import { flushUploadQueue } from "../uploadQueue";
 import { useEventSource } from "../hooks/useEventSource";
 import { dispatchCommentAdded } from "../commentsBus";
 import { applyNearbyFilter, RADIUS_FAR_M } from "../feedFilter";
+import { checkPermission } from "../lib/permissionsCheck";
 import type { FeedTab, Segment, ServerEvent } from "../types";
 import { BottomTabBar } from "../components/BottomTabBar";
 import { EmptyState } from "../components/EmptyState";
 import { FeedShell } from "../components/FeedShell";
 import { FeedTabs } from "../components/FeedTabs";
 import { Masthead } from "../components/Masthead";
+import { UploadProgressBar } from "../components/UploadProgressBar";
 
 const TAB_STORAGE_KEY = "feed_tab";
 const BANNER_DISMISSED_KEY = "feed_nearby_banner_dismissed";
@@ -42,15 +44,30 @@ export function Feed() {
 
   useEffect(() => {
     if (!navigator.geolocation) return;
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
-      },
-      () => {
-        // Permission denied / unavailable / timeout — Nearby tab stays disabled.
-      },
-      { timeout: 5000, enableHighAccuracy: false },
-    );
+    let cancelled = false;
+    void (async () => {
+      // Soft-check via Permissions API before firing getCurrentPosition.
+      // - granted: safe to read coords without surfacing a dialog
+      // - denied:  skip silently; Nearby tab stays disabled
+      // - prompt / unknown: fire and let the browser decide. Recorder is the
+      //   primary gesture-anchored prompt site, so by the time a returning
+      //   user lands on the feed this is usually 'granted'.
+      const state = await checkPermission("geolocation");
+      if (cancelled || state === "denied") return;
+      if (state !== "granted" && state !== "prompt" && state !== "unknown") return;
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          if (!cancelled) setCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+        },
+        () => {
+          // Permission denied / unavailable / timeout — Nearby tab stays disabled.
+        },
+        { timeout: 5000, enableHighAccuracy: false },
+      );
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const refetchFeed = useCallback(async () => {
@@ -130,6 +147,10 @@ export function Feed() {
       {loaded && (
         <FeedTabs active={effectiveTab} onChange={handleTabChange} nearbyEnabled={nearbyEnabled} />
       )}
+      {/* UploadProgressBar last so its sticky top-[96px] overlay paints above
+          the FeedTabs strip during the brief upload/error window (auto-dismiss
+          after 6s). Idle returns null so most of the time there's no overlap. */}
+      <UploadProgressBar />
       {!loaded ? (
         <div className="min-h-[calc(100dvh-52px)]" />
       ) : segments.length === 0 ? (
@@ -153,11 +174,7 @@ export function Feed() {
               </div>
             </div>
           )}
-          <FeedShell
-            segments={displayedSegments}
-            viewerLat={coords?.lat}
-            viewerLng={coords?.lng}
-          />
+          <FeedShell segments={displayedSegments} />
         </>
       )}
       <BottomTabBar />

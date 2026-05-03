@@ -1,7 +1,8 @@
 """Stage timing integration tests — STAGE_DURATION samples flow through /metrics.
 
 Locks T-08-15 (cardinality drift) by scanning /metrics output for stage values
-outside the D-17 enum {ingest, embed, cluster, compile, stitch}.
+outside the D-17 enum {ingest, embed, moderate, cluster, compile, stitch}
+(Phase 11 added "moderate").
 
 Locks the OBS-04 success criterion (pipeline-stage histograms) by sending a
 real POST /clips and confirming a STAGE_DURATION{stage="ingest"} histogram
@@ -18,8 +19,8 @@ from fastapi.testclient import TestClient
 from backend import config
 
 
-# D-17 — locked enum of allowed stage label values.
-ALLOWED_STAGES = {"ingest", "embed", "cluster", "compile", "stitch"}
+# D-17 — locked enum of allowed stage label values. Phase 11 added "moderate".
+ALLOWED_STAGES = {"ingest", "embed", "moderate", "cluster", "compile", "stitch"}
 
 
 def _boot_app():
