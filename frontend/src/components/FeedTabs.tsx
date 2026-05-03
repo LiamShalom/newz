@@ -44,7 +44,7 @@ export function FeedTabs({ active, onChange, nearbyEnabled }: FeedTabsProps) {
       role="tablist"
       aria-label="Feed scope"
       onKeyDown={handleKeyDown}
-      className="sticky top-[96px] z-10 bg-surface border-b border-hairline"
+      className="sticky top-[96px] z-30 bg-surface border-b border-hairline"
     >
       <div className="mx-auto max-w-[640px] flex items-stretch px-5">
         {TABS.map((t) => {
