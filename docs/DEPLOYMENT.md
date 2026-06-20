@@ -25,7 +25,7 @@ How Newz is deployed for the HackTech demo. Two services, two providers, one cro
 ```
 
 - **Frontend:** Vercel static deploy of `frontend/dist`. Build = `pnpm install --frozen-lockfile && pnpm build` (`frontend/vercel.json:3`). SPA rewrite `/(.*) -> /index.html` (`frontend/vercel.json:7`). The Railway origin is baked into the bundle at build time via `VITE_API_BASE` (`frontend/src/api.ts:7`).
-- **Backend:** Railway container built from `backend/Dockerfile` (python:3.11-slim + ffmpeg, line 6). Healthcheck `GET /health` with 30s timeout, restart `ON_FAILURE` max 5 retries (`backend/railway.toml:6-9`). Public URL: `https://newz-production.up.railway.app` (referenced by `docs/IPHONE-GATE.md:10`). <!-- VERIFY: that this URL is the canonical production hostname and not a stale preview -->
+- **Backend:** Railway container built from `backend/Dockerfile` (python:3.11-slim + ffmpeg, line 6). Healthcheck `GET /health` with 30s timeout, restart `ON_FAILURE` max 5 retries (`backend/railway.toml:6-9`). Public URL: `https://newz-prod.up.railway.app` (referenced by `docs/IPHONE-GATE.md:10`).
 - **CORS + SSE:** Backend trusts only `FRONTEND_URL` + `localhost:5173` (`backend/app.py:85`); `allow_credentials=True` so the browser keeps the SSE connection open across the origin boundary (`backend/app.py:86`).
 
 ## First-time deploy
@@ -94,7 +94,7 @@ If `DATA_DIR` is the ephemeral container FS, both vanish on every restart/redepl
 
 ## Operational runbook
 
-All paths below assume `BACKEND_URL=https://newz-production.up.railway.app`.
+All paths below assume `BACKEND_URL=https://newz-prod.up.railway.app`.
 
 | Action | Command / location |
 | --- | --- |
