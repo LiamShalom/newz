@@ -7,7 +7,7 @@
 ## URLs
 
 - Frontend: `https://newz-xi.vercel.app/`
-- Backend: `newz-production.up.railway.app`
+- Backend: `newz-prod.up.railway.app`
 
 ## Pre-flight
 
